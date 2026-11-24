@@ -135,9 +135,9 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### Default and fallback search provider
 
-Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings** → **Integrations**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
+Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings → Providers**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
 
-Saving a web-search API key in **Settings** → **Integrations** sets that provider's `enabled: true`.
+Saving a web-search API key in **Settings → Providers** sets that provider's `enabled: true`.
 
 Removing a saved search key deletes its encrypted entry, clears the service's credential reference and loaded environment value, and switches that service off. Your default and fallback choices are retained; removal does not choose a replacement or revoke the key at the provider. A shared key, a custom credential reference, or undecided search roles blocks removal without changing the saved configuration. Removal requires the same password confirmation as saving in local mode. If a later deletion, reload or audit step fails, the operation reports the persisted change instead of claiming success.
 

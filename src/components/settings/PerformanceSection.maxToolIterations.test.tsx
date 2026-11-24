@@ -1,24 +1,44 @@
 /**
- * PerformanceSection.maxToolIterations.test.tsx — #904 RED (test plan rows
- * 13d and 15): the global "Max tool calls per turn" control in Settings →
- * Performance, the D11 lowering confirm dialog, the D16 drift reload, and
- * the D13 saved-value warning.
+ * PerformanceSection.maxToolIterations.test.tsx — #904 global
+ * "Max tool calls per turn" under the Settings redesign #1519 Save bar
+ * (settings-redesign-spec FR-010/FR-013/FR-016; the #904 flow is kept by
+ * the spec's regression table: "Max tool calls lowering flow (#904) —
+ * must stay green under the Save bar", with US-2 AS9: the affected-agents
+ * list shows before the password prompt and before any write).
  *
- * Spec: docs/internal/specs/tool-iteration-limit-spec.md (Approved) — User
- * Stories 1 and 6, "UI Screens and States" (Performance row + D11 dialog
- * row), "User Journey" step 2, "Accessibility and Keyboard" (toast 10,000 ms
- * + persistent role=status summary; drift notice role=alert), Contract rows
- * PerformanceSettings / PerformanceSettingsUpdate / preview path /
- * MaxToolIterationsLoweringConflict. Founder decisions D3, D8, D11, D13, D16.
+ * The old file drove the RETIRED autosave model (700 ms debounce fired the
+ * preview and opened the prompt while typing). FR-010/FR-016 re-sequence
+ * it: the typed value is a draft on the bar; pressing Save changes runs
+ * the lowering confirm FIRST (preview → D11 dialog), then the one password
+ * prompt (FR-026), then the one PUT carrying the confirmed snapshot.
+ * Replaced assertions cite the FR that replaces them:
+ *   - debounce-triggered preview/prompt → preview and prompt at Save
+ *     changes (FR-010, FR-016);
+ *   - the #904 inline bound message → Dataset D-10 row 8's exact message
+ *     "Enter a whole number from 1 to 1,000." (FR-013; the redesign owns
+ *     this page's field-validation wording);
+ *   - prompt-cancel reverting the field to the saved value → FR-029/D-11
+ *     row 5: Cancel stores nothing and KEEPS every change;
+ *   - the 500 performance_reload_failed wire shape → the C-6 write-outcome
+ *     table's implemented signal for PUT /performance, a 200
+     * `PerformanceSettings` with `pending_apply`: saved, not in use
+ *     (FR-020 outcome 1).
  *
- * Mock boundary: the NETWORK (global fetch) — not the API module. The spec
- * pins the wire (paths, bodies, 409 envelope) but not the SPA function that
- * fetches the lowering preview, so routing by URL keeps the real API layer
- * (request(), Zod parsing, the typed 409 error) under test. Only the
- * app-state probe and the password re-auth call are module-mocked, exactly
- * as PerformanceSection.password.test.tsx does. Local mode (identity.mode
- * 'local') pins the step-up to the password dialog, which is the flow the
- * spec describes: preview → D11 dialog → password → PUT.
+ * Kept, unchanged in substance (regression table): the lowering dialog
+ * lists old → new before any prompt or write (US-6 AS-1), Cancel there
+ * writes nothing (US-6 AS-2), the PUT carries the exact confirmed
+ * snapshot (D11), a drift 409 reloads the dialog with the fresh list +
+ * notice and needs a fresh confirm (US-6 AS-6/D16), the F4 result is the
+ * 10 s toast plus persistent role=status summary, D13/D17 saved-value
+ * warnings, and D20: a raise never previews, never opens the dialog and
+ * sends no confirmed_lowering.
+ *
+ * Mock boundary: the NETWORK (global fetch) — the wire (paths, bodies,
+ * 409 envelope) is spec-pinned; the real API layer (request(), Zod
+ * parsing, the typed 409 error) stays under test. The password prompt is
+ * the shell's, supplied through SettingsShellContext as a recorder
+ * (FR-026/FR-027); the reauth wire itself is passwordOncePerSave.test's
+ * subject.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -36,12 +56,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAppState: vi.fn(),
-    reAuth: vi.fn(),
   }
 })
 
 import * as api from '@/lib/api'
 import type { AppState } from '@/lib/api'
+import type { SettingsShellApi } from './SettingsShellContext'
+import { SettingsShellContext } from './SettingsShellContext'
 import { PerformanceSection } from './PerformanceSection'
 
 const LOCAL_APP_STATE = {
@@ -51,6 +72,30 @@ const LOCAL_APP_STATE = {
 
 const LABEL = 'Max tool calls per turn'
 const DRIFT_NOTICE = 'The list of affected agents changed — review and confirm again.'
+// D-10 row 8: "Max tool calls per turn 0 / 1001 | Out of range | Rejected:
+// 'Enter a whole number from 1 to 1,000.'"
+const BOUND_MESSAGE = 'Enter a whole number from 1 to 1,000.'
+
+/** A prompt recorder whose outcome the test resolves by hand. */
+function manualPrompt() {
+  const prompts: string[][] = []
+  let resolvePrompt: (token: string | null) => void = () => {}
+  const requestPassword = vi.fn(
+    (labels: string[]) =>
+      new Promise<string | null>((resolve) => {
+        prompts.push(labels)
+        resolvePrompt = resolve
+      }),
+  )
+  return {
+    prompts,
+    requestPassword,
+    resolveWith: (token: string | null) =>
+      act(async () => {
+        resolvePrompt(token)
+      }),
+  }
+}
 
 function settings(overrides: Record<string, unknown> = {}) {
   return {
@@ -111,13 +156,45 @@ function renderSection() {
   )
 }
 
-/** Type a value into the global limit field and let the autosave debounce settle. */
-async function typeLimit(value: string) {
+function renderSectionWithShell(requestPassword: (labels: string[]) => Promise<string | null>) {
+  return render(
+    <QueryClientProvider client={makeClient()}>
+      <SettingsShellContext.Provider
+        value={
+          {
+            announce: () => {},
+            setDraftCount: () => {},
+            offerRestart: () => {},
+            refreshPendingRestart: () => {},
+            requestPassword,
+            saveBarVisible: false,
+            setSaveBarVisible: () => {},
+          } as SettingsShellApi
+        }
+      >
+        <PerformanceSection />
+      </SettingsShellContext.Provider>
+    </QueryClientProvider>,
+  )
+}
+
+/** The row's error: the alert the field's aria-describedby names (FR-013). */
+function fieldAlertText(input: HTMLElement): string {
+  const ids = (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+  const alert = ids.map((id) => document.getElementById(id)).find((el) => el?.getAttribute('role') === 'alert')
+  expect(alert, 'the field must show its error as the alert its aria-describedby names').not.toBeNull()
+  return alert?.textContent ?? ''
+}
+
+/** A typed value is a draft on the bar — no preview, no prompt, no PUT (FR-010, FR-016). */
+async function typeDraft(value: string) {
   await waitFor(() => screen.getByLabelText(LABEL))
-  vi.useFakeTimers()
+  const count = puts().length
+  const previewCount = previews().length
   fireEvent.change(screen.getByLabelText(LABEL), { target: { value } })
-  await act(async () => { vi.advanceTimersByTime(700) })
-  vi.useRealTimers()
+  expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+  expect(previews()).toHaveLength(previewCount)
+  expect(puts()).toHaveLength(count)
 }
 
 /** The D11 lowering dialog is a ConfirmDialog (role alertdialog). */
@@ -132,12 +209,6 @@ function confirmButton(dialog: HTMLElement) {
   return btn
 }
 
-async function passReAuth() {
-  await waitFor(() => expect(screen.getByTestId('reauth-password-input')).toBeInTheDocument())
-  fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
-  fireEvent.click(screen.getByTestId('reauth-confirm'))
-}
-
 const ALPHA = { agent_id: 'a1', agent_name: 'Alpha', old_value: 250, new_value: 200 }
 const BETA = { agent_id: 'b1', agent_name: 'Beta', old_value: 280, new_value: 200 }
 
@@ -150,7 +221,6 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
   vi.spyOn(document, 'cookie', 'get').mockReturnValue('__Host-csrf=test')
   vi.mocked(api.fetchAppState).mockResolvedValue(LOCAL_APP_STATE)
-  vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
 })
 
 afterEach(() => {
@@ -201,33 +271,60 @@ describe('PerformanceSection — Max tool calls per turn (US-1, D3, D13)', () =>
     expect(warning).toBeInTheDocument()
   })
 
-  it.each(['0', '1001'])('US-1 AS-3: %s is refused inline with the bound message and nothing is sent', async (v) => {
+  it.each(['0', '1001'])('US-1 AS-3: %s is refused inline with the D-10 bound message and nothing is sent (FR-013, D-10 row 8)', async (v) => {
     renderSection()
-    await typeLimit(v)
-    expect(await screen.findByText(/must be between 1 and 1000/)).toBeInTheDocument()
+    await typeDraft(v)
+    const input = screen.getByLabelText(LABEL)
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'))
+    expect(fieldAlertText(input)).toBe(BOUND_MESSAGE)
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
+    expect(saveBtn).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(saveBtn)
+    expect(input).toHaveFocus()
     expect(puts()).toHaveLength(0)
     expect(previews()).toHaveLength(0)
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('US-1 AS-4: cancelling the password prompt writes nothing and the field returns to the saved 200', async () => {
-    renderSection()
-    await typeLimit('150')
+  it('US-1 AS-4: cancelling the prompt at Save writes nothing and keeps the change (FR-029, D-11 row 5; the retired flow reverted the field)', async () => {
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '150' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // FR-016: the preview runs at Save changes, before any prompt or write.
     await waitFor(() => expect(previews()).toHaveLength(1))
     expect(previews()[0].url).toBe('/api/v1/performance/max-tool-iterations/preview?value=150')
-    await waitFor(() => screen.getByTestId('reauth-cancel'))
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
-    await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(200))
+    // No affected agents → no lowering dialog; the one prompt is asked.
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await p.resolveWith(null)
+    // FR-029/D-11 row 5: Cancel stores nothing and keeps every change —
+    // the draft stays in the field, the bar still counts it.
+    await waitFor(() => {
+      expect(screen.getByLabelText(LABEL)).toHaveValue(150)
+      expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    })
     expect(puts()).toHaveLength(0)
   })
 
-  it('US-6 AS-4: lowering with no affected agents shows no dialog and PUTs only the limit', async () => {
+  it('US-6 AS-4: lowering with no affected agents shows no dialog and PUTs only the limit (FR-016 sequencing)', async () => {
     // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
     // value must differ from the saved one or no change event fires.
     perfGet = () => settings({ max_tool_iterations: 300 })
     putHandlers = [() => ({ status: 200, body: settings({ max_tool_iterations: 150 }) })]
-    renderSection()
-    await typeLimit('150')
-    await passReAuth()
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '150' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // Preview at Save (FR-016); no agents → no dialog; the prompt runs
+    // (FR-026) and its token rides the one PUT.
+    await waitFor(() => expect(previews()).toHaveLength(1))
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     const body = puts()[0].body as Record<string, unknown>
@@ -240,31 +337,46 @@ describe('PerformanceSection — Max tool calls per turn (US-1, D3, D13)', () =>
 })
 
 describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () => {
-  it('US-6 AS-1: the dialog lists "Alpha: 250 → 200" BEFORE any password prompt or write', async () => {
+  it('US-6 AS-1: the dialog lists "Alpha: 250 → 200" BEFORE any password prompt or write (FR-016)', async () => {
     // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
     // value must differ from the saved one or no change event fires.
     perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA] } })
-    renderSection()
-    await typeLimit('200')
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '200' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
     const dialog = await findLoweringDialog()
     expect(dialog.textContent).toMatch(/Alpha[\s\S]*250[\s\S]*200/)
+    // FR-016: the confirm precedes the password prompt — none is open yet,
+    // and nothing has been written.
     expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+    expect(p.prompts.length).toBe(0)
     expect(puts()).toHaveLength(0)
   })
 
-  it('US-6 AS-2: Cancel in the dialog writes nothing and asks for no password', async () => {
+  it('US-6 AS-2: Cancel in the dialog writes nothing and asks for no password (FR-016)', async () => {
     // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
     // value must differ from the saved one or no change event fires.
     perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA] } })
-    renderSection()
-    await typeLimit('200')
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '200' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     const dialog = await findLoweringDialog()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
     expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+    expect(p.prompts.length).toBe(0)
     expect(puts()).toHaveLength(0)
+    // FR-016: Cancel keeps the changes — the draft stays on the bar.
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
   })
 
   it('US-6 AS-3: confirm → password → PUT carries the confirmed snapshot; toast (10 s) and a persistent role=status summary name the lowered agents', async () => {
@@ -276,10 +388,19 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
       status: 200,
       body: settings({ max_tool_iterations: 200, max_tool_iterations_lowered_agents: [ALPHA, BETA] }),
     })]
-    renderSection()
-    await typeLimit('200')
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '200' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    // FR-016 order: the D11 dialog first…
     fireEvent.click(confirmButton(await findLoweringDialog()))
-    await passReAuth()
+    // …then the one prompt (FR-026) resolves and the PUT goes out.
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    expect(p.prompts[0]).toEqual(['Max tool calls per turn'])
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
     const body = puts()[0].body as { max_tool_iterations: number; confirmed_lowering: { agent_id: string; old_value: number }[] }
     expect(body.max_tool_iterations).toBe(200)
@@ -287,7 +408,6 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
       { agent_id: 'a1', old_value: 250 },
       { agent_id: 'b1', old_value: 280 },
     ])
-    expect(vi.mocked(api.reAuth)).toHaveBeenCalledWith('pw')
 
     const summary = 'Lowered 2 agents: Alpha 250 → 200, Beta 280 → 200'
     await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ message: summary, duration: 10000 })))
@@ -295,7 +415,7 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
     expect(statuses.some((s) => s.textContent?.includes(summary))).toBe(true)
   })
 
-  it('US-6 AS-6 (D16): a 409 drift reloads the dialog from the 409 preview with the notice, and requires a fresh confirm', async () => {
+  it('US-6 AS-6 (D16): a 409 drift reloads the dialog from the 409 preview with the notice, and requires a fresh confirm (FR-031)', async () => {
     // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
     // value must differ from the saved one or no change event fires.
     perfGet = () => settings({ max_tool_iterations: 300 })
@@ -309,10 +429,15 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
         preview: fresh,
       },
     })]
-    renderSection()
-    await typeLimit('200')
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '200' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     fireEvent.click(confirmButton(await findLoweringDialog()))
-    await passReAuth()
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
 
     const dialog = await findLoweringDialog()
@@ -326,19 +451,26 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
   })
 })
 
-describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate gaps)', () => {
+describe('PerformanceSection — raise (D20) and saved-but-not-applied (FR-020)', () => {
   const CAPPED = { agent_id: 'c1', agent_name: 'Capped', old_value: 500, new_value: 300 }
 
-  it('D20: raising the global opens no lowering dialog and sends no confirmed_lowering', async () => {
+  it('D20: raising the global opens no lowering dialog and sends no confirmed_lowering (FR-010, FR-015)', async () => {
     // D20: a raise never rewrites an agent, so the preview/confirm step applies
     // only below the current global. The preview stub deliberately lists a
     // capped agent (stored 500 > new 300) so the test proves the SPA itself
     // does not open the dialog on a raise, whatever a preview would say.
     previewHandler = () => ({ status: 200, body: { value: 300, agents: [CAPPED] } })
     putHandlers = [() => ({ status: 200, body: settings({ max_tool_iterations: 300 }) })]
-    renderSection()
-    await typeLimit('300')
-    await passReAuth()
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // The prompt is requested only after the async save chain starts; wait
+    // for it before resolving, else the resolve lands on a stale no-op.
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     const body = puts()[0].body as Record<string, unknown>
@@ -346,54 +478,62 @@ describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate
     expect(body.confirmed_lowering === undefined || (Array.isArray(body.confirmed_lowering) && body.confirmed_lowering.length === 0)).toBe(true)
   })
 
-  it('a 500 performance_reload_failed says the value was saved but not applied — not a generic server error', async () => {
-    putHandlers = [() => ({ status: 500, body: { error: 'reload failed: injected', code: 'performance_reload_failed' } })]
-    renderSection()
-    await typeLimit('300')
-    await passReAuth()
+  it('a pending apply says the value was saved but not in use — no error toast, no refusal pinned on the field (FR-020 outcome 1; C-6: PUT /performance answers 200 with pending_apply)', async () => {
+    // The old file drove a 500 performance_reload_failed wire shape; the
+    // approved C-6 write-outcome table implements this stage as a 200
+    // `PerformanceSettings` carrying `pending_apply` — recognized as
+    // "saved, not in use" whatever the status would have said. The server
+    // reports the pending apply on every GET too, until the reload lands.
+    let pendingApply: { stage: string; changed_fields: string[] } | null = null
+    putHandlers = [() => {
+      pendingApply = { stage: 'refresh', changed_fields: ['max_tool_iterations'] }
+      return { status: 200, body: settings({ pending_apply: pendingApply }) }
+    }]
+    perfGet = () => (pendingApply ? settings({ pending_apply: pendingApply }) : settings())
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // The prompt is requested only after the async save chain starts; wait
+    // for it before resolving, else the resolve lands on a stale no-op.
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
-    const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
-    await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
-    expect(shown().some((t) => /server (is )?unavailable/i.test(t))).toBe(false)
-    // CHECK round 2, finding C: the TEXT alone does not tell "saved, not
-    // applied" from a failed save (the generic error path would toast the same
-    // userMessage). What distinguishes them (spec edge case "Reload fails after
-    // the global is written": the value IS saved) is the treatment: a warning,
-    // never an error toast, and no save error pinned on the limit field.
-    const toasts = addToast.mock.calls.map((c) => c[0] as { variant?: string; message?: string })
-    const savedNotApplied = toasts.filter((t) => /saved,? but not (yet )?applied/i.test(t.message ?? ''))
-    expect(savedNotApplied, 'exactly one "saved, not applied" toast').toHaveLength(1)
-    expect(savedNotApplied[0].variant, 'a committed save is a warning, not an error').toBe('warning')
-    expect(toasts.filter((t) => t.variant === 'error'), 'no error toast for a committed save').toEqual([])
-    expect(screen.queryAllByRole('alert').filter((a) => /saved,? but not (yet )?applied|failed/i.test(a.textContent ?? '')),
-      'no save error pinned on the field').toEqual([])
+    // The value IS saved: the field keeps it and no error is pinned on it.
+    await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(300))
+    expect(screen.queryAllByRole('alert').filter((a) => /failed|could not be saved/i.test(a.textContent ?? ''))).toEqual([])
+    expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+    // The saved-not-in-use state announces itself (the notice whose copy
+    // PerformanceSection.pendingApply.test pins).
+    const notice = await screen.findByTestId('performance-unapplied-notice')
+    expect(notice).toHaveAttribute('role', 'status')
   })
 
-  // Gate round 2 (typed reload-failure details, backend-lead feature/904-fix2-be):
-  // details.stage "refresh" means config.json holds the new value but the
-  // gateway's in-memory config was NOT swapped, so GET /performance still
-  // answers the OLD value until the next reload. The screen must keep showing
-  // the value the operator saved (it IS saved) — never snap back to the stale
-  // in-memory 200 as if the save had not happened. RED until frontend-lead
-  // consumes details.stage.
-  it('stage "refresh": the saved value stays shown even though GET /performance still answers the old value', async () => {
+  it('stage "refresh": the saved value stays shown even though GET /performance still answers the old value (FR-020 outcome 1)', async () => {
+    // After the pending save, every GET still reports the OLD in-memory 200
+    // plus the server's pending-apply state (C-6 stage refresh: config.json
+    // holds the new value, the running config was not swapped). The field
+    // must keep showing the SAVED 300 — never snap back to the stale 200.
     putHandlers = [() => ({
-      status: 500,
-      body: {
-        error: 'performance settings saved but the reload failed',
-        code: 'performance_reload_failed',
-        details: { stage: 'refresh', changed_fields: ['max_tool_iterations'] },
-      },
+      status: 200,
+      body: settings({ pending_apply: { stage: 'refresh', changed_fields: ['max_tool_iterations'] } }),
     })]
     perfGet = () => settings() // stale in-memory answer: still 200
-    renderSection()
-    await typeLimit('300')
-    await passReAuth()
+    const p = manualPrompt()
+    renderSectionWithShell(p.requestPassword)
+    await waitFor(() => screen.getByLabelText(LABEL))
+    fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // The prompt is requested only after the async save chain starts; wait
+    // for it before resolving, else the resolve lands on a stale no-op.
+    await waitFor(() => expect(p.prompts.length).toBe(1))
+    await p.resolveWith('reauth_tok')
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect((puts()[0].body as Record<string, unknown>).max_tool_iterations, 'instrument: 300 was the saved value').toBe(300)
-    const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
-    await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
-    // Let any refetch the failure triggers settle before reading the field
+    // Let any refetch the outcome triggers settle before reading the field
     // (a fix may refetch or not; either way the field must end at 300).
     await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
     expect((screen.getByLabelText(LABEL) as HTMLInputElement).value).toBe('300')

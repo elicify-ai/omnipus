@@ -12,11 +12,20 @@
  *
  * Oracles come from the contract text: pending_apply is present while saved
  * settings are not in force; stage `refresh` means GET still shows the OLD
- * values, stage `reload` means GET shows the new values.
+ * values, stage `reload` means GET shows the new values
+ * (contracts/components/schemas/PerformancePendingApply.yaml).
+ *
+ * Part 9 disposition: the second test ("for stage refresh with no saved
+ * values known to this page, it says the fields show the running values")
+ * is LEFT UNCHANGED and still RED — its oracle is the contract's own words
+ * for stage refresh, and the implemented notice says "The fields show the
+ * saved values." for every stage, which contradicts the contract after a
+ * page reload (the fields hold what GET answered: the running values).
+ * Listed production-side for team-lead.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -57,16 +66,18 @@ const SETTINGS: PerformanceSettings = {
 }
 
 const WAIT = { timeout: 3000 }
-const STEP_UP_CONFIRM = 'Change performance settings'
 const LABEL = 'Max tool calls per turn'
 const NOTICE = 'performance-unapplied-notice'
 const REFRESH_TEXT = 'the new tool-iteration limit applies after the next reload or restart'
+// The implemented notice's field line — the reload-stage case, where the
+// contract says the fields DO show the saved (new) values.
+const FIELDS_SAVED = 'The fields show the saved values.'
+// The refresh-stage oracle (contract: "the other fields of this response
+// still show the OLD values") — kept for the untouched production-side test.
 const SAVED_SHOWN =
   'The fields below show the saved values. Until the restart or reload, Omnipus keeps running on the previous ones.'
 const RUNNING_SHOWN =
   'The fields below still show the values Omnipus is running on; the saved ones take effect after the restart or reload.'
-const CHECKS =
-  'A new tool-call limit set here is checked against the saved limit; an agent’s own limit, set on its profile, is still checked against the running one.'
 
 function pending(stage: PerformancePendingApply['stage'], fields: PerformancePendingApply['changed_fields']): PerformanceSettings {
   return { ...SETTINGS, pending_apply: { stage, changed_fields: fields } }
@@ -99,8 +110,11 @@ describe('PerformanceSection — the not-applied notice follows the server (#904
     expect(notice).toHaveTextContent(
       'Saved, but not applied yet: the new goal tries, tool-call limit will be used after a restart or reload',
     )
-    expect(notice).toHaveTextContent(SAVED_SHOWN)
-    expect(notice).toHaveTextContent(CHECKS)
+    // Stage reload: the contract says the running configuration shows the NEW
+    // values, so the fields-show-saved line is correct here (the old SAVED_
+    // SHOWN copy and the unanchored "checked against" sentence are not spec
+    // text and are gone from the notice).
+    expect(notice).toHaveTextContent(FIELDS_SAVED)
   })
 
   it('for stage refresh with no saved values known to this page, it says the fields show the running values', async () => {
@@ -117,6 +131,9 @@ describe('PerformanceSection — the not-applied notice follows the server (#904
   it('no pending_apply on GET: no notice', async () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS)
     renderSection()
+    // The field is a number input (5e4ef14547); jest-dom's toHaveValue
+    // yields the number form for it. The r4 run predated that commit, when
+    // the same lookup read a text input's string (harness fix).
     await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(300))
     expect(screen.queryByTestId(NOTICE)).not.toBeInTheDocument()
   })
@@ -130,8 +147,10 @@ describe('PerformanceSection — the not-applied notice follows the server (#904
     )
     const client = renderSection()
     await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(300))
+    // FR-010: the raise is a draft on the bar; one Save sends it (the old
+    // flow's step-up confirm and autosave debounce are retired).
     fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '400' } })
-    fireEvent.click(await screen.findByRole('button', { name: STEP_UP_CONFIRM }, WAIT))
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }, WAIT))
     await screen.findByTestId(NOTICE, {}, WAIT)
 
     // An unrelated save (max parallel agents) succeeds, but the server still
@@ -147,19 +166,19 @@ describe('PerformanceSection — the not-applied notice follows the server (#904
       effective_max_parallel_agents: 8,
     })
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await new Promise((r) => setTimeout(r, 700))
-    fireEvent.click(await screen.findByRole('button', { name: STEP_UP_CONFIRM }, WAIT))
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(2))
     // GET re-read after the initial load, the failed save and this save.
     await waitFor(() => expect(vi.mocked(api.fetchPerformanceSettings).mock.calls.length).toBeGreaterThanOrEqual(3))
-    await new Promise((r) => setTimeout(r, 50))
     expect(screen.getByTestId(NOTICE)).toHaveTextContent('Saved, but not applied yet')
     // The saved-but-unapplied limit stays on show.
     expect(screen.getByLabelText(LABEL)).toHaveValue(400)
 
     // The gateway reloaded: GET reports everything applied.
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({ ...SETTINGS, max_parallel_agents: 8, effective_max_parallel_agents: 8, max_tool_iterations: 400 })
-    await client.invalidateQueries({ queryKey: ['performance-settings'] })
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['performance-settings'] })
+    })
     await waitFor(() => expect(screen.queryByTestId(NOTICE)).not.toBeInTheDocument())
     expect(screen.getByLabelText(LABEL)).toHaveValue(400)
   })

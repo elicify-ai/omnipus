@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -142,18 +143,21 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 		})
 	}
 
-	// Check sandbox configuration. ResolvedMode is the source of truth.
-	// Both "enforce" and "permissive" represent an active sandbox; only
-	// "off" (or an empty config that resolves to off) should warn.
-	if cfg.Sandbox.ResolvedMode() == string(config.SandboxModeOff) {
+	// Check sandbox configuration. Both "enforce" and "permissive" represent
+	// an active sandbox. An explicit "off" warns. An unset mode (a fresh
+	// install) resolves to off too, but the running kernel sandbox may still
+	// be enforcing; the finding would then contradict
+	// GET /security/sandbox-status, so it warns only when no turn policy base
+	// is installed (#853).
+	if sandboxReportedDisabled(cfg) {
 		issues = append(issues, map[string]any{
 			"id":             "sandbox-disabled",
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn on Sandbox mode in Settings → Sandbox & network.",
+			"action_link":    "/settings?tab=sandbox",
+			"action_label":   "Open Sandbox & network",
 		})
 	}
 
@@ -177,9 +181,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "God-mode is armed",
 			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox's filesystem confinement and network port controls, and opens outbound network access, for every agent's shell tool.",
-			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
-			"action_link":    "/settings?tab=security",
-			"action_label":   "Open security settings",
+			"recommendation": "Turn off God Mode in Settings → Protection, unless you mean to keep it on.",
+			"action_link":    "/settings?tab=protection&focus=god-mode",
+			"action_label":   "Open Protection",
 		})
 	}
 
@@ -737,4 +741,17 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 		resp["warnings"] = warnings
 	}
 	jsonOK(w, resp)
+}
+
+// sandboxReportedDisabled reports whether the health check should say the
+// sandbox is disabled (#853): an explicit off always does; an unset mode
+// does only when the kernel sandbox is not running either.
+func sandboxReportedDisabled(cfg *config.Config) bool {
+	if cfg.Sandbox.ResolvedMode() != string(config.SandboxModeOff) {
+		return false
+	}
+	if cfg.Sandbox.Mode == "" {
+		return !sandbox.TurnPolicyBaseInstalled()
+	}
+	return true
 }

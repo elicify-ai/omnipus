@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -65,11 +66,14 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 		oldLevel = "medium"
 	}
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	keys := canonicalConfigKeys("sandbox.prompt_injection_level")
+	ticket, writeErr := a.safeUpdateConfigJSONRecorded(applyFailedSourcePromptGuard, func(m map[string]any) error {
 		ensureMap(m, "sandbox")["prompt_injection_level"] = string(body.Level)
 		return nil
-	}); err != nil {
-		slog.Error("rest: update prompt_injection_level", "error", err)
+	}, func() []configKeyPath { return keys })
+	var refreshErr *configRefreshError
+	if writeErr != nil && !errors.As(writeErr, &refreshErr) {
+		slog.Error("rest: update prompt_injection_level", "error", writeErr)
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}
@@ -79,8 +83,28 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 		slog.Error("rest: audit emit prompt guard change", "error", auditErr)
 	}
 
+	if refreshErr != nil {
+		// B3 (SFH-03): config.json holds the new level but the live refresh
+		// failed before the reload stage. The key was recorded as
+		// apply_failed inside the write lock; the answer is the C-6
+		// saved-but-not-applied 200.
+		logsafeError("rest: prompt guard level saved but the live refresh failed", "error", writeErr)
+		warnMsg := "config saved to disk but the live refresh failed; restart the gateway to apply"
+		jsonOK(w, gen.PromptGuardUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedLevel:    gen.PromptGuardUpdateResponseAppliedLevel(body.Level),
+			Warning:         &warnMsg,
+		})
+		return
+	}
+
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
+		// Saved, not in use: listed as apply_failed before the answer (C-6).
+		// Dropped only when a successful apply already covers this write
+		// (B5, M-8, G2-B1).
+		a.applyFailed.recordAt(applyFailedSourcePromptGuard, ticket, keys)
 		slog.Info("rest: prompt guard level updated (restart required)", "level", string(body.Level))
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.PromptGuardUpdateResponse{
@@ -97,6 +121,10 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 			"level", string(body.Level))
 	}
 
+	if confirmed {
+		// G2-B1: only a confirmed reload proves this write is in use.
+		a.applyFailed.appliedAt(applyFailedSourcePromptGuard, ticket.seq)
+	}
 	slog.Info("rest: prompt guard level updated", "level", string(body.Level))
 
 	jsonOK(w, gen.PromptGuardUpdateResponse{

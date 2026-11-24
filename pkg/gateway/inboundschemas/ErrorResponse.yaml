@@ -25,9 +25,13 @@ properties:
       so the location cannot be checked)
       and
       "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli,
-      details.check one of too_long, contains_nul, contains_line_break), and
-      "saved_not_refreshed" on a 500 whose write reached disk but whose
-      running settings could not be refreshed.
+      details.check one of too_long, contains_nul, contains_line_break).
+      "saved_not_refreshed" is a 500 whose write reached disk but whose
+      running settings could not be refreshed; the settings endpoint that
+      answers it is named here: PUT /settings/third-party-agents (existing),
+      PUT /config, PUT /settings/context and PUT /settings/retention
+      (Settings redesign #1519, C-6 outcome table). A 500 with this code means saved, not in use — never
+      "not saved".
       The package routes (/packages/export, /packages/import,
       /packages/import/{staging_id}/apply) use: export_selection_invalid,
       agent_not_found, core_agent_not_exportable, agent_prompt_missing,
@@ -60,5 +64,8 @@ properties:
       Optional structured details about the error. For `cli_path_invalid` and
       `cli_preset_invalid`: `cli` (`claude-code`, `codex` or `opencode`) and
       `check` (the failed check's name). No path is returned; path-check
-      diagnostics are recorded in the server log.
+      diagnostics are recorded in the server log. For `saved_not_refreshed`:
+      `keys`, an array of the dotted config keys the body changed (for
+      example ["gateway.log_level", "context.mcp_result_cap"]), which are
+      also recorded as apply_failed entries in GET /config/pending-restart.
     additionalProperties: true

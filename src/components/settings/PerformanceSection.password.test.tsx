@@ -1,12 +1,20 @@
 /**
- * PerformanceSection.password.test.tsx — Spec-3 FR-6.6, ADR-0010 WP3.
+ * PerformanceSection.password.test.tsx — Spec-3 FR-6.6, ADR-0010 WP3; the
+ * redesign's FR-026/FR-027/FR-029 keep the substance.
  *
  * The password-mode counterpart to PerformanceSection.test.tsx's confirm-mode
- * coverage: with AppState.identity.mode = 'local', useStepUp() picks
- * 'password' and the autosave-triggered PUT goes through useStepUp's
- * dialog-first flow — ReAuthDialog opens before anything is sent, and a
- * successful re-auth sends the PUT exactly once, carrying the minted consent
- * token. Dismissal sends nothing and leaves the change unsaved.
+ * coverage: with AppState.identity.mode = 'local', the shell's password prompt
+ * is the real ReAuthDialog, and the section's one Save asks it before the PUT
+ * goes out (FR-026: one prompt per Save, before any write) and sends the PUT
+ * exactly once carrying the minted consent token (FR-027). Cancel/dismissal
+ * sends nothing and keeps every draft (FR-029, D-11 row 5).
+ *
+ * The old file drove the removed autosave model (a 700 ms debounce triggered
+ * the PUT through useStepUp's own dialog); FR-010 replaces autosave with the
+ * section Save bar, and the prompt moved to the shell (FR-026), so this
+ * harness supplies the shell boundary and drives the prompt's outcome by
+ * hand — the same dialog-first, token-once oracle at the boundary a
+ * component test owns.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -33,9 +41,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import * as api from '@/lib/api'
 import type { AppState } from '@/lib/api'
+import type { SettingsShellApi } from './SettingsShellContext'
+import { SettingsShellContext } from './SettingsShellContext'
 import { PerformanceSection } from './PerformanceSection'
 
-// Local mode (identity.mode: 'local') pins useStepUp() to 'password'.
+// Local mode (identity.mode: 'local') — the shell's prompt renders the real
+// ReAuthDialog; at this boundary the harness owns the prompt's outcome.
 const LOCAL_APP_STATE = {
   onboarding_complete: true,
   identity: { mode: 'local', edition: 'core', signed_in: true },
@@ -48,14 +59,49 @@ const SETTINGS = {
   tools_on_demand: true,
 }
 
+/** A prompt recorder whose outcome the test resolves by hand. */
+function manualPrompt() {
+  const prompts: string[][] = []
+  let resolvePrompt: (token: string | null) => void = () => {}
+  const requestPassword = vi.fn(
+    (labels: string[]) =>
+      new Promise<string | null>((resolve) => {
+        prompts.push(labels)
+        resolvePrompt = resolve
+      }),
+  )
+  return {
+    prompts,
+    requestPassword,
+    resolveWith: (token: string | null) =>
+      act(async () => {
+        resolvePrompt(token)
+      }),
+  }
+}
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderSection() {
+async function renderSectionWithShell(requestPassword: (labels: string[]) => Promise<string | null>) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <PerformanceSection />
+      <SettingsShellContext.Provider
+        value={
+          {
+            announce: () => {},
+            setDraftCount: () => {},
+            offerRestart: () => {},
+            refreshPendingRestart: () => {},
+            requestPassword,
+            saveBarVisible: false,
+            setSaveBarVisible: () => {},
+          } as SettingsShellApi
+        }
+      >
+        <PerformanceSection />
+      </SettingsShellContext.Provider>
     </QueryClientProvider>,
   )
 }
@@ -71,52 +117,51 @@ afterEach(() => {
 })
 
 describe('PerformanceSection — password mode (local edition)', () => {
-  it('opens ReAuthDialog before the autosave PUT, then sends it once with the minted token', async () => {
-    vi.mocked(api.updatePerformanceSettings)
-      .mockResolvedValueOnce({ ...SETTINGS, max_parallel_agents: 8 } as never)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+  it('the prompt precedes the PUT; completing it sends the PUT once with the minted consent token (FR-026, FR-027)', async () => {
+    vi.mocked(api.updatePerformanceSettings).mockResolvedValue({
+      ...SETTINGS,
+      max_parallel_agents: 8,
+    } as never)
+    const prompt = manualPrompt()
 
-    vi.useRealTimers()
-    renderSection()
+    renderSectionWithShell(prompt.requestPassword)
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
-    // Dialog first: ReAuthDialog opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-password-input')).toBeInTheDocument()
-    })
+    // Prompt first: the shell is asked for the one password before anything
+    // is sent (FR-026; the old flow's dialog-first property), listing the
+    // password-marked setting by its visible label.
+    await waitFor(() => expect(prompt.prompts.length).toBe(1))
+    expect(prompt.prompts[0]).toEqual(['Max parallel agents'])
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
+    // The re-auth completes; the minted consent token rides the one PUT.
+    await prompt.resolveWith('reauth_tok')
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0][1]).toBe('reauth_tok')
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0]).toEqual([
+        { max_parallel_agents: 8 },
+        'reauth_tok',
+      ])
     })
+    await screen.findByText(/Saved at/)
   })
 
-  it('dismissing the re-auth dialog leaves the change unsaved', async () => {
-
-    vi.useRealTimers()
-    renderSection()
+  it('dismissing the prompt leaves the change unsaved and the draft on the bar (FR-029, D-11 row 5)', async () => {
+    const prompt = manualPrompt()
+    renderSectionWithShell(prompt.requestPassword)
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompt.prompts.length).toBe(1))
 
-    await waitFor(() => screen.getByTestId('reauth-cancel'))
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
-
+    // Cancel/dismiss resolves null: nothing is stored and the draft stays.
+    await prompt.resolveWith(null)
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-password-input')).not.toBeInTheDocument()
+      expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
     })
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })

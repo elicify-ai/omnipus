@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Eye, EyeSlash, ShieldCheck, SpinnerGap, XCircle } from '@phosphor-icons/react'
 import {
   Dialog,
@@ -13,6 +13,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { reAuth, getErrorMessage } from '@/lib/api'
+import { useReturnFocus } from './useReturnFocus'
 
 // ReAuthDialog implements the Spec-6 FR-12.2 consent primitive at the UI layer.
 // It prompts the single user to re-type their one password, calls POST
@@ -28,17 +29,33 @@ export function ReAuthDialog({
   title = 'Confirm your password',
   description = 'For your security, re-type your password to make this change.',
   onConfirmed,
+  items,
 }: {
+  /**
+   * Settings redesign #1519 (FR-026): the visible labels of every
+   * password-marked setting this one prompt covers. When given, the prompt
+   * lists them and says that cancelling keeps the unsaved changes.
+   */
+  items?: string[]
   open: boolean
   onOpenChange: (open: boolean) => void
   title?: string
   description?: string
   onConfirmed: (token: string) => void
 }) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  // FR-029: after a refusal the person types again, so focus returns to the
+  // password field.
+  const refuse = (message: string) => {
+    setError(message)
+    inputRef.current?.focus()
+  }
 
   const reset = () => {
     setPassword('')
@@ -54,15 +71,17 @@ export function ReAuthDialog({
 
   const handleSubmit = async () => {
     if (!password.trim()) {
-      setError('Password is required')
+      refuse('Enter your password to continue.')
       return
     }
     setSubmitting(true)
     setError('')
     try {
-      const resp = await reAuth(password)
-      // Wipe the password from state before handing control back.
-      setPassword('')
+      const resp = await reAuth(password).finally(() => {
+        // FR-028: the typed password is cleared as soon as the one reauth
+        // request returns, whatever its result.
+        setPassword('')
+      })
       setSubmitting(false)
       onConfirmed(resp.token)
       onOpenChange(false)
@@ -70,15 +89,19 @@ export function ReAuthDialog({
       setSubmitting(false)
       // A wrong password returns 401; surface it inline so the user can retry.
       const message = getErrorMessage(err, 'Re-authentication failed', {
-        statusOverrides: { 401: 'That password is incorrect. Please try again.' },
+        // FR-029: wrong password and the reauth rate limit (10 per minute).
+        statusOverrides: {
+          401: 'The password is incorrect.',
+          429: 'Too many tries. Wait a minute, then try again.',
+        },
       })
-      setError(message)
+      refuse(message)
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-sm" onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-[var(--space-2)]">
             <ShieldCheck size={18} weight="duotone" className="text-[var(--color-accent)]" />
@@ -86,6 +109,17 @@ export function ReAuthDialog({
           </DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+
+        {items && items.length > 0 && (
+          <div className="space-y-[var(--space-1)] text-[length:var(--type-body-compact-size)]">
+            <p className="text-[var(--color-muted)]">This saves:</p>
+            <ul className="list-disc pl-[var(--space-4)] text-[var(--color-secondary)]" data-testid="reauth-items">
+              {items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="space-y-[var(--space-2)]">
           <Label htmlFor="reauth-password" className="text-[var(--color-muted)]">
@@ -109,6 +143,7 @@ export function ReAuthDialog({
               placeholder="Your password"
               autoComplete="current-password"
               autoFocus
+              ref={inputRef}
               className="pr-[var(--space-6)]"
               data-testid="reauth-password-input"
             />
@@ -122,6 +157,11 @@ export function ReAuthDialog({
               {showPassword ? <EyeSlash size={15} /> : <Eye size={15} />}
             </IconButton>
           </div>
+          {items && items.length > 0 && (
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+              If you cancel, your unsaved changes stay on the page.
+            </p>
+          )}
           {error && (
             <div
               role="alert"
@@ -141,7 +181,9 @@ export function ReAuthDialog({
           <Button
             size="sm"
             onClick={handleSubmit}
-            disabled={submitting || !password.trim()}
+            // Confirm stays pressable: an empty password is refused inline
+            // with a message and focus in the field (D-11 row 3, FR-029).
+            disabled={submitting}
             data-testid="reauth-confirm"
           >
             {submitting ? (

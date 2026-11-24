@@ -24,6 +24,21 @@ function makeClient() {
   })
 }
 
+// C-2 (round 1, review MAJ-006) makes `reason` a required member of every
+// PendingRestartEntry: "restart_required" (a restart-gated key whose saved
+// value differs from the boot value) or "apply_failed" (a hot-reloaded key
+// whose last save did not apply). The fixtures below carry both spellings.
+// The narrow cast exists because the landing branch's generated types do not
+// carry `reason` yet (it arrives with the frontend/backend merge); the cast
+// never removes a required field — it only lets this fixture carry a member
+// the older generated type does not know.
+const entry = (e: {
+  key: string
+  applied_value: unknown
+  persisted_value: unknown
+  reason: 'restart_required' | 'apply_failed'
+}): PendingRestartEntry => e as PendingRestartEntry
+
 describe('usePendingRestart', () => {
   afterEach(() => {
     vi.resetAllMocks()
@@ -49,8 +64,8 @@ describe('usePendingRestart', () => {
   it('fetch returns entries — store exposes them', async () => {
     const client = makeClient()
     const entries: PendingRestartEntry[] = [
-      { key: 'security.prompt_guard', applied_value: 'low', persisted_value: 'high' },
-      { key: 'security.audit_log', applied_value: false, persisted_value: true },
+      entry({ key: 'security.prompt_guard', applied_value: 'low', persisted_value: 'high', reason: 'restart_required' }),
+      entry({ key: 'security.audit_log', applied_value: false, persisted_value: true, reason: 'restart_required' }),
     ]
     vi.mocked(fetchPendingRestart).mockResolvedValue(entries)
 
@@ -93,7 +108,7 @@ describe('usePendingRestart', () => {
     const client = makeClient()
     vi.mocked(fetchPendingRestart)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ key: 'x', applied_value: 1, persisted_value: 2 }])
+      .mockResolvedValueOnce([entry({ key: 'x', applied_value: 1, persisted_value: 2, reason: 'apply_failed' })])
 
     const { result } = renderHook(() => usePendingRestart(), {
       wrapper: makeWrapper(client),

@@ -1,21 +1,24 @@
 /**
- * PerformanceSection.test.tsx — Spec-3 FR-6.6, ADR-0008 ruling 6.
+ * PerformanceSection.test.tsx — the Limits "Agents and goals" group under the
+ * Settings redesign #1519 (FR-010; the group name is the spec's: Limits holds
+ * "Context and tool results, Model overrides, and Agents and goals").
  *
- * Covers the max-parallel-agents control and that saving it is confirmed:
- * changing the input triggers autosave after debounce, which opens the
- * ConfirmDialog (the PUT does NOT fire yet), and only a confirm calls
- * updatePerformanceSettings.
- *
- * UAT fix #2: explicit Save button removed — autosave opens the confirmation
- * automatically after the debounce (600 ms) when the input value is valid.
- *
- * Tool loading toggle: toggling tools_on_demand immediately opens the
- * confirmation and calls updatePerformanceSettings with both fields
- * (max_parallel_agents + tools_on_demand) after it.
+ * The old file covered the removed autosave model (debounce + per-change
+ * "Change the performance settings?" confirm + AutoSaveIndicator + error
+ * toasts that reverted optimistic toggles). FR-010 replaces all of it: a
+ * change is a draft on the section's Save bar; Save changes sends one
+ * partial PUT with only the changed fields and the consent token
+ * (FR-015/FR-026/FR-027); the moved rows are password-marked (FR-025, the
+ * "Limits → PUT /performance (password)" move table); an out-of-range value
+ * is a field error that blocks the bar (FR-013, Dataset D-10); a refused
+ * Save keeps its draft (FR-015/FR-020 outcome 3); Discard returns drafts to
+ * the saved values (FR-012). The typed-0 "restore auto-detect" rule is
+ * replaced by D-10 row 9: empty means no fixed limit, and the field's range
+ * starts at 1.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -46,13 +49,41 @@ const SETTINGS = {
   tools_on_demand: true,
 }
 
-// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
-// ConfirmDialog, no consent token. The password-mode (local edition)
-// equivalent lives in PerformanceSection.password.test.tsx.
+// Platform mode (identity.mode: 'platform') — the shell prompt is the
+// confirm variant (FR-032); the password-mode (local edition) counterpart
+// lives in PerformanceSection.password.test.tsx.
 const PLATFORM_APP_STATE = {
   onboarding_complete: true,
   identity: { mode: 'platform', edition: 'hosted', signed_in: true },
 } as AppState
+
+// The FR-026 prompt is shell-owned (SettingsShellContext + the shell's prompt
+// hook ship with the redesign and are absent from the pre-change tree) —
+// loaded lazily and failing loudly as BLOCKED RED, never as a collection
+// error.
+type ShellCtx = typeof import('./SettingsShellContext')
+let shellCtxModule: ShellCtx | null = null
+async function loadShellContext() {
+  if (shellCtxModule) return shellCtxModule
+  try {
+    shellCtxModule = await vi.importActual<ShellCtx>('./SettingsShellContext')
+    return shellCtxModule
+  } catch {
+    throw new Error(
+      'BLOCKED RED (FR-010/FR-026/FR-027, D-8): the Settings shell context (SettingsShellContext) does not ' +
+        'exist yet — required for the one password prompt per Save (FR-026) and the consent-token write (FR-027)',
+    )
+  }
+}
+
+function promptRecorder() {
+  const prompts: string[][] = []
+  const requestPassword = vi.fn(async (labels: string[]) => {
+    prompts.push(labels)
+    return 'reauth-tok'
+  })
+  return { prompts, requestPassword }
+}
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -66,176 +97,183 @@ function renderSection() {
   )
 }
 
+async function renderSectionWithShell(requestPassword: (labels: string[]) => Promise<string | null>) {
+  const { SettingsShellContext } = await loadShellContext()
+  return render(
+    <QueryClientProvider client={makeClient()}>
+      <SettingsShellContext.Provider
+        value={{
+          announce: () => {},
+          setDraftCount: () => {},
+          offerRestart: () => {},
+          refreshPendingRestart: () => {},
+          requestPassword,
+          saveBarVisible: false,
+          setSaveBarVisible: () => {},
+        }}
+      >
+        <PerformanceSection />
+      </SettingsShellContext.Provider>
+    </QueryClientProvider>,
+  )
+}
+
+/** The row's error: the alert the field's aria-describedby names (FR-013). */
+function fieldAlertText(input: HTMLElement): string {
+  const ids = (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+  const alert = ids.map((id) => document.getElementById(id)).find((el) => el?.getAttribute('role') === 'alert')
+  expect(alert, 'the field must show its error as the alert its aria-describedby names').not.toBeNull()
+  return alert?.textContent ?? ''
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS as never)
   vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
-  // Real timers by default — individual tests switch to fake timers after
-  // initial render so that waitFor (which uses setInterval internally) can
-  // resolve the data-loading Promise before fake timers are installed.
 })
 
 afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('PerformanceSection — autosave (UAT fix #2)', () => {
+describe('PerformanceSection — the one save rule (FR-010)', () => {
   it('renders the configured value from the API', async () => {
-    vi.useRealTimers()
     renderSection()
     await waitFor(() => {
-      expect(screen.getByLabelText('Max parallel agents')).toHaveValue(4)
+      expect(screen.getByLabelText(/max parallel agents/i)).toHaveValue('4')
     })
   })
 
-  it('has no explicit Save button — autosave replaces it', async () => {
-    vi.useRealTimers()
+  it('a drafted change shows the section Save bar with Save changes; there is no per-control save button (FR-010, FR-011)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-    // The Save button is gone; only the accessible escape-hatch "Save changes"
-    // sr-only button exists (not visible).
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
+    // No bare "Save" button on any control (FR-010: the bar is the one save).
     const visibleSaveBtns = screen.queryAllByRole('button').filter(
       (btn) => btn.textContent?.toLowerCase() === 'save',
     )
     expect(visibleSaveBtns).toHaveLength(0)
+
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '8' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument()
   })
 
-  it('opens the re-auth dialog automatically after the debounce when input is valid', async () => {
+  it('typing opens no prompt and stores nothing — the draft waits on the bar (FR-010, FR-011; the FR-026 prompt runs only at Save)', async () => {
     renderSection()
-    // Wait for the data to load with real timers.
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    // Switch to fake timers NOW so we can control the debounce.
-    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '8' } })
 
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-
-    // Before debounce fires — dialog must NOT be open yet.
+    // No confirmation dialog opens on typing, and nothing is sent.
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-
-    // Advance past the autosave debounce (600 ms).
-    await act(async () => { vi.advanceTimersByTime(700) })
-
-    // Switch back so waitFor can poll.
-    vi.useRealTimers()
-
-    // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
-    // the confirm is not the destructive variant.
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Change the performance settings?')
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
-    expect(screen.getByRole('button', { name: 'Change performance settings' })).toHaveTextContent('Change performance settings')
-    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Change performance settings' }).className).not.toMatch(/color-error/)
-    // PUT must still NOT have been called — user hasn't confirmed yet.
-    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    // The bar counts the draft and its password mark (FR-025: the moved
+    // Limits rows are password-marked).
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.getByText(/1 needs your password/)).toBeInTheDocument()
   })
 
-  it('confirming performs the save', async () => {
+  it('Save changes sends the drafted value once, with the consent token (FR-010, FR-015, FR-026, FR-027)', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue(SETTINGS as never)
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    renderSection()
-    // Wait for data with real timers.
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '8' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    // Switch to fake timers to control the debounce.
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
-
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // One prompt listing the password-marked value by its visible label (FR-026).
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Max parallel agents'])
+    // One partial PUT carrying only the changed field (FR-015) and the token (FR-027).
     await waitFor(() => {
-      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
-        { max_parallel_agents: 8, tools_on_demand: true },
-        undefined,
-      )
+      expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0]).toEqual([
+        { max_parallel_agents: 8 },
+        'reauth-tok',
+      ])
     })
+    // FR-018: the saved signal replaces the old confirm/save machinery.
+    await screen.findByText(/Saved at/)
   })
 
-  it('does NOT open the confirmation for a negative value (still rejected — no ceiling, but a floor of 0 remains)', async () => {
+  it('a negative value is refused by the field; the bar blocks Save, focus moves to the field and nothing is sent (FR-013, D-10)', async () => {
     renderSection()
-    // Wait for data with real timers.
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    // Switch to fake timers to control the debounce.
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-7' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
+    const input = screen.getByLabelText(/max parallel agents/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '-7' } })
 
-    // Dialog must NOT open — a negative value is silently skipped by autosave.
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    // PUT must not have been called.
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'))
+    expect(fieldAlertText(input)).toMatch(/1 or more/)
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
+    const saveBtn = screen.getByRole('button', { name: /save changes/i })
+    expect(saveBtn).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(saveBtn)
+    expect(input).toHaveFocus()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('accepts a value well above the old 16-ceiling (removed, ADR concurrency-gate consolidation) and submits it unchanged', async () => {
-    // The backend removed `maximum: 16` from PerformanceSettingsUpdate — an
-    // explicit value now has no ceiling and is honored exactly as configured
-    // (clampParallelExplicit only floors at 1). 40 must be accepted, open the
-    // confirmation, and be sent to updatePerformanceSettings verbatim.
-    vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, max_parallel_agents: 40, effective_max_parallel_agents: 40 } as never)
+  it('a value above the removed 16-ceiling drafts and is stored verbatim (FR-010; no ceiling remains)', async () => {
+    vi.mocked(api.updatePerformanceSettings).mockResolvedValue({
+      ...SETTINGS,
+      max_parallel_agents: 40,
+      effective_max_parallel_agents: 40,
+    } as never)
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    vi.useRealTimers()
-    renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '40' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '40' } })
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
     await waitFor(() => {
-      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
-        { max_parallel_agents: 40, tools_on_demand: true },
-        undefined,
-      )
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0]).toEqual([
+        { max_parallel_agents: 40 },
+        'reauth-tok',
+      ])
     })
-    // No validation error toast for a value that is now within bounds.
+    // No validation error toast for a value that is within bounds.
     expect(addToast).not.toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'error', message: expect.stringContaining('max_parallel_agents') }),
     )
   })
 
-  it('accepts 0 and submits it as the auto-detect restore signal', async () => {
-    // Per PerformanceSettingsUpdate.yaml: "Set to 0 to restore the
-    // auto-detected default." Typing 0 explicitly must behave identically to
-    // leaving the field blank — both send max_parallel_agents: 0.
+  it('D-10 replaces the typed-0 restore rule: 0 is refused; clearing to blank is accepted and saves the no-fixed-limit signal 0 (D-10 row 9, FR-013)', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue(SETTINGS as never)
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
+    const input = screen.getByLabelText(/max parallel agents/i) as HTMLInputElement
 
-    vi.useRealTimers()
-    renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    // Typing 0 is no longer a save: the field range starts at 1 (D-10).
+    fireEvent.change(input, { target: { value: '0' } })
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'))
+    expect(fieldAlertText(input)).toMatch(/1 or more/)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(input).toHaveFocus()
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '0' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
-
+    // Empty means automatic (D-10 row 9): clearing is a valid draft, and Save
+    // sends the update contract's no-fixed-limit signal 0.
+    fireEvent.change(input, { target: { value: '' } })
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).not.toBe('true'))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => {
-      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
-        { max_parallel_agents: 0, tools_on_demand: true },
-        undefined,
-      )
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0]).toEqual([
+        { max_parallel_agents: 0 },
+        'reauth-tok',
+      ])
     })
   })
 
-  // The old "over-limit warning" (fired whenever the typed value exceeded
-  // the recommended auto-detected default, and claimed the runtime would
-  // "clamp" it back down) was removed: the backend no longer clamps explicit
-  // values at all, so that claim became false. It is replaced by a
-  // high-value caution that fires only near the real physical OS-thread
-  // safety ceiling the backend itself warns about (physicalConcurrencySafetyCeiling
-  // = 2000, pkg/config/config.go) — and never claims the value will be lowered.
-  it('shows the high-value caution when input exceeds the physical thread-safety ceiling (2000)', async () => {
-    vi.useRealTimers()
+  // The caution's exact prose is not spec-pinned; the pinned properties are:
+  // it names the typed value, it names the physical thread ceiling, and it
+  // never claims the value will be lowered or clamped.
+  it('shows the high-value caution when the drafted value exceeds the physical thread-safety ceiling (2000)', async () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 4,
@@ -243,23 +281,23 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     } as never)
 
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '5000' } })
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '5000' } })
 
     await waitFor(() => {
       expect(screen.getByTestId('performance-high-value-warning')).toBeInTheDocument()
     })
-    // Warning text mentions the typed value and the ceiling, and must NOT
-    // claim the value will be lowered — it is honored exactly as configured.
     const text = screen.getByTestId('performance-high-value-warning').textContent ?? ''
     expect(text).toContain('5000')
-    expect(text).toContain('2000')
-    expect(text).toContain('honored exactly as set')
+    expect(text).toMatch(/2,000|2000/)
+    expect(text).toMatch(/used exactly as set/i)
+    expect(text).toMatch(/may run out of threads/i)
+    // It must NOT claim the value will be lowered or clamped.
+    expect(text).not.toMatch(/clamped|lowered/i)
   })
 
-  it('does not show the high-value caution for a value within the recommended range', async () => {
-    vi.useRealTimers()
+  it('does not show the high-value caution for a drafted value within the recommended range', async () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 8,
       effective_max_parallel_agents: 8,
@@ -267,18 +305,17 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     } as never)
 
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '4' } })
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '4' } })
 
     expect(screen.queryByTestId('performance-high-value-warning')).not.toBeInTheDocument()
   })
 
-  it('does not show the high-value caution for a value above the old 16-ceiling but below the physical ceiling (2000)', async () => {
+  it('does not show the high-value caution for a drafted value above the old 16-ceiling but below the physical ceiling (2000)', async () => {
     // Regression guard: 40 exceeds the OLD (removed) ceiling of 16 but is
     // nowhere near the physical thread-safety ceiling of 2000 — no caution
     // should render for it.
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 4,
@@ -286,15 +323,14 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     } as never)
 
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '40' } })
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '40' } })
 
     expect(screen.queryByTestId('performance-high-value-warning')).not.toBeInTheDocument()
   })
 
   it('surfaces the resolved effective value when an operator HAS configured a cap', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 882,
@@ -303,7 +339,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     } as never)
 
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
     // RE-DERIVED. This used to assert the words "Recommended: 882 parallel
     // agents". There is no longer a computed default to recommend — when
@@ -320,293 +356,211 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     expect(screen.queryByText(/3\.5 MB/)).not.toBeInTheDocument()
   })
 
-  it('shows AutoSaveIndicator (no legacy SaveStatus)', async () => {
-    vi.useRealTimers()
+  it('no autosave status exists (FR-010 removes the AutoSaveIndicator); the resolved-value panel stands in', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-    // AutoSaveIndicator renders a data-testid when status is not idle — but it
-    // exists in the DOM as a container even when idle.
-    // Verify the label "Agent Concurrency" header is present.
-    expect(screen.getByText('Agent Concurrency')).toBeInTheDocument()
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
+    // The "Agent Concurrency" header and its AutoSaveIndicator are replaced
+    // by the resolved-value panel and the one Save bar (FR-010).
+    expect(screen.getByText(/Currently in use: 4 parallel agents/)).toBeInTheDocument()
+    expect(screen.queryByText('Saving...')).not.toBeInTheDocument()
+    expect(screen.queryByText(/autosav/i)).not.toBeInTheDocument()
   })
 })
 
-describe('PerformanceSection — Tool loading toggle', () => {
-  it('renders the Tool loading section with the switch in the ON state by default', async () => {
-    vi.useRealTimers()
+describe('Tool loading (drafts under FR-010)', () => {
+  it('renders the Tool loading switch in the ON state by default, with the wireframe\'s row description', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
-    const toggle = screen.getByLabelText('Tool loading')
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
+    const toggle = screen.getByLabelText(/tool loading/i)
     expect(toggle).toBeChecked()
-    expect(screen.getByText('Load tools on demand')).toBeInTheDocument()
-    expect(screen.getByText(/Smaller messages, lower token use/)).toBeInTheDocument()
+    // The wireframe (the wording authority) replaces the old per-state copy
+    // ("Load tools on demand" / "Smaller messages, lower token use") with one
+    // row description.
+    expect(screen.getByText(/Load tools only when an agent needs them/)).toBeInTheDocument()
   })
 
   it('renders tools_on_demand=false from the API as the switch OFF state', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       ...SETTINGS,
       tools_on_demand: false,
     } as never)
     renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
-    const toggle = screen.getByLabelText('Tool loading')
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
+    const toggle = screen.getByLabelText(/tool loading/i)
     expect(toggle).not.toBeChecked()
-    expect(screen.getByText('Keep all tools loaded')).toBeInTheDocument()
-    expect(screen.getByText(/Every tool is always available/)).toBeInTheDocument()
+    expect(screen.getByText(/Load tools only when an agent needs them/)).toBeInTheDocument()
   })
 
-  it('toggling the switch immediately opens the confirmation', async () => {
-    vi.useRealTimers()
+  it('toggling drafts the change and stores nothing (FR-010)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
 
-    fireEvent.click(screen.getByLabelText('Tool loading'))
+    fireEvent.click(screen.getByLabelText(/tool loading/i))
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Change performance settings' })).toBeInTheDocument()
-    })
-    // PUT must NOT have been called before the confirmation.
+    // The toggle becomes a draft on the bar; no confirm dialog opens and
+    // nothing is sent (FR-010/FR-011).
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
-  it('calls updatePerformanceSettings with tools_on_demand toggled after confirming', async () => {
+  it('Save changes sends the drafted toggle once, with the consent token (FR-010, FR-015, FR-026, FR-027)', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, tools_on_demand: false } as never)
-
-    vi.useRealTimers()
-    renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
 
     // Toggle OFF (from default ON).
-    fireEvent.click(screen.getByLabelText('Tool loading'))
+    fireEvent.click(screen.getByLabelText(/tool loading/i))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
-
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Tool loading'])
+    // Only the changed field is sent (FR-015) — the old paired
+    // max_parallel_agents echo is replaced by the partial-update rule.
     await waitFor(() => {
-      // tools_on_demand flipped to false; max_parallel_agents still 4 (from SETTINGS).
-      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
-        { max_parallel_agents: 4, tools_on_demand: false },
-        undefined,
-      )
+      expect(vi.mocked(api.updatePerformanceSettings).mock.calls[0]).toEqual([
+        { tools_on_demand: false },
+        'reauth-tok',
+      ])
     })
   })
 
-  it('displays helper text about next-message effect', async () => {
-    vi.useRealTimers()
+  it('the row copy explains what the switch changes (the wireframe description replaces the old next-message helper text)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
-    expect(screen.getByText(/Takes effect on the next message/)).toBeInTheDocument()
-    expect(screen.getByText(/Applies to all agents/)).toBeInTheDocument()
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
+    expect(screen.getByText(/Load tools only when an agent needs them/)).toBeInTheDocument()
+    expect(screen.getByText(/each message stays small/)).toBeInTheDocument()
   })
 
-  it('stuck-spinner fix: save status clears to idle (not stuck on saving) when max_parallel_agents is out of range and tools_on_demand is toggled', async () => {
-    // Regression test for the stuck-spinner bug: when max_parallel_agents is out
-    // of range (e.g. -1, negative), buildBody returns null. If handleToolsOnDemandChange
-    // left saveStatus='saving' before the null guard ran, the AutoSaveIndicator
-    // would spin forever. The fix: the else-branch sets saveStatus='idle'
-    // explicitly so the spinner clears.
-    vi.useRealTimers()
+  it('an invalid cap and a drafted toggle sit as drafts; the bar blocks Save and nothing is sent (FR-013)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    // Put an out-of-range value (-1, negative) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
+    // An out-of-range cap (-1) and a drafted toggle: both are drafts, the
+    // invalid one blocks the bar (FR-013) — no dialog, no PUT, no autosave
+    // "Saving..." state (the old stuck-spinner regression stays covered).
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '-1' } })
+    fireEvent.click(screen.getByLabelText(/tool loading/i))
 
-    // Now toggle tools_on_demand — this calls handleToolsOnDemandChange which
-    // calls buildBody(inputValue='-1', checked=false) → null (out of range).
-    fireEvent.click(screen.getByLabelText('Tool loading'))
-
-    // Give React time to process state updates.
-    await new Promise((r) => setTimeout(r, 50))
-
-    // The confirmation must NOT have opened (no valid body → no setPending/setConfirmOpen).
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-
-    // updatePerformanceSettings must NOT have been called.
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save changes/i })).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-
-    // The AutoSaveIndicator must not be in the 'saving' state.
-    // AutoSaveIndicator renders "Saving..." text when status='saving'; it must
-    // not appear because the null buildBody guard cleared status back to 'idle'.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(screen.queryByText('Saving...')).not.toBeInTheDocument()
   })
 
-  it('shows an error toast and reverts the switch when toggled while max_parallel_agents is out of range', async () => {
-    // Regression test for the silent-no-op bug: toggling tools_on_demand while
-    // the paired max_parallel_agents field is out of range used to flip the
-    // switch and silently drop the change (no toast, no PUT, no revert). The
-    // fix surfaces the same error toast triggerSave uses and reverts the
-    // switch to the value that is actually persisted.
-    vi.useRealTimers()
+  it('a drafted toggle next to an invalid cap stays drafted (no revert, no toast) until the bar unblocks (FR-013)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    // Put an out-of-range value (-1, negative) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
-
-    const toggle = screen.getByLabelText('Tool loading')
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '-1' } })
+    const toggle = screen.getByLabelText(/tool loading/i)
     expect(toggle).toBeChecked() // starts ON (default from SETTINGS)
 
-    // Toggle OFF — this calls handleToolsOnDemandChange, which calls
-    // buildBody(inputValue='-1', checked=false) → null (out of range).
     fireEvent.click(toggle)
 
-    await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith({
-        variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
-      })
-    })
-
-    // The switch must be reverted to its previously-saved (checked) state —
-    // the toggle never actually saved, so the UI must not lie about it.
-    await waitFor(() => {
-      expect(screen.getByLabelText('Tool loading')).toBeChecked()
-    })
-
-    // No save was attempted.
+    // The drafted OFF state is kept (FR-013 keeps drafts; the old oracle —
+    // an error toast plus reverting the switch — is replaced). Nothing is
+    // sent while the bar is blocked.
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(addToast).not.toHaveBeenCalled()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('shows an error toast and reverts the switch when toggled OFF-to-ON while max_parallel_agents is out of range', async () => {
-    // Mirror-direction regression test: the previous test only covered the
-    // default-ON -> toggle-OFF direction. Verify the same revert+toast fires
-    // starting from tools_on_demand=false and toggling ON, so the fix isn't
-    // accidentally coupled to a specific starting boolean.
-    vi.useRealTimers()
+  it('the same blocked state holds drafting OFF-to-ON beside an invalid cap (FR-013)', async () => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       ...SETTINGS,
       tools_on_demand: false,
     } as never)
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    // Put an out-of-range value (-1, negative) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
-
-    const toggle = screen.getByLabelText('Tool loading')
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '-1' } })
+    const toggle = screen.getByLabelText(/tool loading/i)
     expect(toggle).not.toBeChecked() // starts OFF
 
-    // Toggle ON — buildBody(inputValue='-1', checked=true) -> null (out of range).
     fireEvent.click(toggle)
 
-    await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith({
-        variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
-      })
-    })
-
-    // The switch must be reverted to its previously-saved (unchecked) state.
-    await waitFor(() => {
-      expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
-    })
-
+    await waitFor(() => expect(toggle).toBeChecked())
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(addToast).not.toHaveBeenCalled()
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('shows an error toast when the debounced max_parallel_agents input settles out of range (Bug 1)', async () => {
-    // Regression test: handleInputChange's debounced settle path never went
-    // through triggerSave, so an out-of-range value typed directly into the
-    // number field (rather than via the toggle) used to silently no-op —
-    // no toast, no indication the value wasn't saved. The fix surfaces the
-    // same error toast triggerSave and the toggle path already show.
+  it('an out-of-range typed value never writes and never toasts — the field error and the blocked bar carry it (FR-013)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
+    const input = screen.getByLabelText(/max parallel agents/i) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '-1' } })
 
-    await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith({
-        variant: 'error',
-        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank means no explicit cap — concurrency is then bounded by available memory).',
-      })
-    })
-
-    // Dialog never opens and no PUT fires for the invalid value.
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(input.getAttribute('aria-invalid')).toBe('true'))
+    expect(fieldAlertText(input)).toMatch(/1 or more/)
+    expect(await screen.findByText(/Fix 1 value before saving/)).toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
+    expect(addToast).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('shows the ApiError.userMessage (not the status-prefixed err.message) when updatePerformanceSettings rejects — Wave 2 getErrorMessage() fix', async () => {
+  it('a refused Save shows the server\'s userMessage — not the status-prefixed err.message — and keeps the draft (FR-015, FR-020 outcome 3)', async () => {
     // Traces to: Wave 2 findings-fix (task #149, gap 2) — pr-test-analyzer.
-    // Wave 2 fixed a real bug: PerformanceSection previously read err.message
-    // off the caught error instead of the intended err.userMessage off an
-    // ApiError. err.message carries the legacy "${status}: ${userMessage}"
-    // format (see ApiError constructor in src/lib/api-error.ts) — a 422 here
-    // would render as "422: Unprocessable value for max_parallel_agents" if
-    // the bug regressed. This test asserts the toast shows the bare
-    // userMessage, which only getErrorMessage()'s ApiError-first priority
-    // produces.
+    // err.message carries the legacy "${status}: ${userMessage}" format (see
+    // ApiError in src/lib/api-error.ts); the outcome line must show the bare
+    // userMessage, which only ApiError-first message handling produces.
     vi.mocked(api.updatePerformanceSettings).mockRejectedValue(
       new api.ApiError(422, 'Unprocessable value for max_parallel_agents'),
     )
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
+    await waitFor(() => screen.getByLabelText(/max parallel agents/i))
 
-    vi.useRealTimers()
-    renderSection()
-    await waitFor(() => screen.getByLabelText('Max parallel agents'))
-
-    vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
-    await act(async () => { vi.advanceTimersByTime(700) })
-    vi.useRealTimers()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
+    fireEvent.change(screen.getByLabelText(/max parallel agents/i), { target: { value: '8' } })
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
     await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith({
-        variant: 'error',
-        message: 'Unprocessable value for max_parallel_agents',
-      })
+      expect(api.updatePerformanceSettings).toHaveBeenCalledTimes(1)
     })
-    // Pin the negative: the garbled status-prefixed err.message string must
-    // NOT be what was shown.
-    expect(addToast).not.toHaveBeenCalledWith({
-      variant: 'error',
-      message: '422: Unprocessable value for max_parallel_agents',
-    })
+    // The outcome line names the refusal (FR-015) — the old error toast is
+    // replaced.
+    expect(await screen.findByText('Unprocessable value for max_parallel_agents')).toBeInTheDocument()
+    expect(await screen.findByText(/1 change could not be saved/)).toBeInTheDocument()
+    // Pin the negative: the garbled status-prefixed string must NOT appear.
+    expect(screen.queryByText('422: Unprocessable value for max_parallel_agents')).not.toBeInTheDocument()
+    // FR-015: the draft is kept at its typed value.
+    expect((screen.getByLabelText(/max parallel agents/i) as HTMLInputElement).value).toBe('8')
   })
 
-  it('cancelling performs nothing and reverts tools_on_demand to the server value (Bug 2)', async () => {
-    // Regression test: cancelling the confirmation for a *valid* toggle left
-    // toolsOnDemand pointing at the optimistically-flipped value forever,
-    // with `dirty` stuck true so the resync effect could never restore the
-    // real server value. The fix clears `dirty` on cancel so the sync effect
-    // (`data && !dirty`) snaps the switch back to the truth.
-    vi.useRealTimers()
+  it('Discard returns the drafted toggle to the saved value, and the change can be re-attempted (FR-012; the old cancel-revert property)', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Tool loading'))
+    await waitFor(() => screen.getByLabelText(/tool loading/i))
 
-    const toggle = screen.getByLabelText('Tool loading')
+    const toggle = screen.getByLabelText(/tool loading/i)
     expect(toggle).toBeChecked() // starts ON (default from SETTINGS)
 
-    // Toggle OFF — a valid change (max_parallel_agents=4 stays in range).
+    // Toggle OFF — a draft, not an optimistic write (FR-010).
     fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
+    // Discard returns the draft to the saved value (FR-012) — the switch
+    // must not keep showing the unsaved OFF state.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
     await waitFor(() => {
-      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      expect(screen.getByLabelText(/tool loading/i)).toBeChecked()
     })
-    // Switch is optimistically OFF while the dialog is open.
-    expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
-    // Cancel instead of confirming.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    // Dialog closes and the switch reverts to the server's true value (ON) —
-    // it must not keep showing the unsaved OFF state.
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-    await waitFor(() => {
-      expect(screen.getByLabelText('Tool loading')).toBeChecked()
-    })
-
-    // No save was ever attempted.
+    // Recovery: the same change is attemptable again.
+    fireEvent.click(screen.getByLabelText(/tool loading/i))
+    await waitFor(() => expect(screen.getByLabelText(/tool loading/i)).not.toBeChecked())
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 })
@@ -624,8 +578,10 @@ describe('PerformanceSection — Tool loading toggle', () => {
  *
  * A blank panel reads as "there is nothing to configure here". These tests
  * pin both halves: the loading state announces itself, and the error state
- * names the underlying cause and can be retried — the pattern the sibling
- * Security tab (SkillTrustSection) already uses on this same screen.
+ * names the underlying cause and can be retried. The wording follows the
+ * spec's Limits group name ("Agents and goals" — Limits holds "Context and
+ * tool results, Model overrides, and Agents and goals"), which replaces the
+ * old "performance settings" wording.
  */
 describe('PerformanceSection — failed load is visible, not blank', () => {
   // Holds the fetch open so the component stays in its loading state.
@@ -634,7 +590,6 @@ describe('PerformanceSection — failed load is visible, not blank', () => {
   }
 
   it('the loading state is not textless — it says it is loading', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockImplementation(pendingFetch)
     const { container } = renderSection()
 
@@ -644,11 +599,10 @@ describe('PerformanceSection — failed load is visible, not blank', () => {
       expect(screen.getByTestId('performance-loading')).toBeInTheDocument()
     })
     expect(container.textContent?.trim()).not.toBe('')
-    expect(screen.getByText(/loading performance settings/i)).toBeInTheDocument()
+    expect(screen.getByText(/loading agents and goals/i)).toBeInTheDocument()
   })
 
   it('a failed load states the underlying cause, not a bare sentence', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockRejectedValue(
       new api.ApiError(503, 'The server is unavailable. Please try again in a moment.'),
     )
@@ -657,12 +611,11 @@ describe('PerformanceSection — failed load is visible, not blank', () => {
     const alert = await screen.findByTestId('performance-load-error')
     // The cause itself must be on screen — this is what the old copy dropped.
     expect(alert).toHaveTextContent('The server is unavailable. Please try again in a moment.')
-    expect(alert).toHaveTextContent(/failed to load performance settings/i)
+    expect(alert).toHaveTextContent(/could not be loaded/i)
     expect(alert).toHaveAttribute('role', 'alert')
   })
 
   it('a different failure surfaces ITS own cause (the message is not hardcoded)', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockRejectedValue(
       new api.ApiError(500, 'probe-induced failure'),
     )
@@ -674,7 +627,6 @@ describe('PerformanceSection — failed load is visible, not blank', () => {
   })
 
   it('Retry refetches and recovers the panel', async () => {
-    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings)
       .mockRejectedValueOnce(new api.ApiError(503, 'The server is unavailable. Please try again in a moment.'))
       .mockResolvedValue(SETTINGS as never)
@@ -686,7 +638,7 @@ describe('PerformanceSection — failed load is visible, not blank', () => {
     fireEvent.click(screen.getByTestId('performance-retry-btn'))
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Max parallel agents')).toHaveValue(4)
+      expect(screen.getByLabelText(/max parallel agents/i)).toHaveValue('4')
     })
     expect(api.fetchPerformanceSettings).toHaveBeenCalledTimes(2)
     expect(screen.queryByTestId('performance-load-error')).not.toBeInTheDocument()

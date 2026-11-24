@@ -25,23 +25,15 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 
 ### Set tool policies
 
-1. Open **Settings**, then select **Security**. You see the security health summary and the main protection settings.
-2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. Changes save immediately using your signed-in session, with no second password prompt. Changing a tool to **Allow** can enable it for every agent that follows the global setting; stricter per-agent **Ask** or **Deny** settings still apply. This exception does not remove the existing confirmation checks on Integrations, Providers, Sandbox, Credentials or Performance saves.
-3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
+The installation-wide tool-permission editor and the unverified-skill trust control are temporarily unavailable in the web app until the Skills & Tools update lands. Neither is in the new Settings, and Skills & Tools has no replacement controls yet. Existing configured values still apply.
 
-A global policy change must also be applied to running agents. If the save result
-says the settings were saved but could not be applied, the saved change has not
-been undone, but running agents may still use the previous permissions. Retry
-applying the change, or restart Omnipus before relying on it. The global-policy
-API returns HTTP 503 for this result, rather than reporting a successful update.
+To tighten one agent, open that agent's **Tools & Permissions** panel. This does not change the installation-wide ceiling: an agent's setting can only be stricter, never looser. See [tools](tools.md) for how the two combine.
 
-The global policy auto-save indicator shows the server's recovery message for
-this result, not just a generic server-unavailable message. It remains an error,
-not a successful-save confirmation.
+For scripts, saving a global policy and applying it to running agents are separate steps. A saved-but-not-applied response from `PUT /api/v1/security/tool-policies` means running agents may still use the previous policies. See [Replacing tool policies through the API](tools.md#replacing-tool-policies-through-the-api) for the response and recovery steps. There is no global-policy auto-save indicator in the current web app.
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
-On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting; change it in **Tool Access — Global Policies** if you want the prompt.
+On a new installation `install_skill` is also set to **Ask**: you approve each skill install, and the card keeps appearing even with Auto-approve on (see the always-ask list below). An installation that already saved `install_skill` as Allow keeps that setting. The temporary absence of the installation-wide editor does not reset it.
 
 ### Turn Auto-approve on or off
 
@@ -49,7 +41,7 @@ Auto-approve can be set in two places. On a new installation it is **on** global
 
 | Where | What it does | Example |
 |---|---|---|
-| **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to confirm and re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
+| **Settings → Protection → Auto-approve** | The default for every agent and chat. It carries a **Password** badge: a change waits for **Save changes**, which asks you to re-type your password once (with the prompt-injection Defense level and the rate limits, if you changed them too; those two need no password of their own). Turning God Mode on or off does not save it. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
 | The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat. You can flip it before typing anything — a brand-new chat has no conversation yet, so the switch records your choice and applies it from your very first message, before any tool call in that first turn runs. In a chat that is already running, a flip applies from the agent's very next tool call, not just your next typed message — even mid-turn, while the agent is still working. A prompt that is already open when you flip the switch is not resolved for you; it has already asked, and stays open until you answer it. | Auto-approve is off globally, but you are watching this chat closely. You switch it on before typing your first message, and that first message already runs under it. In a chat that is already going, you switch it on mid-turn and the agent's next tool call already runs under it. |
 
 On the Security screen, the switch carries this description:
@@ -113,7 +105,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 ### God Mode
 
-God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings**, **Gateway**, **Danger zone**.
+God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings → Protection**, after Approvals, with the **Turn on God Mode…** / **Turn off God Mode…** control. It carries a **Password** badge and acts on its own: it asks for your password and offers its own restart, and it is never part of a **Save changes**. Settings → Gateway no longer has a God Mode control; old links to it open Protection.
 
 **In practice:** God Mode removes global tool-policy prompts, ordinary per-command resource hardening and Omnipus's shell network filtering. It does not remove stricter per-agent policies, operator deny rules, protected-path application checks or the configured shell workspace-path guard. Your account's operating-system permissions and external firewalls still apply. The programs those shell commands start — and the runs of `environment_setup` — receive your full gateway environment, including saved provider API keys and mailbox passwords. Use it only when you trust the agent with that wider access.
 
@@ -168,11 +160,11 @@ Changing God Mode always asks you to re-type your password. After that:
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
 
-While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Gateway**, scrolled to and focused on the God Mode control — switching to the Gateway tab even if Settings is already open. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant.
+While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either indicator opens **Settings → Protection**, scrolled to and focused on the God Mode control, even if Settings is already open on another section. While God Mode is on, the button is **Turn off God Mode…**. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant.
 
-The Security screen's health summary also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart, with a link back to **Settings**, **Security**, **Danger zone**.
+The health summary in Settings → Protection also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart. Turn it off with the **Turn off God Mode…** button in **Settings**, **Protection**, after Approvals.
 
-In an agent's **Tools & Permissions** panel and in **Tool Access — Global Policies**, each tool set to Ask carries a small marker showing what Auto-approve does with it:
+In an agent's **Tools & Permissions** panel, each tool set to Ask carries a small marker showing what Auto-approve does with it:
 
 | Marker | Meaning |
 |---|---|
@@ -651,7 +643,7 @@ Only Omnipus can remove a secret, with `remove_secret`, and you approve it first
 
 ## How to manage saved secrets
 
-1. Open **Settings**, then select **Security**.
+1. Open **Settings**, then select **Keys & secrets**.
 2. Find **Credential Vault** and select **Add key**.
 3. Enter a key name and its value, then select **Save**.
 4. Re-type your password if Omnipus asks you to confirm the change.
@@ -685,7 +677,7 @@ If any entry cannot be authenticated during credential-file format conversion, t
 
 ## How to review security activity
 
-1. Open **Settings**, select **Security**, then open **Advanced / technical details**.
+1. Open **Settings**, then select **Protection**.
 2. Find **Audit Log** and select **View Log**.
 3. Filter entries by event or decision to narrow the list.
 4. Check the chain status. **Chain verified** means the displayed log passed its integrity check.
@@ -714,7 +706,7 @@ Three named exceptions:
 
 - **Gateway restart.** When the command line (`omnipus start`) or the desktop launcher starts the gateway in the background, the new gateway receives its own data-directory location and, if you started the current process with them, the master-key or key-file value and the web token — those are its own unlock and login values, and without them a headless restart could not open your saved credentials. No other value is forwarded.
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
-- **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
+- **God Mode.** While God Mode is on (Settings → Protection), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
 ## Chat links and opening the Library for you
 
@@ -774,7 +766,7 @@ When the check passes, Omnipus runs exactly the file it checked, by the same pat
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
 - Omnipus overwrites the master key in memory at shutdown and when a command finishes, best-effort only — nothing in this programming environment can guarantee that every copy of a value in memory is erased, so a memory dump taken while the key was in use may still contain it.
-- **God-mode**, under **Settings**, **Gateway**, removes global permission prompts and widens shell access. It keeps the configured shell workspace-path guard, operator deny rules, stricter per-agent settings and protected-path application checks. Kernel protection for internal files requires an enforcing sandbox. Under God Mode the programs your shell commands and `environment_setup` runs start see your full gateway environment — provider API keys and mailbox passwords included — though the gateway boot values stay withheld from them. See "God Mode," above, for exactly what changes, the two-switch (allowed vs. on) model, and what happens when you turn it on or off.
+- **God Mode**, under **Settings**, **Protection**, after Approvals, removes global permission prompts and widens shell access. It keeps the configured shell workspace-path guard, operator deny rules, stricter per-agent settings and protected-path application checks. Kernel protection for internal files requires an enforcing sandbox. Under God Mode the programs your shell commands and `environment_setup` runs start see your full gateway environment — provider API keys and mailbox passwords included — though the gateway boot values stay withheld from them. See "God Mode," above, for exactly what changes, the two-switch (allowed vs. on) model, and what happens when you turn it on or off.
 
 ## Related pages
 

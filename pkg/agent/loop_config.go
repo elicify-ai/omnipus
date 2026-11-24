@@ -122,6 +122,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	if al.memoryRateLimiter != nil {
 		al.wireMemoryRateLimiterOn(registry, al.memoryRateLimiter)
 	}
+	al.wireRetroRecallSourceOn(registry)
 
 	// Re-wire per-turn delegation injectors on the new registry so that the
 	// updated per-workspace delegation graph (read fresh per call) is

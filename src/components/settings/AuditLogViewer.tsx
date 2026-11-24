@@ -20,6 +20,7 @@ import {
 import { fetchAuditLog, getErrorMessage } from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useReturnFocus } from './useReturnFocus'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
   // other security_setting_change) renders as an unexpandable, all-blank row.
   const hasDetail = hasNonEmpty(entry.parameters) ||
                     hasNonEmpty(entry.details) ||
+                    hasNonEmpty(entry.fields) ||
                     !!entry.command ||
                     !!entry.policy_rule ||
                     !!entry.actor ||
@@ -204,6 +206,10 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
               {hasNonEmpty(entry.details) && (
                 <JsonBlock label="Details" value={entry.details!} />
               )}
+              {/* FR-107: structured records (audit.Emit) carry their data under fields. */}
+              {hasNonEmpty(entry.fields) && (
+                <JsonBlock label="Fields" value={entry.fields!} />
+              )}
               {hasNonEmpty(entry.old_value) && (
                 <JsonBlock label="Old Value" value={entry.old_value!} />
               )}
@@ -255,6 +261,8 @@ const DECISION_OPTIONS = [
 ]
 
 export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const returnFocus = useReturnFocus()
   const { addToast } = useUiStore()
   const [eventFilter, setEventFilter] = useState('all')
   const [decisionFilter, setDecisionFilter] = useState('all')
@@ -301,7 +309,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogContent onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus} className="max-w-5xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
         {/* Header */}
         <DialogHeader className="flex-none px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)] border-b border-[var(--color-border)]">
           <div className="flex items-center gap-[var(--space-2)]">

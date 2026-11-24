@@ -38,6 +38,7 @@ import type {
   Provider,
   ProvidersCatalog,
 } from '@/lib/api/generated/openapi-types'
+import { settingsRow } from './settingsSections'
 
 /** What an absent window or window source renders as. */
 export const ABSENT_FIELD = '—'
@@ -157,6 +158,7 @@ export function DefaultModelCard({
     <Card
       className="px-[var(--space-3)] py-[var(--space-2-5)]"
       data-testid="default-model-card"
+      {...settingsRow('Default model')}
     >
       <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div className="min-w-0">

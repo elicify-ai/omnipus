@@ -20,18 +20,24 @@
  *   - Block / Warn-unverified / Allow-all radio already built; imported here.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
-import { PromptGuardSection } from './PromptGuardSection'
+import { PromptGuardSection, type PromptGuardDraft } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
+import { PasswordBadge, SaveBarPanel, SettingRow } from './SaveBar'
+import { toWriteResponse } from './saveOutcome'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { fieldDomId, useSaveBar, type FieldMessage, type SaveBarField, type SaveBarValue } from './useSaveBar'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -43,7 +49,6 @@ import {
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import {
-  fetchConfig,
   fetchRateLimits,
   updateRateLimits,
   fetchCredentials,
@@ -57,8 +62,12 @@ import {
   fetchSandboxConfig,
   updateSandboxConfig,
   fetchSandboxStatus,
+  fetchPromptGuardLevel,
+  updatePromptGuardLevel,
   getErrorMessage,
 } from '@/lib/api'
+import type { PromptInjectionLevel } from '@/lib/api'
+import type { RateLimitsUpdateRequest } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
@@ -68,6 +77,9 @@ import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/Tool
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
+import { settingsRow } from './settingsSections'
+import { useReturnFocus } from './useReturnFocus'
+import { SectionLoading } from './SectionLoading'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -180,14 +192,31 @@ function GlobalToolPoliciesSection() {
 // Exported (not just used locally) so AutoApproveControl.stories.tsx can
 // mount this one card in isolation for a visual check, without seeding
 // every query the rest of SecuritySection needs.
-export function AutoApproveControl() {
-  const { addToast } = useUiStore()
-  const stepUp = useStepUp()
-  const queryClient = useQueryClient()
+/** Config key of the Defense level (pending-restart names it this way). */
+const PROMPT_GUARD_KEY = 'sandbox.prompt_injection_level'
 
-  const { data: sandboxConfig, isLoading, isError } = useQuery({
+export interface AutoApproveDraft { // not-wire-format: React props from Protection's Save bar
+  /** The value shown: the draft, or the saved value. */
+  value: boolean
+  onChange: (next: boolean) => void
+  /** The Save bar's line for this value (an error or "Saved, but not in use yet"). */
+  message?: FieldMessage
+  /** data-settings-field id, used to move focus to it. */
+  fieldId: string
+}
+
+/**
+ * Auto-approve is a draft on Protection's Save bar (Settings redesign #1519
+ * FR-010, FR-025): nothing is sent until Save changes, which asks for the
+ * password once for the whole Save.
+ */
+export function AutoApproveControl({ draft }: { draft: AutoApproveDraft }) {
+  const { isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
+    // The section already sent this read; a failed one is read again only
+    // by Retry, not each time this card mounts.
+    retryOnMount: false,
   })
   const { data: sandboxStatus } = useQuery({
     queryKey: ['sandbox-status'],
@@ -195,50 +224,6 @@ export function AutoApproveControl() {
   })
   const kernelSandboxEnforcing = sandboxStatus?.kernel_sandbox_active === true
   const noSandboxCaution = sandboxStatus !== undefined && !kernelSandboxEnforcing
-
-  const { mutateAsync: saveAsync, isPending: isSaving } = useMutation({
-    mutationFn: (vars: { next: boolean; token?: string }) =>
-      updateSandboxConfig({ auto_approve: vars.next }, vars.token),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-      queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
-    },
-    onError: (err: unknown) => {
-      addToast({ message: getErrorMessage(err, 'Could not change Auto-approve'), variant: 'error' })
-    },
-  })
-
-  // Founder feedback (2026-09-24): the old copy put the full grouped
-  // ask-list, the workspace path rule, an example and the Windows caveat
-  // into one long paragraph here too — "a huge blob of text". The
-  // confirmation stays short (at most 2-3 plain sentences) and points at
-  // the SAME collapsed "Always asks when set to Ask" list the card itself
-  // shows, rather than restating all 28 tools inline. `ConfirmDialog`'s
-  // `description` renders inside an `AlertDialogDescription`, which Radix
-  // renders as a `<p>` — a list/disclosure element cannot legally nest
-  // inside a `<p>`, which is why this is a pointer to the list, not the
-  // list itself.
-  //
-  // Founder decision (2026-09-24, UAT defect D-02): the pointer sentence
-  // used to say these tools "always still ask" — false for a tool on
-  // Allow, which several of these are by default. Reworded to name the
-  // actual condition: they never skip the prompt once set to Ask.
-  function requestChange(next: boolean) {
-    if (isSaving) return
-    void stepUp
-      .gate((token) => saveAsync({ next, token }), {
-        title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
-        body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — reading, listing and searching run anywhere except Omnipus’s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
-          : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
-        confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
-      })
-      .catch((err: unknown) => {
-        // A cancelled gate sent nothing — stay silent. A real failure already
-        // toasted once via saveAsync's own onError; do not toast twice.
-        if (isReAuthCancelled(err)) return
-      })
-  }
 
   if (isLoading) {
     return (
@@ -251,15 +236,15 @@ export function AutoApproveControl() {
 
   if (isError) {
     return (
-      <Card className="p-[var(--space-3)]">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-          Failed to load the Auto-approve setting. Please try again.
-        </p>
-      </Card>
+      <ReadErrorCallout
+        title="The Approvals settings could not be loaded"
+        error={error}
+        onRetry={() => void refetch()}
+        retrying={isFetching}
+        data-testid="auto-approve-load-error"
+      />
     )
   }
-
-  const enabled = sandboxConfig?.auto_approve === true
 
   // #920 founder decision D3 (2026-09-27): the summary no longer says tools
   // "stay inside your workspace" — under Auto, read_file, list_directory and
@@ -271,24 +256,39 @@ export function AutoApproveControl() {
   // long paragraph carrying the summary, the full 28-tool list, the
   // workspace path rule, an example, and the Windows caveat all at once.
   return (
-    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]" {...settingsRow('Auto-approve')}>
       <div className="flex items-center justify-between gap-[var(--space-3)]">
         <div>
-          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
+          <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+            Auto-approve
+            <PasswordBadge />
+          </p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: reading, listing and
             searching run anywhere except Omnipus&rsquo;s protected files, and writing runs without a prompt
-            only inside your workspace and the folders mounted into it.
+            only inside your workspace and the folders mounted into it. Each chat can still turn it off
+            with its Auto button.
           </p>
         </div>
         <Switch
-          checked={enabled}
-          disabled={isSaving}
-          onCheckedChange={requestChange}
+          checked={draft.value}
+          onCheckedChange={draft.onChange}
           aria-label="Auto-approve"
           data-testid="auto-approve-global-switch"
+          data-settings-field={draft.fieldId}
         />
       </div>
+      {draft.message && (
+        <p
+          role={draft.message.tone === 'error' ? 'alert' : undefined}
+          className={cn(
+            'text-[length:var(--type-body-compact-size)]',
+            draft.message.tone === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]',
+          )}
+        >
+          {draft.message.text}
+        </p>
+      )}
 
       <AutoApproveAskList />
 
@@ -301,12 +301,6 @@ export function AutoApproveControl() {
         Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and
         commands an operator rule allows.
       </p>
-
-      {/* This control's OWN useStepUp() instance — its dialogs must be
-          mounted here, not assumed to come from SecuritySection's separate
-          credential-vault stepUp instance (each useStepUp() call owns
-          independent open/close state). */}
-      {stepUp.dialogs}
     </Card>
   )
 }
@@ -314,21 +308,54 @@ export function AutoApproveControl() {
 // ── SecuritySection ────────────────────────────────────────────────────────────
 
 /** #1882: DOM id of the rate-limit save-status live region. */
-const RATE_LIMITS_SAVE_STATUS_ID = 'security-rate-limits-save-status'
 
-export function SecuritySection() {
+/**
+ * Settings redesign #1519 splits this section in two: `protection` (health,
+ * Approvals with Auto-approve and God Mode, prompt injection defense, rate
+ * limits, audit log, and the notice that tool and skill permissions moved to
+ * Skills & Tools — FR-051, FR-060) and `keys` (the stored keys and the master
+ * key — Keys & secrets). Without `view` the old combined layout renders.
+ */
+export interface SecuritySectionProps { // not-wire-format: React props
+  view?: 'protection' | 'keys'
+  /** Protection: the God Mode control, placed after Approvals (FR-051). */
+  godMode?: React.ReactNode
+}
+
+/**
+ * FR-015/019: a rate-limit Save sends only the limits the person changed, so
+ * a value another tab saved meanwhile is not overwritten with this tab's old
+ * copy. The endpoint is a partial update.
+ */
+function changedRateLimits(body: Record<string, unknown>): RateLimitsUpdateRequest {
+  const update: RateLimitsUpdateRequest = {}
+  if ('max_agent_llm_calls_per_hour' in body) update.max_agent_llm_calls_per_hour = Number(body.max_agent_llm_calls_per_hour) || 0
+  if ('max_agent_tool_calls_per_minute' in body) update.max_agent_tool_calls_per_minute = Number(body.max_agent_tool_calls_per_minute) || 0
+  return update
+}
+
+export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
+  // FR-069: focus returns to the control that opened the dialog.
+  const rotateFocus = useReturnFocus()
+  const credFocus = useReturnFocus()
+  const showProtection = view !== 'keys'
+  const showKeys = view !== 'protection'
+  const legacy = view === undefined
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  // The config read still decides the section's loading and error states; the
-  // per-agent limits come from their own route below (#1882).
-  const { isLoading, isError: configError } = useQuery({
-    queryKey: ['config'],
-    queryFn: fetchConfig,
-  })
-
-  const { data: credentials = [], isError: credentialsError } = useQuery({
+  // N-2 (FR-066): no view here uses GET /config, so it gates nothing. Each
+  // view waits for the reads it shows; the per-agent limits come from their
+  // own route below (#1882).
+  const {
+    data: credentials = [],
+    isError: credentialsError,
+    isLoading: credentialsLoading,
+    error: credentialsReadError,
+    refetch: refetchCredentials,
+    isFetching: credentialsFetching,
+  } = useQuery({
     queryKey: ['credentials'],
     queryFn: fetchCredentials,
     retry: false,
@@ -336,30 +363,129 @@ export function SecuritySection() {
 
   // #1882: the per-agent limits live behind their own route. PUT /config
   // refuses `security.*` by design, so they are read and saved there only.
-  const { data: rateLimits, isError: rateLimitsError } = useQuery({
+  const {
+    data: rateLimits,
+    isError: rateLimitsError,
+    isLoading: rateLimitsLoading,
+    error: rateLimitsReadError,
+    refetch: refetchRateLimits,
+    isFetching: rateLimitsFetching,
+  } = useQuery({
     queryKey: ['security', 'rate-limits'],
     queryFn: fetchRateLimits,
     retry: false,
   })
 
-  const isDirtyRef = useRef(false)
-  const markDirty = () => { isDirtyRef.current = true }
+  // Auto-approve is a draft on the same Save bar (FR-010, FR-025): Save sends
+  // it with PUT /security/sandbox-config after the Save's one password prompt.
+  const { data: sandboxConfig, isLoading: sandboxConfigLoading, errorUpdateCount: sandboxConfigFailures } = useQuery({
+    queryKey: ['sandbox-config'],
+    queryFn: fetchSandboxConfig,
+    // Read here only on Protection; elsewhere the control's own read fills
+    // the same cache entry, so no extra request is sent.
+    enabled: view === 'protection',
+  })
+  // Defense level is a draft on the same Save bar too (FR-010): Save sends it
+  // with PUT /security/prompt-guard, which needs no password.
+  const { data: promptGuard } = useQuery({
+    queryKey: ['prompt-guard-k'],
+    queryFn: fetchPromptGuardLevel,
+    // Read here only on Protection; elsewhere the control's own read fills
+    // the same cache entry, so no extra request is sent.
+    enabled: view === 'protection',
+  })
 
-  // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
-  // #1882 (chief ruling Q1 A): the exec timeout and background timeout fields
-  // are not offered until a server reads them (issue #1900).
-  const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
-  const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
-  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
-  // `!rateLimits` check useAutoSave's `disabled` option would key off of.
-  // `rateLimits` turns truthy in the SAME commit the hydration effect below is
-  // SCHEDULED, but the effect's own setState calls don't land until the
-  // NEXT commit — so `disabled: !config` flipped false one render too
-  // early, letting useAutoSave capture the hardcoded useState defaults as
-  // its baseline instead of the real persisted values. `securityHydrated`
-  // is set at the END of the hydration effect, so it flips true in the
-  // same commit the real values land.
-  const [securityHydrated, setSecurityHydrated] = useState(false)
+  // Rate limits wait for Save changes (FR-010, #346: no auto-save in Settings).
+  // An empty field means "Unlimited", which the route spells as 0.
+  const rateLimitFields = useMemo<SaveBarField[]>(() => {
+    const validate = (v: SaveBarValue) => {
+      if (v === '' || v === null) return null
+      const n = Number(v)
+      return Number.isInteger(n) && n >= 0 ? null : 'Enter a whole number, or leave it empty for no limit.'
+    }
+    return [
+      {
+        key: 'auto_approve',
+        configKey: 'sandbox.auto_approve',
+        label: 'Auto-approve',
+        value: sandboxConfig?.auto_approve === true,
+        kind: 'switch',
+        password: true,
+        target: 'sandbox-config',
+        disabled: !sandboxConfig,
+      },
+      {
+        key: PROMPT_GUARD_KEY,
+        label: 'Defense level',
+        value: promptGuard?.level ?? null,
+        kind: 'select',
+        options: ['low', 'medium', 'high'],
+        target: 'prompt-guard',
+        disabled: !promptGuard,
+      },
+      {
+        key: 'max_agent_llm_calls_per_hour',
+        configKey: 'sandbox.rate_limits.max_agent_llm_calls_per_hour',
+        label: 'Model calls per hour',
+        value: rateLimits?.max_agent_llm_calls_per_hour || '',
+        kind: 'number',
+        description: 'Default limit for each agent. Empty means no limit.',
+        validate,
+        disabled: !rateLimits,
+      },
+      {
+        key: 'max_agent_tool_calls_per_minute',
+        configKey: 'sandbox.rate_limits.max_agent_tool_calls_per_minute',
+        label: 'Tool calls per minute',
+        value: rateLimits?.max_agent_tool_calls_per_minute || '',
+        kind: 'number',
+        description: 'Default limit for each agent. Empty means no limit.',
+        validate,
+        disabled: !rateLimits,
+      },
+    ]
+  }, [rateLimits, sandboxConfig, promptGuard])
+  const rateLimitState = useSaveBar({
+    section: 'protection',
+    fields: rateLimitFields,
+    onSave: (body, ctx) =>
+      ctx.target === 'sandbox-config'
+        ? toWriteResponse(() => updateSandboxConfig({ auto_approve: body.auto_approve === true }, ctx.reauthToken))
+        : ctx.target === 'prompt-guard'
+        ? toWriteResponse(() => updatePromptGuardLevel(body[PROMPT_GUARD_KEY] as PromptInjectionLevel))
+        : toWriteResponse(() => updateRateLimits(changedRateLimits(body))),
+    readBack: async (key) => {
+      if (key === 'auto_approve') return (await fetchSandboxConfig()).auto_approve === true
+      if (key === PROMPT_GUARD_KEY) return (await fetchPromptGuardLevel()).level
+      const fresh = await fetchRateLimits()
+      return (fresh as unknown as Record<string, unknown>)[key]
+    },
+    onSaved: (keys) => {
+      if (keys.includes('auto_approve')) {
+        void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+        void queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
+      }
+      if (keys.includes(PROMPT_GUARD_KEY)) void queryClient.invalidateQueries({ queryKey: ['prompt-guard-k'] })
+      void queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
+    },
+  })
+  const autoApproveField = rateLimitFields[0]
+  const promptGuardField = rateLimitFields[1]
+  // FR-010: wherever these controls show, they are drafts on this Save bar.
+  const autoApproveDraft: AutoApproveDraft = {
+    value: rateLimitState.value('auto_approve') === true,
+    onChange: (next) => rateLimitState.setDraft('auto_approve', next),
+    message: rateLimitState.message('auto_approve'),
+    fieldId: fieldDomId('protection', 'auto_approve'),
+  }
+  const promptGuardDraft: PromptGuardDraft = {
+    // Null only before the level is read; the control then shows its own
+    // loading or error state instead of the choices.
+    value: rateLimitState.value(PROMPT_GUARD_KEY) as PromptInjectionLevel,
+    onChange: (next) => rateLimitState.setDraft(PROMPT_GUARD_KEY, next),
+    message: rateLimitState.message(PROMPT_GUARD_KEY),
+    fieldId: fieldDomId('protection', PROMPT_GUARD_KEY),
+  }
 
   // Audit log dialog state
   const [auditLogOpen, setAuditLogOpen] = useState(false)
@@ -375,33 +501,6 @@ export function SecuritySection() {
   // platform mode). Deleting and re-keying the vault are among the
   // highest-blast-radius operations in the product; "the vault is one
   // control" is a UI grouping, not a licence to gate once (spec FR-OB-040).
-
-  useEffect(() => {
-    if (!rateLimits) return
-    if (isDirtyRef.current) return
-    setAgentLlmCallsPerHour(rateLimits.max_agent_llm_calls_per_hour.toString())
-    setAgentToolCallsPerMin(rateLimits.max_agent_tool_calls_per_minute.toString())
-    setSecurityHydrated(true)
-  }, [rateLimits])
-
-  const securityFormData = useMemo(() => ({
-    agent_llm_calls_per_hour: agentLlmCallsPerHour,
-    agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [agentLlmCallsPerHour, agentToolCallsPerMin])
-
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    securityFormData,
-    async () => {
-      // An empty field means "Unlimited", which the route spells as 0.
-      await updateRateLimits({
-        max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : 0,
-        max_agent_tool_calls_per_minute: agentToolCallsPerMin ? parseInt(agentToolCallsPerMin, 10) : 0,
-      })
-      isDirtyRef.current = false
-      queryClient.invalidateQueries({ queryKey: ['security', 'rate-limits'] })
-    },
-    { disabled: !securityHydrated },
-  )
 
   const { mutateAsync: doAddCred, isPending: isAddingCred } = useMutation({
     mutationFn: (vars: { token?: string }) => addCredential(credKey.trim(), credValue, vars.token),
@@ -459,19 +558,11 @@ export function SecuritySection() {
       })
   }
 
+  // B7 / FR-056 (S-Q11 B): deleting a stored key asks one confirm, not the
+  // password — the server no longer requires a consent token for it.
+  const [deleteKey, setDeleteKey] = useState<string | null>(null)
   function requestDeleteCredential(key: string) {
-    void stepUp
-      .gate(
-        (token) => doDeleteCred({ key, token }),
-        {
-          title: 'Remove this credential?',
-          body: `${key} is permanently removed from the vault. Anything using it stops working until you store it again.`,
-          confirmLabel: 'Remove credential',
-        },
-      )
-      .catch((err: unknown) => {
-        if (isReAuthCancelled(err)) return
-      })
+    setDeleteKey(key)
   }
 
   function requestRotate() {
@@ -489,36 +580,79 @@ export function SecuritySection() {
       })
   }
 
-  if (isLoading) {
-    return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
-  }
-
-  if (configError) {
-    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load security settings. Please try again.</p>
+  // FR-065: each view shows its section's loading frame until its reads answer.
+  const sectionLabel = view === 'keys' ? 'Keys & secrets' : 'Protection'
+  // The Approvals read joins the frame only on its first load: after it
+  // failed, its Retry shows in the Approvals group and the rest stays put.
+  const approvalsFirstLoad = sandboxConfigLoading && sandboxConfigFailures === 0
+  if (view === 'keys' ? credentialsLoading : rateLimitsLoading || approvalsFirstLoad) {
+    return <SectionLoading label={sectionLabel} />
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
 
+  const rateLimitsCard = (
+  <Card className="px-[var(--space-3)]">
+    {rateLimitsError && (
+      <div className="pt-[var(--space-2)]">
+      <ReadErrorCallout
+        title="The current limits could not be loaded"
+        action="Press Retry, or reload the page if it keeps failing."
+        error={rateLimitsReadError}
+        onRetry={() => void refetchRateLimits()}
+        retrying={rateLimitsFetching}
+        data-testid="rate-limits-load-error"
+      />
+      </div>
+    )}
+    {rateLimitFields.filter((f) => f !== autoApproveField && f !== promptGuardField).map((f) => (
+      <SettingRow key={f.key} state={rateLimitState} field={f} />
+    ))}
+    {view !== 'protection' && <SaveBarPanel {...rateLimitState.bar} />}
+  </Card>
+  )
+
+  const auditBlock = (
+  <section {...settingsRow('Audit log')}>
+    <div className="flex items-center justify-between mb-[var(--space-2-5)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+        Audit Log
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
+        onClick={() => setAuditLogOpen(true)}
+      >
+        View Log
+      </Button>
+    </div>
+    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+      Security events, policy decisions, and tool executions.
+    </p>
+  </section>
+  )
+
   return (
     <div className="space-y-[var(--space-4)]">
-      <div className="flex items-center justify-between">
+      {legacy && (
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Security & Policy</h2>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
-        {/* #1882: the rate-limit inputs name this live region with
-            aria-describedby, so their save status has a stable identity. */}
-        <AutoSaveIndicator id={RATE_LIMITS_SAVE_STATUS_ID} status={saveStatus} error={saveError} />
-      </div>
+      )}
 
       {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
 
+      {showProtection && (
+      <>
       {/* Security Health — score always visible at top */}
       <section
         className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]"
         aria-label="Security health"
+        {...settingsRow('Security health')}
         data-testid="security-health-header"
       >
         <DiagnosticsSection />
@@ -532,12 +666,21 @@ export function SecuritySection() {
 
         {/* 1. Auto-approve (ADR-092) — primary-layer tool-access control:
             whether a tool resolved to "ask" still prompts. */}
-        <AutoApproveControl />
+        <AutoApproveControl draft={autoApproveDraft} />
 
-        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level */}
-        <SkillTrustSection />
+        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level. In the
+            redesign it moved to Skills & Tools (FR-060). */}
+        {legacy && <SkillTrustSection />}
+
+        {/* God Mode sits after Approvals in Protection (FR-051). */}
+        {view === 'protection' && godMode}
       </section>
 
+      </>
+      )}
+
+      {legacy && (
+      <>
       {/* ── ADVANCED LAYER (US-B1): all jargon behind one collapsed section ── */}
       <AdvancedDisclosure
         title="Advanced / technical details"
@@ -571,7 +714,7 @@ export function SecuritySection() {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Prompt Injection Defense
             </p>
-            <PromptGuardSection />
+            <PromptGuardSection draft={promptGuardDraft} />
           </section>
 
           <Separator />
@@ -603,74 +746,45 @@ export function SecuritySection() {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Per-Agent Rate Limits
             </p>
-            <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
-              {rateLimitsError && (
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">
-                  The current limits could not be loaded, so changes here are not saved. Reload the page to try again.
-                </p>
-              )}
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="agent-llm-calls-per-hour">LLM calls / hour</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
-                </div>
-                <Input
-                  id="agent-llm-calls-per-hour"
-                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
-                  type="number"
-                  min="0"
-                  value={agentLlmCallsPerHour}
-                  onChange={(e) => { markDirty(); setAgentLlmCallsPerHour(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="Unlimited"
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="agent-tool-calls-per-minute">Tool calls / minute</Label>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
-                </div>
-                <Input
-                  id="agent-tool-calls-per-minute"
-                  aria-describedby={RATE_LIMITS_SAVE_STATUS_ID}
-                  type="number"
-                  min="0"
-                  value={agentToolCallsPerMin}
-                  onChange={(e) => { markDirty(); setAgentToolCallsPerMin(e.target.value) }}
-                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
-                  placeholder="Unlimited"
-                />
-              </div>
-            </Card>
+            {rateLimitsCard}
           </section>
 
           <Separator />
 
-          {/* Audit Log */}
-          <section>
-            <div className="flex items-center justify-between mb-[var(--space-2-5)]">
-              <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
-                Audit Log
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
-                onClick={() => setAuditLogOpen(true)}
-              >
-                View Log
-              </Button>
-            </div>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-              Security events, policy decisions, and tool executions.
-            </p>
-          </section>
+          {auditBlock}
 
         </div>
       </AdvancedDisclosure>
+      </>
+      )}
 
+      {view === 'protection' && (
+        <>
+          <section aria-label="Prompt injection defense" className="space-y-[var(--space-2)]" {...settingsRow('Prompt injection defense')}>
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Prompt injection defense</h3>
+            <PromptGuardSection draft={promptGuardDraft} />
+          </section>
+          <section aria-label="Rate limits per agent" className="space-y-[var(--space-2)]" {...settingsRow('Rate limits')}>
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Rate limits per agent</h3>
+            {rateLimitsCard}
+          </section>
+          {auditBlock}
+          <Callout variant="info" data-testid="protection-moved-permissions">
+            <CalloutTitle>Tool permissions and skill trust are temporarily unavailable</CalloutTitle>
+            <CalloutDescription>
+              Allow, Ask or Deny for each tool, and whether unverified skills may load, are temporarily unavailable until the Skills &amp; Tools update lands.
+              An agent can still be stricter on its own profile.
+            </CalloutDescription>
+          </Callout>
+          {/* One Save bar for the section: Auto-approve, Defense level and the rate limits. */}
+          <SaveBarPanel {...rateLimitState.bar} />
+        </>
+      )}
+
+      {showKeys && (
+      <>
       {/* ── Credential Vault (US-B4) — always visible with reassurance line ─── */}
-      <section>
+      <section {...settingsRow('Stored keys')}>
         <div className="flex items-center justify-between mb-[var(--space-2-5)]">
           <div>
             <div className="flex items-center gap-[var(--space-2)]">
@@ -688,6 +802,7 @@ export function SecuritySection() {
               className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
               onClick={() => setRotateModalOpen(true)}
               data-testid="rotate-master-key"
+              {...settingsRow('Master key')}
             >
               <Key size={11} weight="bold" />
               Rotate master key
@@ -706,7 +821,16 @@ export function SecuritySection() {
 
         <Card className="divide-y divide-[var(--color-border)]">
           {credentialsError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load credentials. Please try again.</div>
+            <div className="p-[var(--space-3)]">
+              <ReadErrorCallout
+                title="The saved keys could not be loaded"
+                error={credentialsReadError}
+                onRetry={() => void refetchCredentials()}
+                retrying={credentialsFetching}
+                blocksSaving={false}
+                data-testid="credentials-load-error"
+              />
+            </div>
           )}
           {!credentialsError && credentials.length === 0 && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] flex items-center gap-[var(--space-2)]">
@@ -735,11 +859,32 @@ export function SecuritySection() {
         </Card>
       </section>
 
+      </>
+      )}
+
+      <ConfirmDialog
+        open={deleteKey !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteKey(null)
+        }}
+        title="Delete this key?"
+        description={`${deleteKey ?? ''}: agents and connectors that use it stop working until you add it again. This cannot be undone.`}
+        confirmLabel="Delete key"
+        destructive
+        onConfirm={() => {
+          const key = deleteKey
+          setDeleteKey(null)
+          // The mutation's onError already shows the failure as a toast;
+          // this catch only stops an unhandled rejection.
+          if (key) void doDeleteCred({ key }).catch(() => undefined)
+        }}
+      />
+
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
 
       {/* Rotate master key modal (G5) */}
       <Dialog open={rotateModalOpen} onOpenChange={setRotateModalOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onOpenAutoFocus={rotateFocus.onOpenAutoFocus} onCloseAutoFocus={rotateFocus.onCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Rotate master key</DialogTitle>
           </DialogHeader>
@@ -778,7 +923,7 @@ export function SecuritySection() {
 
       {/* Add credential modal */}
       <Dialog open={credModalOpen} onOpenChange={setCredModalOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" onOpenAutoFocus={credFocus.onOpenAutoFocus} onCloseAutoFocus={credFocus.onCloseAutoFocus}>
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Add Credential</DialogTitle>
           </DialogHeader>

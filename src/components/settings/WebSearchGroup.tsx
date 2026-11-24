@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card'
 import { Command, CommandList, CommandItem } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { IntegrationProvider } from '@/lib/api'
+import { usePrimaryVariant } from './SaveBar'
 
 // WebSearchGroup — #1055's card + Change design for Settings → Integrations,
 // replacing ADR-096's one-row-per-provider radios (#1055 Approved design;
@@ -208,6 +209,7 @@ function SearchRoleCard({
   onSelect,
   onFix,
 }: SearchRoleCardProps) {
+  const primaryVariant = usePrimaryVariant()
   const [sectionOpen, setSectionOpen] = useState(false)
   const [popoverOpen, setPopoverOpen] = useState(false)
 
@@ -272,7 +274,7 @@ function SearchRoleCard({
 
         <div className="flex items-center gap-[var(--space-2)] shrink-0">
           {current && unusable && (
-            <Button size="sm" onClick={() => onFix(current.id)} disabled={saving}>
+            <Button variant={primaryVariant} size="sm" onClick={() => onFix(current.id)} disabled={saving}>
               Fix
             </Button>
           )}

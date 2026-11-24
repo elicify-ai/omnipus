@@ -1,0 +1,29 @@
+title: RetentionSettings
+description: >
+  How long chat history and memory are kept (Settings → Data & retention), as
+  stored. Day counts are returned as stored, even outside the ranges that
+  RetentionSettingsUpdate enforces, so the screen can show and repair them.
+  0 or a negative stored value means "use the default" (the existing
+  config_retention.go accessors) and is returned as the effective default.
+type: object
+additionalProperties: false
+required:
+  - session_days
+  - memory_retros_days
+  - memory_retros_forever
+  - keep_everything_forever
+properties:
+  session_days:
+    type: integer
+    description: Days chat transcripts are kept. Default 90. storage.retention.session_days.
+  memory_retros_days:
+    type: integer
+    description: Days the agents' retrospectives (reflections on past chats) are kept. Default 180. storage.retention.memory_retros_days.
+  memory_retros_forever:
+    type: boolean
+    description: Keep memory forever; the nightly sweep deletes no retrospective. Default false. storage.retention.memory_retros_forever (new key).
+  keep_everything_forever:
+    type: boolean
+    description: >
+      True when config.json sets storage.retention.disabled, an older,
+      config-file-only switch that stops BOTH sweeps.

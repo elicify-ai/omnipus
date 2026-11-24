@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useState, useEffect, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ShieldCheck,
   ShieldWarning,
@@ -14,14 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   fetchSandboxStatus,
   fetchSandboxConfig,
@@ -29,12 +22,15 @@ import {
   getErrorMessage,
 } from '@/lib/api'
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
-import { useUiStore } from '@/store/ui'
-import { SaveStatus, useSaveStatus } from './SaveStatus'
-import { isReAuthCancelled } from './useReAuthGate'
-import { useStepUp } from './useStepUp'
+import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callout'
+import { PasswordBadge, RestartBadge } from './SaveBar'
+import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
+import type { FormSavePart } from './useFormSaveBar'
+import { useSectionSavePart } from './SectionSaveScope'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
+import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -64,6 +60,13 @@ function isValidSsrfEntry(entry: string): boolean {
 
 function isWildcardEntry(entry: string): boolean {
   return entry === '0.0.0.0/0' || entry === '::/0'
+}
+
+const EMPTY_LIST: string[] = []
+
+/** Same entries in the same order (a removed or added row is a change). */
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
 }
 
 function listsMatch(a: string[], b: readonly string[]): boolean {
@@ -286,37 +289,12 @@ function Abi4Banner({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function SandboxSection(): React.ReactElement {
-  const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const stepUp = useStepUp()
 
-  // Sandbox configuration is one of the six ADR-0008 controls the step-up gate
-  // (ADR-0010 WP3) covers — ReAuthDialog + a replayed consent token in local
-  // mode, ConfirmDialog with no token in platform mode. Every PUT to
-  // /api/v1/security/sandbox-config goes through it.
-  //
-  // The gate is staged BEFORE the mutation fires (not after a 403), so
-  // "cancel" means the request was never sent. Each staged save carries its own
-  // `cancel`, because most of these controls apply optimistically and a
-  // cancelled save must put the UI back where it was.
-  function askSandboxConfirm(next: {
-    title: string
-    body: string
-    confirmLabel: string
-    run: (token?: string) => Promise<unknown>
-    cancel: () => void
-  }) {
-    void stepUp
-      .gate(next.run, { title: next.title, body: next.body, confirmLabel: next.confirmLabel })
-      .catch((err: unknown) => {
-        if (isReAuthCancelled(err)) {
-          next.cancel()
-          return
-        }
-        // A real save failure already surfaced its toast via the mutation's
-        // own onError above.
-      })
-  }
+  // Settings redesign #1519 (FR-010, FR-019, FR-025 to FR-027): every value
+  // here is a draft on the section's Save bar. Save sends the changed values
+  // in ONE PUT /security/sandbox-config after ONE password prompt that lists
+  // each changed setting by name. Nothing is sent while the person edits.
 
   // ── Status query ───────────────────────────────────────────────────────────
   const [statusExpanded, setStatusExpanded] = useState(false)
@@ -333,7 +311,13 @@ export function SandboxSection(): React.ReactElement {
   })
 
   // ── Config query ──────────────────────────────────────────────────────────
-  const { data: configData, isLoading: configLoading } = useQuery({
+  const {
+    data: configData,
+    isLoading: configLoading,
+    isError: configIsError,
+    error: configError,
+    refetch: configRefetch,
+  } = useQuery({
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
   })
@@ -354,6 +338,8 @@ export function SandboxSection(): React.ReactElement {
   const savedWorkspaceLimit = serverWorkspaceLimit?.value
   const workspaceLimitSupported = serverWorkspaceLimit !== undefined
   const workspaceLimitEnvLocked = serverWorkspaceLimit?.envOverride === true
+  const savedPaths = configData?.allowed_paths ?? EMPTY_LIST
+  const savedSsrf = configData?.ssrf?.allow_internal ?? EMPTY_LIST
 
   const restartPending = !!(
     configData &&
@@ -393,25 +379,21 @@ export function SandboxSection(): React.ReactElement {
   const [ssrfAdvancedErrors, setSsrfAdvancedErrors] = useState<Record<number, string>>({})
   const [newSsrfEntry, setNewSsrfEntry] = useState('')
   const [ssrfAddError, setSsrfAddError] = useState<string | null>(null)
+  // A refusal of the whole write that names no single row.
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // ── Modal state ───────────────────────────────────────────────────────────
+  // Both confirms run when the value is picked (wireframe: "asks you to
+  // confirm first"); Confirm makes it a draft, Cancel leaves the draft as it was.
   const [showWildcardModal, setShowWildcardModal] = useState(false)
   const [showEnforceModal, setShowEnforceModal] = useState(false)
-  const pendingSaveRef = useRef<(() => void) | null>(null)
+  const pendingDraftRef = useRef<(() => void) | null>(null)
 
-  // ── Save status ────────────────────────────────────────────────────────────
-  const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
-
-  // ── Sync from config query ─────────────────────────────────────────────────
-  useEffect(() => {
-    if (!configData) return
-    const paths = configData.allowed_paths ?? []
-    setPathList(paths)
-    setPathRestartedRows(new Set())
-
-    const allowInternal = configData.ssrf?.allow_internal ?? []
+  // ── Sync drafts from the saved configuration ──────────────────────────────
+  const syncFromServer = useCallback((data: SandboxConfigResponse) => {
+    setPathList(data.allowed_paths ?? [])
+    const allowInternal = data.ssrf?.allow_internal ?? []
     setSsrfList(allowInternal)
-
     const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(allowInternal, p.list))
     if (matchedPreset >= 0) {
       setSsrfActivePreset(matchedPreset)
@@ -420,164 +402,229 @@ export function SandboxSection(): React.ReactElement {
       setSsrfActivePreset(null)
       setSsrfAdvancedOpen(true)
     }
+    setCurrentMode(data.mode as 'enforce' | 'permissive' | 'off' | undefined)
+    setCurrentFsModel(data.filesystem_model as 'confined' | 'open' | undefined)
+    setCurrentWorkspaceLimit(readWorkspaceLimit(data)?.value)
+  }, [])
 
-    // Sync mode
-    setCurrentMode(configData.mode as 'enforce' | 'permissive' | 'off' | undefined)
-    setCurrentFsModel(configData.filesystem_model as 'confined' | 'open' | undefined)
-    setCurrentWorkspaceLimit(readWorkspaceLimit(configData)?.value)
-  }, [configData])
+  // After a "changed somewhere else" check the read becomes the saved
+  // configuration, but the sent drafts stay drafts (FR-012, FR-020).
+  const syncOverrideRef = useRef<SandboxConfigResponse | null>(null)
+  // What the last Save sent (set by the part's write below).
+  const sentRef = useRef<SandboxUpdateBody | null>(null)
+  // The page's drafts as of the last render, read when the saved
+  // configuration changes (FR-010, FR-011, F03).
+  const draftsRef = useRef<{
+    mode?: { changed: boolean; value: string | undefined }
+    fs?: { changed: boolean; value: string | undefined }
+    ws?: { changed: boolean; value: boolean | undefined }
+    paths?: { changed: boolean; value: string[] }
+    ssrf?: { changed: boolean; value: string[] }
+  }>({})
+  useEffect(() => {
+    if (!configData) return
+    const incoming = syncOverrideRef.current ?? configData
+    syncOverrideRef.current = null
+    // A new saved configuration replaces a field only when the field holds
+    // no newer draft: a draft typed after the Save went out (not sent, or
+    // different from what was sent) stays a draft (FR-010, FR-011, F03).
+    const sent = sentRef.current ?? {}
+    const d = draftsRef.current
+    const newer = <T,>(draft: { changed: boolean; value: T } | undefined, sentValue: T | undefined, same: (a: T, b: T) => boolean) =>
+      !!draft && draft.changed && (sentValue === undefined || !same(draft.value, sentValue))
+    const eq = <T,>(a: T, b: T) => a === b
+    const eqList = (a: string[], b: string[]) => sameList(a, b)
+    let merged: SandboxConfigResponse = incoming
+    if (newer(d.mode, sent.mode, eq)) merged = { ...merged, mode: d.mode!.value } as SandboxConfigResponse
+    if (newer(d.fs, sent.filesystem_model, eq)) merged = { ...merged, filesystem_model: d.fs!.value } as SandboxConfigResponse
+    const wsKey = readWorkspaceLimit(incoming)?.key
+    if (wsKey && newer(d.ws, sent[wsKey], eq)) merged = { ...merged, [wsKey]: d.ws!.value } as SandboxConfigResponse
+    if (newer(d.paths, sent.allowed_paths, eqList)) merged = { ...merged, allowed_paths: d.paths!.value }
+    if (newer(d.ssrf, sent.ssrf?.allow_internal, eqList)) {
+      merged = { ...merged, ssrf: { ...merged.ssrf, allow_internal: d.ssrf!.value } } as SandboxConfigResponse
+    }
+    syncFromServer(merged)
+    setPathRestartedRows(new Set())
+  }, [configData, syncFromServer])
 
-  // ── Mode save mutation ────────────────────────────────────────────────────
-  const { mutateAsync: doSaveMode } = useMutation({
-    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
-      updateSandboxConfig(vars.body, vars.token),
-    onMutate: () => setSaveState('saving'),
-    onSuccess: (saved) => {
-      setSaveState('saved')
-      queryClient.setQueryData(['sandbox-config'], saved)
-      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-    },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      addToast({ message: msg, variant: 'error' })
-      // Revert to server mode
-      setCurrentMode(savedMode)
-    },
+  // ── Drafts ────────────────────────────────────────────────────────────────
+  const modeChanged = currentMode !== undefined && currentMode !== savedMode
+  const fsChanged = currentFsModel !== undefined && currentFsModel !== savedFsModel
+  const wsChanged =
+    workspaceLimitSupported && !workspaceLimitEnvLocked && currentWorkspaceLimit !== undefined && currentWorkspaceLimit !== savedWorkspaceLimit
+  const pathsChanged = !sameList(pathList, savedPaths)
+  const ssrfChanged = !sameList(ssrfList, savedSsrf)
+  // Declared after the sync effect on purpose: effects run in order, so the
+  // sync reads the drafts measured against the saved configuration they
+  // were typed over, not against the incoming one.
+  useEffect(() => {
+    draftsRef.current = {
+      mode: { changed: modeChanged, value: currentMode },
+      fs: { changed: fsChanged, value: currentFsModel },
+      ws: { changed: wsChanged, value: currentWorkspaceLimit },
+      paths: { changed: pathsChanged, value: pathList },
+      ssrf: { changed: ssrfChanged, value: ssrfList },
+    }
   })
 
-  // ── Filesystem-model save mutation ────────────────────────────────────────
-  const { mutateAsync: doSaveFsModel } = useMutation({
-    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
-      updateSandboxConfig(vars.body, vars.token),
-    onMutate: () => setSaveState('saving'),
-    onSuccess: (saved) => {
-      setSaveState('saved')
-      queryClient.setQueryData(['sandbox-config'], saved)
-      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-    },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      addToast({ message: msg, variant: 'error' })
-      setCurrentFsModel(savedFsModel)
-    },
-  })
+  // Visible label, changed?, needs a gateway restart? (FR-025, FR-037)
+  const rows: [string, boolean, boolean][] = [
+    ['Sandbox mode', modeChanged, true],
+    ['Filesystem model', fsChanged, true],
+    ['Shell workspace limit', wsChanged, true],
+    ['Allowed folders', pathsChanged, true],
+    ['Internal network addresses', ssrfChanged, false],
+  ]
+  const changedLabels = rows.filter(([, changed]) => changed).map(([label]) => label)
+  const restartLabels = rows.filter(([, changed, restart]) => changed && restart).map(([label]) => label)
 
-  // ── Workspace file limit save mutation ────────────────────────────────────
-  // Same contract as doSaveFsModel: optimistic in the handler, reverted here on
-  // failure (and by the confirmation's own cancel path). The revert is
-  // mandatory, not tidiness — the handler's equality guard means a stuck
-  // optimistic value can never be re-submitted by clicking the same radio
-  // again, so without it there is no recovery path.
-  const { mutateAsync: doSaveWorkspaceLimit } = useMutation({
-    mutationFn: (vars: { body: SandboxUpdateBody; token?: string }) =>
-      updateSandboxConfig(vars.body, vars.token),
-    onMutate: () => setSaveState('saving'),
-    onSuccess: (saved) => {
-      setSaveState('saved')
-      queryClient.setQueryData(['sandbox-config'], saved)
-      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-    },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      addToast({ message: msg, variant: 'error' })
-      setCurrentWorkspaceLimit(savedWorkspaceLimit)
-    },
-  })
+  function buildBody(): SandboxUpdateBody {
+    const body: SandboxUpdateBody = {}
+    if (modeChanged) body.mode = currentMode
+    if (fsChanged) body.filesystem_model = currentFsModel
+    // The key is echoed back, never hardcoded — see WORKSPACE_LIMIT_KEYS.
+    if (wsChanged && serverWorkspaceLimit) body[serverWorkspaceLimit.key] = currentWorkspaceLimit
+    if (pathsChanged) body.allowed_paths = pathList
+    if (ssrfChanged) body.ssrf = { allow_internal: ssrfList }
+    return body
+  }
+  // The saved configuration when the Save started: the C-6 check tells
+  // "before" from a third value with it.
+  const sentBeforeRef = useRef<SandboxConfigResponse | null>(null)
 
-  // ── Paths/SSRF save mutation ──────────────────────────────────────────────
-  const saveMutation = useMutation({
-    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
-      updateSandboxConfig(vars.body, vars.token),
-    onMutate: () => setSaveState('saving'),
-    onSuccess: (resp) => {
-      setSaveState('saved')
-      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+  const part: FormSavePart = {
+    id: 'sandbox-config',
+    count: changedLabels.length,
+    invalidCount: 0,
+    restartLabels,
+    // FR-025: every value of this section is password-marked.
+    passwordLabels: changedLabels,
+    write: ({ reauthToken }) => {
+      const body = buildBody()
+      sentRef.current = body
+      sentBeforeRef.current = configData ?? null
+      setSaveError(null)
+      setPathRowErrors({})
+      setSsrfAdvancedErrors({})
+      return toWriteResponse(() => updateSandboxConfig(body, reauthToken))
+    },
+    // C-6: PUT /security/sandbox-config does not record failed applies, so a
+    // read equal to the value before the Save never proves "not saved"; it
+    // stays unknown. A third value is "changed somewhere else" (FR-020).
+    check: async (): Promise<PartCheck> => {
+      const sent = sentRef.current
+      const before = sentBeforeRef.current
+      if (!sent || !before) return { kind: 'unknown' }
+      type Item = {
+        key: string; label: string; draft: unknown; before: unknown; recorded: false
+        pick: (d: SandboxConfigResponse) => unknown
+        /** Writes a saved value into a configuration copy. */
+        put: (d: SandboxConfigResponse, v: unknown) => SandboxConfigResponse
+      }
+      const items: Item[] = []
+      const add = (key: string, label: string, draft: unknown, pick: Item['pick'], put: Item['put']) =>
+        items.push({ key, label, draft, before: pick(before), recorded: false, pick, put })
+      if (sent.mode !== undefined) {
+        add('sandbox.mode', 'Sandbox mode', sent.mode, (d) => d.mode, (d, v) => ({ ...d, mode: v } as SandboxConfigResponse))
+      }
+      if (sent.filesystem_model !== undefined) {
+        add('sandbox.filesystem_model', 'Filesystem model', sent.filesystem_model, (d) => d.filesystem_model,
+          (d, v) => ({ ...d, filesystem_model: v } as SandboxConfigResponse))
+      }
+      for (const k of WORKSPACE_LIMIT_KEYS) {
+        if (sent[k] !== undefined) {
+          add(`sandbox.${k}`, 'Shell workspace limit', sent[k], (d) => readWorkspaceLimit(d)?.value,
+            (d, v) => ({ ...d, [k]: v } as SandboxConfigResponse))
+        }
+      }
+      if (sent.allowed_paths !== undefined) {
+        add('sandbox.allowed_paths', 'Allowed folders', sent.allowed_paths, (d) => d.allowed_paths ?? [],
+          (d, v) => ({ ...d, allowed_paths: v } as SandboxConfigResponse))
+      }
+      if (sent.ssrf?.allow_internal !== undefined) {
+        add('sandbox.ssrf.allow_internal', 'Internal network addresses', sent.ssrf.allow_internal, (d) => d.ssrf?.allow_internal ?? [],
+          (d, v) => ({ ...d, ssrf: { ...d.ssrf, allow_internal: v } } as SandboxConfigResponse))
+      }
+      const fresh: { read: SandboxConfigResponse | null } = { read: null }
+      const result = await checkFormPart(items, async (key) => {
+        const read = fresh.read ?? (fresh.read = await fetchSandboxConfig())
+        const item = items.find((i) => i.key === key)
+        if (!item) throw new Error(`no saved-state read for ${key}`)
+        return item.pick(read)
+      })
+      if (result.kind === 'saved' && fresh.read) queryClient.setQueryData(['sandbox-config'], fresh.read)
+      if (result.kind !== 'changed-elsewhere') return result
+      // "Changed somewhere else": the saved configuration must be refreshed
+      // even when every changed value came from the restart list and no
+      // server read ran. One read, as on the normal path; if it fails,
+      // nothing is known and the result stays unknown with Retry (C-6).
+      let read: SandboxConfigResponse
+      try {
+        read = fresh.read ?? (await fetchSandboxConfig())
+      } catch {
+        return { kind: 'unknown' }
+      }
+      // A listed key's saved value is its persisted_value, not the running
+      // read (C-6), so the check's saved values are laid onto the read.
+      let saved = read
+      for (const item of items) {
+        if (item.key in result.saved) saved = item.put(saved, result.saved[item.key])
+      }
+      // The sent values stay drafts on top of the saved configuration.
+      const { ssrf: sentSsrf, ...sentTop } = sent
+      syncOverrideRef.current = {
+        ...saved,
+        ...sentTop,
+        ...(sentSsrf ? { ssrf: { ...saved.ssrf, ...sentSsrf } } : {}),
+      } as SandboxConfigResponse
+      queryClient.setQueryData(['sandbox-config'], saved)
+      return result
+    },
+    onOutcome: (outcome) => {
+      if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {
+        const body = outcome.body as SandboxConfigResponse | undefined
+        if (body && typeof body === 'object' && 'mode' in body) queryClient.setQueryData(['sandbox-config'], body)
+        if (sentRef.current?.allowed_paths && (outcome.kind === 'saved-not-in-use' || body?.requires_restart)) {
+          setPathRestartedRows(new Set(sentRef.current.allowed_paths.map((_, i) => i)))
+        }
+        void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+        return
+      }
+      if (outcome.kind !== 'not-saved') return
+      // A refusal naming one row is shown under that row; any other refusal
+      // under the whole configuration.
+      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(outcome.message)
+      if (pathRowMatch) {
+        setPathRowErrors({ [parseInt(pathRowMatch[1], 10)]: pathRowMatch[2] })
+        return
+      }
+      const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(outcome.message)
+      if (ssrfRowMatch) {
+        setSsrfAdvancedOpen(true)
+        setSsrfAdvancedErrors({ [parseInt(ssrfRowMatch[1], 10)]: ssrfRowMatch[2] })
+        return
+      }
+      setSaveError(outcome.message)
+    },
+    discard: () => {
+      if (configData) syncFromServer(configData)
+      setNewPath('')
+      setNewSsrfEntry('')
       setPathAddError(null)
       setSsrfAddError(null)
       setPathRowErrors({})
       setSsrfAdvancedErrors({})
-      if (resp.requires_restart) {
-        setPathRestartedRows(new Set(pathList.map((_, i) => i)))
-      }
+      setSaveError(null)
     },
-    onError: (err: Error) => {
-      setSaveState('error')
-      const msg = getErrorMessage(err, 'Save failed')
-      setErrorMessage(msg)
-      const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(msg)
-      if (pathRowMatch) {
-        const rowIdx = parseInt(pathRowMatch[1], 10)
-        setPathRowErrors((prev) => ({ ...prev, [rowIdx]: pathRowMatch[2] }))
-        return
-      }
-      const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(msg)
-      if (ssrfRowMatch) {
-        const rowIdx = parseInt(ssrfRowMatch[1], 10)
-        setSsrfAdvancedErrors((prev) => ({ ...prev, [rowIdx]: ssrfRowMatch[2] }))
-        return
-      }
-      setPathAddError(msg)
-    },
-  })
-
-  // Reverts pathList/ssrfList (and the derived SSRF preset/advanced-open
-  // state) back to the last known-saved server config. Used both when the
-  // wildcard-SSRF confirmation is backed out of and when the sandbox-config
-  // confirmation for a paths/SSRF save is cancelled — in both cases an
-  // optimistic edit must not keep appearing applied when it was never
-  // persisted.
-  function revertPathsSsrfToServer() {
-    if (!configData) return
-    setPathList(configData.allowed_paths ?? [])
-    const serverSsrf = configData.ssrf?.allow_internal ?? []
-    setSsrfList(serverSsrf)
-    const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(serverSsrf, p.list))
-    setSsrfActivePreset(matchedPreset >= 0 ? matchedPreset : null)
-    setSsrfAdvancedOpen(matchedPreset < 0)
   }
 
-  // ── Commit helper (paths + SSRF) ──────────────────────────────────────────
-  function commitPathsSsrf(paths: string[], ssrf: string[]) {
-    setPathRowErrors({})
-    setSsrfAdvancedErrors({})
-    askSandboxConfirm({
-      title: 'Save the sandbox configuration?',
-      body: 'This changes which paths agents may reach and which internal addresses they may call. Some of it only takes effect after the gateway restarts.',
-      confirmLabel: 'Save sandbox configuration',
-      run: (token) =>
-        saveMutation.mutateAsync({
-          body: {
-            allowed_paths: paths,
-            ssrf: { allow_internal: ssrf },
-          },
-          token,
-        }),
-      cancel: revertPathsSsrfToServer,
-    })
-  }
-
-  function commitPathsSsrfWithWildcardCheck(paths: string[], ssrf: string[]) {
-    const hasWildcard = ssrf.some(isWildcardEntry)
-    if (hasWildcard) {
-      pendingSaveRef.current = () => commitPathsSsrf(paths, ssrf)
-      setShowWildcardModal(true)
-      return
-    }
-    commitPathsSsrf(paths, ssrf)
-  }
+  // One Save bar for the section with the proxy switch (CR-02, FR-010).
+  const { outcome: sandboxOutcome, ownBar } = useSectionSavePart(part)
 
   // ── Allowed paths handlers ─────────────────────────────────────────────────
   function handleDeletePath(index: number) {
-    const next = pathList.filter((_, i) => i !== index)
-    setPathList(next)
+    setPathList((list) => list.filter((_, i) => i !== index))
     setPathRowErrors({})
-    commitPathsSsrf(next, ssrfList)
   }
 
   function handleAddPath() {
@@ -587,28 +634,33 @@ export function SandboxSection(): React.ReactElement {
       return
     }
     setPathAddError(null)
-    const next = [...pathList, trimmed]
-    setPathList(next)
+    setPathList((list) => [...list, trimmed])
     setNewPath('')
-    commitPathsSsrf(next, ssrfList)
   }
 
   // ── SSRF handlers ─────────────────────────────────────────────────────────
-  function handlePresetClick(idx: number) {
-    const nextSsrf = [...SSRF_PRESETS[idx].list]
-    setSsrfActivePreset(idx)
-    setSsrfList(nextSsrf)
-    setSsrfAdvancedErrors({})
-    commitPathsSsrfWithWildcardCheck(pathList, nextSsrf)
-  }
-
-  function handleDeleteSsrfEntry(idx: number) {
-    const next = ssrfList.filter((_, i) => i !== idx)
+  function applySsrf(next: string[]) {
     setSsrfList(next)
     setSsrfAdvancedErrors({})
     const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(next, p.list))
     setSsrfActivePreset(matchedPreset >= 0 ? matchedPreset : null)
-    commitPathsSsrf(pathList, next)
+  }
+
+  function applySsrfWithWildcardCheck(next: string[]) {
+    if (next.some(isWildcardEntry)) {
+      pendingDraftRef.current = () => applySsrf(next)
+      setShowWildcardModal(true)
+      return
+    }
+    applySsrf(next)
+  }
+
+  function handlePresetClick(idx: number) {
+    applySsrfWithWildcardCheck([...SSRF_PRESETS[idx].list])
+  }
+
+  function handleDeleteSsrfEntry(idx: number) {
+    applySsrf(ssrfList.filter((_, i) => i !== idx))
   }
 
   function handleAddSsrfEntry() {
@@ -622,90 +674,40 @@ export function SandboxSection(): React.ReactElement {
       return
     }
     setSsrfAddError(null)
-    const next = [...ssrfList, trimmed]
-    setSsrfList(next)
     setNewSsrfEntry('')
-    const matchedPreset = SSRF_PRESETS.findIndex((p) => listsMatch(next, p.list))
-    setSsrfActivePreset(matchedPreset >= 0 ? matchedPreset : null)
-    commitPathsSsrfWithWildcardCheck(pathList, next)
+    applySsrfWithWildcardCheck([...ssrfList, trimmed])
   }
 
-  // ── Wildcard modal handlers ───────────────────────────────────────────────
-  function handleWildcardConfirm() {
+  // ── Confirm modal handlers ────────────────────────────────────────────────
+  function confirmPendingDraft() {
     setShowWildcardModal(false)
-    if (pendingSaveRef.current) {
-      pendingSaveRef.current()
-      pendingSaveRef.current = null
-    }
+    setShowEnforceModal(false)
+    pendingDraftRef.current?.()
+    pendingDraftRef.current = null
   }
 
-  function handleWildcardCancel() {
+  function cancelPendingDraft() {
     setShowWildcardModal(false)
-    pendingSaveRef.current = null
-    revertPathsSsrfToServer()
-  }
-
-  // ── Enforce modal handlers ────────────────────────────────────────────────
-  function handleEnforceModalConfirm() {
     setShowEnforceModal(false)
-    if (pendingSaveRef.current) {
-      pendingSaveRef.current()
-      pendingSaveRef.current = null
-    }
+    pendingDraftRef.current = null
   }
 
-  function handleEnforceModalCancel() {
-    setShowEnforceModal(false)
-    pendingSaveRef.current = null
-    // Revert to previous mode
-    setCurrentMode(savedMode)
-  }
-
-  // ── Mode change handler ────────────────────────────────────────────────────
+  // ── Mode, filesystem model and workspace limit handlers ──────────────────
   function handleFilesystemModelChange(model: 'confined' | 'open') {
-    if (model === currentFsModel) return
-    // Optimistic, then reverted by doSaveFsModel's onError — same contract as
-    // handleModeChange. Without the revert the radio would sit on an unsaved
-    // value with no error indicator, and re-clicking it would not refire
-    // onChange because of the equality guard above.
     setCurrentFsModel(model)
-    askSandboxConfirm({
-      title: 'Change what agents can read?',
-      body:
-        model === 'open'
-          ? 'Agents may read anywhere on this machine, not just their workspace. The gateway must restart before it takes effect.'
-          : 'Agents are confined to their own workspace for reads and execution. The gateway must restart before it takes effect.',
-      confirmLabel: 'Change filesystem model',
-      run: (token) => doSaveFsModel({ body: { filesystem_model: model }, token }),
-      cancel: () => setCurrentFsModel(savedFsModel),
-    })
   }
 
   function handleWorkspaceLimitChange(next: boolean) {
     // Belt and braces: the radios are not rendered at all when the gateway
     // does not report the setting, or when the environment variable is
-    // overriding it, so this can only fire from a gateway that will honour
-    // it. Guarding on the server value here as well means no future refactor
-    // can turn this into a control that PUTs a key the server ignores.
+    // overriding it. Guarding here as well means no future refactor can turn
+    // this into a draft for a key the server ignores.
     if (!serverWorkspaceLimit || workspaceLimitEnvLocked) return
-    if (next === currentWorkspaceLimit) return
     setCurrentWorkspaceLimit(next)
-    askSandboxConfirm({
-      title: 'Change the workspace file limit?',
-      body: next
-        ? 'Agents are limited to files inside their own workspace.'
-        : 'Agents are no longer limited to files inside their own workspace.',
-      confirmLabel: 'Change file limit',
-      // The key is echoed back, never hardcoded — see WORKSPACE_LIMIT_KEYS.
-      run: (token) => doSaveWorkspaceLimit({ body: { [serverWorkspaceLimit.key]: next } as SandboxUpdateBody, token }),
-      cancel: () => setCurrentWorkspaceLimit(savedWorkspaceLimit),
-    })
   }
 
   function handleModeChange(mode: 'enforce' | 'permissive' | 'off') {
     if (mode === currentMode) return
-
-    setCurrentMode(mode)
 
     const abiVersion = statusData?.abi_version
     const issueRef = (statusData as (SandboxStatus & { issue_ref?: string }) | undefined)?.issue_ref
@@ -716,31 +718,12 @@ export function SandboxSection(): React.ReactElement {
       typeof issueRef === 'string'
 
     if (isAbi4Incompatible) {
-      pendingSaveRef.current = () => askModeConfirm(mode)
+      pendingDraftRef.current = () => setCurrentMode(mode)
       setShowEnforceModal(true)
       return
     }
 
-    askModeConfirm(mode)
-  }
-
-  // askModeConfirm stages the sandbox-mode change behind the confirmation.
-  // Cancelling reverts the optimistic radio to the saved mode — handleModeChange
-  // early-returns when the clicked mode already equals currentMode, so without
-  // the revert there would be no way to re-submit it.
-  function askModeConfirm(mode: 'enforce' | 'permissive' | 'off') {
-    askSandboxConfirm({
-      title: 'Change the sandbox mode?',
-      body:
-        mode === 'off'
-          ? 'The kernel sandbox stops confining agents entirely. The gateway must restart before it takes effect.'
-          : mode === 'permissive'
-            ? 'The kernel sandbox reports what it would have blocked instead of blocking it. The gateway must restart before it takes effect.'
-            : 'The kernel sandbox enforces its limits on every agent. The gateway must restart before it takes effect.',
-      confirmLabel: 'Change sandbox mode',
-      run: (token) => doSaveMode({ body: { mode }, token }),
-      cancel: () => setCurrentMode(savedMode),
-    })
+    setCurrentMode(mode)
   }
 
   // ── Status display helpers ────────────────────────────────────────────────
@@ -828,7 +811,7 @@ const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: str
     {
       value: 'off',
       label: 'Off',
-      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. This does not switch off the shell workspace limit or the blocked command patterns below; those are separate rules with their own settings.',
+      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. It does not switch off the shell workspace limit below or the shell command rules in your configuration file; those are separate rules.',
     },
   ]
 
@@ -846,7 +829,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
   {
     value: 'off',
     label: 'Any path on this machine',
-    desc: 'Shell commands may name files anywhere your own account can reach. Blocked command patterns and the process sandbox above still apply \u2014 this setting lifts neither.',
+    desc: 'Shell commands may name files anywhere your own account can reach. The shell command rules in your configuration file and the process sandbox above still apply \u2014 this setting lifts neither.',
   },
 ]
 
@@ -930,6 +913,9 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
     )
   }
 
+  // FR-065: the section's loading frame until both of its reads answer.
+  if (statusLoading || configLoading) return <SectionLoading label="Sandbox & network" />
+
   return (
     <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
@@ -938,7 +924,6 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           Process Sandbox
         </h3>
         <div className="flex items-center gap-[var(--space-2)]">
-          <SaveStatus state={saveState} errorMessage={errorMessage} />
           <Button
             size="sm"
             variant="outline"
@@ -964,12 +949,29 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
       {/* Status display */}
       {renderStatusBody()}
 
-      {/* Config editor — only shown when status loaded successfully */}
-      {!statusLoading && !statusIsError && (
+      {/* FR-066: the settings need only the sandbox-config read; a failed
+          status read shows its own error above and blocks nothing here. */}
+      {configIsError && (
+        <Callout variant="error" data-testid="sandbox-config-error">
+          <CalloutTitle>The sandbox settings could not be loaded</CalloutTitle>
+          <CalloutDescription>
+            {getErrorMessage(configError, 'The gateway did not answer.')} Check that the gateway is running, then retry.
+          </CalloutDescription>
+          <Button variant="outline" size="sm" onClick={() => void configRefetch()}>
+            Retry
+          </Button>
+        </Callout>
+      )}
+
+      {!configIsError && (
         <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           {/* ── Mode radio — top of config section ── */}
-          <div className="space-y-[var(--space-2)]">
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Sandbox mode</p>
+          <div className="space-y-[var(--space-2)]" {...settingsRow('Sandbox mode')}>
+            <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
+              Sandbox mode
+              <RestartBadge />
+              <PasswordBadge />
+            </p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">
               Whether the operating system polices the programs an agent starts. It does not decide
               which files a shell command may name &mdash; that is the shell workspace limit further
@@ -1044,10 +1046,12 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 or because that path happened to be enumerated. Before this the
                 only way to change it was to hand-edit config.json. */}
             {!configLoading && (
-              <fieldset className="space-y-[var(--space-2)] mt-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
+              <fieldset className="space-y-[var(--space-2)] mt-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]" {...settingsRow('Filesystem model')}>
                 <legend className="sr-only">Filesystem model</legend>
-                <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
+                <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   Filesystem model
+                  <RestartBadge />
+                  <PasswordBadge />
                 </p>
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">
                   What an agent may READ and RUN. Neither option changes what it may WRITE —
@@ -1102,8 +1106,13 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           <div
             className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-3)]"
             data-testid="workspace-limit-section"
+            {...settingsRow('Shell workspace limit')}
           >
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Shell workspace limit</p>
+            <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
+              Shell workspace limit
+              <RestartBadge />
+              <PasswordBadge />
+            </p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">
               A different boundary from the sandbox above, with its own setting. The sandbox is an
               operating-system protection wrapped around the programs an agent starts. This is a
@@ -1195,6 +1204,12 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   onNewPathChange={(v) => { setNewPath(v); setPathAddError(null) }}
                   onAdd={handleAddPath}
                   addError={pathAddError}
+                  badges={
+                    <>
+                      <RestartBadge />
+                      <PasswordBadge />
+                    </>
+                  }
                 />
 
                 <SsrfEditor
@@ -1209,13 +1224,15 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   onNewSsrfEntryChange={(v) => { setNewSsrfEntry(v); setSsrfAddError(null) }}
                   onAddSsrfEntry={handleAddSsrfEntry}
                   ssrfAddError={ssrfAddError}
+                  badges={<PasswordBadge />}
                 />
 
-                {saveMutation.isError && (
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
-                    {getErrorMessage(saveMutation.error, 'Save failed')}
+                {saveError && (
+                  <p role="alert" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+                    {saveError}
                   </p>
                 )}
+                {sandboxOutcome}
               </>
             )}
           </div>
@@ -1223,66 +1240,32 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
       )}
 
       {/* Wildcard SSRF confirmation modal */}
-      <Dialog
+      <ConfirmDialog
         open={showWildcardModal}
-        onOpenChange={(open) => { if (!open) handleWildcardCancel() }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Disable SSRF protection?</DialogTitle>
-            <DialogDescription>
-              This would disable SSRF protection entirely — continue?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" size="sm" onClick={handleWildcardCancel}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleWildcardConfirm}
-              style={{ background: 'var(--color-error)', color: 'var(--color-primary)' }}
-            >
-              Save anyway
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => { if (!open) cancelPendingDraft() }}
+        title="Disable SSRF protection?"
+        description="Allowing every address lets agents reach any machine on your network and this server's own services, such as its admin pages."
+        confirmLabel="Allow every address"
+        destructive
+        onConfirm={confirmPendingDraft}
+      />
 
-      {/* ABI v4 enforce-mode confirmation modal */}
-      <Dialog
+      {/* ABI v4 enforce-mode confirmation, asked when Enforce is picked */}
+      <ConfirmDialog
         open={showEnforceModal}
-        onOpenChange={(open) => { if (!open) handleEnforceModalCancel() }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Kernel incompatibility warning</DialogTitle>
-            <DialogDescription>
-              {statusData && typeof statusData.abi_version === 'number' && statusData.abi_version >= 4
-                ? `Your kernel reports Landlock ABI v${statusData.abi_version} (issue ${(statusData as SandboxStatus & { issue_ref?: string }).issue_ref ?? ''}). Enforce mode will cause the gateway to exit with code 78 at next boot. Save anyway?`
-                : 'Enforce mode may cause issues with your current kernel configuration. Save anyway?'}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" size="sm" onClick={handleEnforceModalCancel}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleEnforceModalConfirm}
-              style={{ background: 'var(--color-error)', color: 'var(--color-primary)' }}
-            >
-              Save anyway
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => { if (!open) cancelPendingDraft() }}
+        title="Kernel incompatibility warning"
+        description={
+          statusData && typeof statusData.abi_version === 'number' && statusData.abi_version >= 4
+            ? `This server's kernel (Landlock ABI v${statusData.abi_version}) cannot apply every Enforce rule. With Enforce the gateway may stop at its next start.`
+            : "Enforce may not work with this server's kernel."
+        }
+        cancelLabel="Keep the current mode"
+        confirmLabel="Choose Enforce anyway"
+        onConfirm={confirmPendingDraft}
+      />
 
-      {/* ADR-0010 WP3 — the sandbox-configuration step-up gate. Staged before
-          the PUT, so a cancel/dismiss means nothing was sent. */}
-      {stepUp.dialogs}
+      {ownBar}
     </section>
   )
 }

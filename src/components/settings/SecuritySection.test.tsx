@@ -8,9 +8,11 @@
  *   #340   — SkillTrustSection is mounted in the Security tab
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import type { ReactNode } from 'react'
 
 // ── Mocks (must be hoisted before any import that uses them) ──────────────────
 
@@ -83,6 +85,9 @@ import {
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SecuritySection } from './SecuritySection'
+import { SettingsShellContext, type SettingsShellApi } from './SettingsShellContext'
+import { useSavePasswordPrompt } from './useSavePasswordPrompt'
+import { ApiError } from '@/lib/api-error'
 import type { RegistryTool } from '@/lib/api'
 
 // Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
@@ -172,6 +177,47 @@ function renderSection(client = makeClient()) {
   return render(
     <QueryClientProvider client={client}>
       <SecuritySection />
+    </QueryClientProvider>
+  )
+}
+
+/**
+ * Settings redesign #1519: the Save bar's one password step per Save lives in
+ * the shell (FR-026) — SettingsScreen wires `useSavePasswordPrompt()` into
+ * SettingsShellContext, and outside the shell `requestPassword` is undefined,
+ * so a password-marked Save would skip its confirmation entirely. This
+ * provider supplies the real hook (the real ConfirmDialog in platform mode,
+ * the real ReAuthDialog in local mode), so the whole chain from click to PUT
+ * is the production chain.
+ */
+function SettingsShellProvider({ children }: { children: ReactNode }) {
+  const { requestPassword, dialog } = useSavePasswordPrompt()
+  const api = useMemo<SettingsShellApi>(
+    () => ({
+      announce: () => {},
+      setDraftCount: () => {},
+      offerRestart: () => {},
+      refreshPendingRestart: () => {},
+      requestPassword,
+      saveBarVisible: false,
+      setSaveBarVisible: () => {},
+    }),
+    [requestPassword],
+  )
+  return (
+    <SettingsShellContext.Provider value={api}>
+      {children}
+      {dialog}
+    </SettingsShellContext.Provider>
+  )
+}
+
+function renderSectionWithShell(client = makeClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <SettingsShellProvider>
+        <SecuritySection />
+      </SettingsShellProvider>
     </QueryClientProvider>
   )
 }
@@ -275,8 +321,101 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
 })
 
 // ── ADR-092: global Auto-approve switch ───────────────────────────────────────
+//
+// Settings redesign #1519 reconciliation (item 15 of ta-old-tests-items.md,
+// team-lead's FR-010 ruling): the retired instant-save mode is gone — every
+// reachable path waits for Save changes, and the old Security view passes the
+// same drafts as Protection. The five cases below that clicked the switch and
+// expected the retired "Turn Auto-approve on?" confirmation + instant save
+// move to the draft-and-Save-bar oracle. Each replaced assertion cites the
+// FR (or dataset row) that replaces it:
+//   - FR-010 (spec :1914): a toggle stores nothing and opens no dialog —
+//     a confirmation opens only when Save changes is pressed;
+//   - FR-011 (:1915): the change counts — "1 unsaved change", "1 needs your
+//     password";
+//   - FR-032 + BDD "Platform mode asks for a confirmation instead"
+//     (:1016-1021): Save changes opens a confirmation listing "Auto-approve"
+//     with no password field, and no POST /auth/reauth is sent;
+//   - D-8 row 3 (:1753): the section's one protected write — exactly one
+//     PUT /security/sandbox-config carrying { auto_approve } — and, in
+//     platform mode, no consent token (FR-027's one-request rule, platform
+//     form: no reauth ran to mint one);
+//   - D-11 rows 6 and 9: platform Cancel sends 0 reauth and 0 writes and
+//     keeps every draft (FR-029's Cancel rule, with FR-032 substituting the
+//     confirmation for the prompt);
+//   - a refused write is the FR-015/FR-020 outcome — the bar says "1 change
+//     could not be saved", the server's message shows under the row and the
+//     draft is kept — replacing the retired per-mutation error toast;
+//   - spec :554 (ADR-092): "Auto-approve keeps its password; the help text
+//     says each chat can still turn it off with its Auto button." — the help
+//     text, not a dialog, carries the explanation now.
+//
+// Harness: the real chain — SecuritySection (old view) + useSaveBar +
+// useSavePasswordPrompt + the real ConfirmDialog — with the @/lib/api client
+// functions mocked at the API edge and a global fetch recorder (404 default)
+// proving no POST /auth/reauth and no other un-mocked state change. The
+// platform dialog wording itself is pinned once, by passwordOncePerSave.test
+// (D-11 rows 6/9); this file owns the section's side of that boundary.
+
+let fetchCalls: { method: string; path: string }[] = []
+
+/** Recorder at the process edge: every un-mocked request lands here, 404 by default. */
+function stubFetchRecorder() {
+  fetchCalls = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const isRequest = typeof Request !== 'undefined' && input instanceof Request
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
+      const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
+      const method = (init?.method ?? (isRequest ? input.method : 'GET')).toUpperCase()
+      fetchCalls.push({ method, path })
+      return new Response(JSON.stringify({ error: 'not stubbed' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }),
+  )
+}
+
+const reauthPosts = () => fetchCalls.filter((c) => c.method === 'POST' && c.path.includes('/auth/reauth'))
 
 describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
+  // Only the five rewritten cases need the fetch recorder; the other cases in
+  // this describe run on the file-level mocks alone, as before.
+  beforeEach(() => {
+    stubFetchRecorder()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * Toggle Auto-approve and reach the Save bar. The legacy view keeps the
+   * bar inside the collapsed Advanced disclosure, so expanding it is part of
+   * reaching the oracle — the counting itself happened at the toggle.
+   */
+  async function draftAndOpenBar() {
+    renderSectionWithShell()
+    // useSavePasswordPrompt's platform/local decision comes from the
+    // ['app-state'] query — wait for it so Save changes takes the mode this
+    // harness pins (fail-toward-the-stronger-control until the mode is known).
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    // FR-010: nothing is stored by the toggle itself.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+
+    fireEvent.click(await screen.findByTestId('advanced-disclosure-trigger'))
+    // FR-011: the change counts, and counts as needing the password
+    // (FR-025: Auto-approve is a Password-badged row).
+    await screen.findByText('1 unsaved change')
+    expect(screen.getByText('1 needs your password')).toBeInTheDocument()
+  }
+
   it('reflects the persisted auto_approve value from sandbox-config', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: true } as never)
     renderSection()
@@ -295,45 +434,56 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     })
   })
 
-  it('toggling opens a confirmation, and confirming saves through the re-auth-gated endpoint', async () => {
+  it('toggling only drafts: Save changes confirms once ("Auto-approve", no password field) and then sends the one sandbox-config PUT', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     vi.mocked(updateSandboxConfig).mockResolvedValue({ auto_approve: true, saved: true } as never)
-    renderSection()
-    // useStepUp's mode (password vs. confirm) depends on the SEPARATE
-    // ['app-state'] query resolving — wait for it explicitly so the click
-    // below doesn't race ahead and open the wrong dialog.
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
 
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Turn Auto-approve on?')
+    // FR-032 + spec :1016-1021 ("Platform mode asks for a confirmation
+    // instead"): the confirmation lists "Auto-approve" and has no password
+    // field. The retired instant "Turn Auto-approve on?" dialog is gone with
+    // the instant-save mode (FR-010 ruling, item 15).
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    expect(screen.getByText('This saves: Auto-approve.')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
+    // FR-016: the confirm runs before any write.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
+    // D-8 row 3: exactly one protected write, carrying the section's one
+    // password-marked value. FR-032: platform mode mints no consent token,
+    // so the token argument carries no token.
     await waitFor(() => {
-      expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][1]).toBeFalsy()
+    // Spec :1021: and no POST /auth/reauth is sent.
+    expect(reauthPosts()).toEqual([])
   })
 
-  it('cancelling the confirmation performs no save', async () => {
+  it('cancelling the platform confirmation sends no reauth and no write, and keeps the draft (D-11 row 9)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
     })
+    // D-11 row 9: platform-mode Cancel — 0 reauth, 0 writes.
+    expect(reauthPosts()).toEqual([])
     expect(updateSandboxConfig).not.toHaveBeenCalled()
+    // FR-029's Cancel rule (the confirmation substitutes the prompt,
+    // FR-032): the draft is kept — the switch still holds the toggled
+    // position and the bar still counts it.
+    expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
   })
 
   it('shows an error state when the sandbox-config fetch fails', async () => {
@@ -341,25 +491,35 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
+      // F12 / FR-066, team-lead's ninth-file ruling: name the failed read,
+      // retain its injected cause and expose Retry in the actual Callout.
+      const callout = screen.getByRole('alert')
+      expect(callout).toHaveAttribute('data-slot', 'callout')
+      expect(callout).toHaveAttribute('data-variant', 'error')
+      expect(callout).toHaveTextContent(/approvals/i)
+      expect(callout).toHaveTextContent('network error')
+      expect(within(callout).getByRole('button', { name: 'Retry' })).toBeEnabled()
     })
     expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
   })
 
-  it('cancelling the confirmation shows no toast at all (re-auth cancel stays silent)', async () => {
+  it('cancelling the platform confirmation shows no toast at all (cancel stays silent)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
     })
+    // FR-020 classifies write outcomes only; a cancelled Save produced no
+    // write, so nothing may be announced as an error. The retired re-auth
+    // cancel stayed silent for the same reason.
     expect(mockAddToast).not.toHaveBeenCalled()
+    expect(reauthPosts()).toEqual([])
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
   // Founder feedback (2026-09-24): the old card put the full grouped list of
@@ -491,68 +651,60 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(within(content).queryByText('Mounting a folder, or files outside your workspace')).not.toBeInTheDocument()
   })
 
-  it('the turn-on confirmation dialog is short (2-3 sentences) and points at the card’s own collapsed list rather than restating it', async () => {
+  it('toggling opens no explainer dialog — the card’s own help text naming the per-chat Auto button replaces the retired turn-on dialog', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
+    renderSectionWithShell()
     await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
 
     const toggle = await screen.findByTestId('auto-approve-global-switch')
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
     fireEvent.click(toggle)
 
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
-    // The dialog must NOT restate the full 28-tool list inline — it points
-    // at the card's own disclosure instead.
-    expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
-    expect(dialog).not.toHaveTextContent(/mounted folder/i)
-    // UAT defect D-02 (founder decision 2026-09-24): the dialog used to
-    // point at "Still asks every time", a heading that promised something
-    // false — several of these tools are on Allow by default and never
-    // ask. It now points at the renamed heading, and the old phrase must
-    // not survive anywhere in the dialog.
-    expect(dialog).toHaveTextContent(/always asks when set to ask/i)
-    expect(dialog).not.toHaveTextContent(/still asks every time/i)
-    // Founder correction (2026-09-24): the dialog's own summary clause
-    // must use the same wording as the card, with no "and the sandbox"
-    // (false once Auto runs with no sandbox enforcing).
-    // #920 D3 (2026-09-27): reads are no longer workspace-bound under Auto —
-    // the dialog must say so, in the same words as the card. The wording
-    // avoids "mounted folder" so the no-inline-list guard above still holds.
-    expect(dialog).toHaveTextContent(
-      /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it\./i,
-    )
-    expect(dialog).not.toHaveTextContent(/they stay inside your workspace/i)
-    expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)
-    // The old "not available on Windows" wording is gone — replaced by the
-    // same no-sandbox caveat the card itself shows.
-    expect(dialog).not.toHaveTextContent(/needs the sandbox/i)
-    expect(dialog).not.toHaveTextContent(/not available on windows/i)
-    expect(dialog).toHaveTextContent(
-      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
-    )
-    expect(dialog).not.toHaveTextContent(/checked by reading the command text only/i)
+    // FR-010 (spec :1019-1021): a confirmation opens only when the person
+    // SAVES a change to Auto-approve. The retired "Turn Auto-approve on?"
+    // explainer — with its inline summary, D-02 heading pointer and
+    // no-sandbox caveat — is gone with the instant-save mode; neither it nor
+    // any Save-time dialog may appear on a bare toggle.
+    expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // Spec :554 (ADR-092): "Auto-approve keeps its password; the help text
+    // says each chat can still turn it off with its Auto button." The card's
+    // help text, not a dialog, carries the per-chat explanation now.
+    const help = screen.getByText(/auto button/i)
+    expect(help).toHaveTextContent(/chat/i)
   })
 
-  it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
+  it('a refused save is the FR-015/FR-020 outcome — bar counts it, server message under the row, draft kept — not a toast', async () => {
+    const SERVER_REFUSAL = 'Auto-approve could not be saved: the sandbox write was refused.'
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    vi.mocked(updateSandboxConfig).mockRejectedValue(new Error('gateway unreachable'))
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
-
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-
-    const dialog = await screen.findByRole('alertdialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledTimes(1)
-    })
-    expect(mockAddToast).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'error' }),
+    vi.mocked(updateSandboxConfig).mockRejectedValue(
+      new ApiError(400, SERVER_REFUSAL, { body: JSON.stringify({ error: SERVER_REFUSAL }) }),
     )
+    await draftAndOpenBar()
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // FR-032: the platform confirmation still precedes the write.
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    // The 400 was the answer to THIS save's write (D-8 row 3: one PUT).
+    await waitFor(() => {
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+
+    // FR-015: the bar says the change could not be saved. The old oracle —
+    // exactly one error toast from the instant-save mutation — is retired
+    // with the autosave path it belonged to (FR-010 ruling).
+    expect(await screen.findByText('1 change could not be saved')).toBeInTheDocument()
+    // FR-020 outcome (3): the server's message shows under the row.
+    const alert = screen.getAllByRole('alert').find((el) => el.textContent?.includes(SERVER_REFUSAL))
+    expect(alert, 'FR-020: the server refusal must show under the Auto-approve row').toBeDefined()
+    // FR-020 outcome (3): the draft is kept — the switch still shows on.
+    expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
+    // Never a saved signal after a refused write.
+    expect(screen.queryAllByText(/^Saved\b/)).toEqual([])
   })
 })
 
@@ -799,13 +951,17 @@ describe('SecuritySection — credential vault confirmations', () => {
   it('delete: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openDeleteConfirmation()
 
+    // Wireframe round 4 (app.js "delete-key" dialog): title "Delete this
+    // key?", ok "Delete key", destructive: true — FR-056 keeps exactly one
+    // confirm before the delete. The old "Remove this credential?" /
+    // non-destructive styling is replaced by the wireframe.
     const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Remove this credential?')
+    expect(dialog).toHaveTextContent('Delete this key?')
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' })).toHaveTextContent('Remove credential')
+    expect(within(dialog).getByRole('button', { name: 'Delete key' })).toHaveTextContent('Delete key')
     expect(within(dialog).getAllByRole('button')).toHaveLength(2)
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' }).className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Delete key' }).className).toMatch(/color-error/)
     expect(deleteCredential).not.toHaveBeenCalled()
   })
 
@@ -813,7 +969,8 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(deleteCredential).mockResolvedValue(undefined as never)
 
     await openDeleteConfirmation()
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove credential' }))
+    // Wireframe ok button "Delete key" (app.js delete-key dialog, FR-056).
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete key' }))
 
     await waitFor(() => {
       expect(vi.mocked(deleteCredential).mock.calls).toEqual([['MY_KEY', undefined]])

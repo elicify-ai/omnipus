@@ -92,6 +92,8 @@ type RetroSearcher interface {
 	// SearchRetros returns retrospective records whose content matches query,
 	// ranked by BM25 relevance, capped at limit. Retros carry no stable memory ID,
 	// so recall appends them after long-term hits and does not citation-track them.
+	// When some reflections could not be read it returns the readable hits
+	// together with an error whose Partial() method reports true.
 	SearchRetros(query string, limit int) ([]MemoryEntry, error)
 }
 
@@ -465,13 +467,27 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	// memories. A retro-search failure is non-fatal — it must not drop the
 	// long-term hits already gathered.
 	retroSearchFailed := false
+	var retroPartialErr error
 	if rt, ok := t.store.(RetroSearcher); ok {
-		if retros, rerr := rt.SearchRetros(query, limit); rerr != nil {
+		retros, rerr := rt.SearchRetros(query, limit)
+		var retroPartial interface {
+			error
+			Partial() bool
+		}
+		switch {
+		case rerr == nil:
+			entries = append(entries, retros...)
+		case errors.As(rerr, &retroPartial) && retroPartial.Partial():
+			// B4 (SFH-12): keep the readable reflections and tell the caller
+			// that some could not be read.
+			entries = append(entries, retros...)
+			retroPartialErr = rerr
+			slog.Warn("recall_memory: some retrospectives could not be read; returning the readable ones",
+				"component", "tool", "error", rerr)
+		default:
 			retroSearchFailed = true
 			slog.Warn("recall_memory: retro search failed; returning long-term hits only",
 				"component", "tool", "error", rerr)
-		} else {
-			entries = append(entries, retros...)
 		}
 	}
 
@@ -490,6 +506,12 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		// result and has no way to know retrospectives were silently missing.
 		result.ForLLM = "[note: retrospective search failed; results below include long-term memories only]\n\n" +
 			result.ForLLM
+	}
+	if retroPartialErr != nil {
+		// B4 (SFH-12): the results are incomplete, so "no matching entries"
+		// would be a false claim; say what is missing and keep the hits.
+		result.ForLLM = fmt.Sprintf("[note: retrospective search is incomplete: some past reflections could not "+
+			"be read; check file access and retry: %v]\n\n%s", retroPartialErr, result.ForLLM)
 	}
 	return result
 }

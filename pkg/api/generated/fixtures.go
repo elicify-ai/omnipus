@@ -1789,31 +1789,6 @@ func FixtureSessionScopeUpdateResponse_Edge() SessionScopeUpdateResponse {
 	}
 }
 
-// ── RetentionUpdateResponse ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml
-
-func FixtureRetentionUpdateResponse_Populated() RetentionUpdateResponse {
-	return RetentionUpdateResponse{
-		Saved:           true,
-		RequiresRestart: false,
-		Disabled:        false,
-		SessionDays:     90,
-	}
-}
-
-func FixtureRetentionUpdateResponse_ZeroValue() RetentionUpdateResponse {
-	return RetentionUpdateResponse{}
-}
-
-func FixtureRetentionUpdateResponse_Edge() RetentionUpdateResponse {
-	return RetentionUpdateResponse{
-		Saved:           true,
-		RequiresRestart: false,
-		Disabled:        true, // retention disabled — keep forever
-		SessionDays:     0,
-	}
-}
-
 // ── AgentToolsResponse ────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/AgentToolsResponse.yaml
 

@@ -4,9 +4,12 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Wordmark } from '@/components/shared/Wordmark'
-import { fetchAboutInfo } from '@/lib/api'
+import { fetchAboutInfo, fetchVersion, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { OMNIPUS_MARK_URL as omnipusLogo } from '@/lib/brandAssets'
+import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -21,16 +24,25 @@ function formatUptime(seconds: number): string {
 export function AboutSection() {
   const { addToast } = useUiStore()
 
-  const { data: info, isLoading, isError } = useQuery({
+  const { data: info, isLoading, isError, error: infoError, refetch: refetchInfo, isFetching: infoFetching } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
     retry: 1,
   })
 
+  // FR-105: the build commit comes from GET /version (build_sha).
+  const { data: versionInfo, isError: versionIsError, error: versionError } = useQuery({
+    queryKey: ['version'],
+    queryFn: fetchVersion,
+    retry: 1,
+  })
+  const buildCommit = versionInfo ? (versionInfo.build_sha === 'dev' ? 'development build' : versionInfo.build_sha) : null
+
   async function copySystemInfo() {
     if (!info) return
     const text = [
       `Omnipus ${info.version}`,
+      ...(buildCommit ? [`Build commit: ${buildCommit}`] : []),
       `Go: ${info.go_version}`,
       `OS: ${info.os}`,
       `Arch: ${info.arch}`,
@@ -80,11 +92,19 @@ export function AboutSection() {
 
         <Card className="divide-y divide-[var(--color-border)]">
           {isLoading && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading system info...</div>
+            <div className="p-[var(--space-3)]">
+              <SectionLoading label="About" />
+            </div>
           )}
           {isError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-              Could not fetch system info — gateway may be offline.
+            <div className="p-[var(--space-3)]">
+              <ReadErrorCallout
+                title="The system information could not be loaded"
+                error={infoError}
+                onRetry={() => void refetchInfo()}
+                retrying={infoFetching}
+                blocksSaving={false}
+              />
             </div>
           )}
           {info && (
@@ -94,6 +114,17 @@ export function AboutSection() {
                 value={info.version === 'dev' ? 'development build' : info.version}
                 mono
                 testId="build-version"
+              />
+              <InfoRow
+                label="Build commit"
+                value={
+                  buildCommit ??
+                  (versionIsError
+                    ? `Could not read the build commit: ${getErrorMessage(versionError, 'no answer')}`
+                    : 'Loading…')
+                }
+                mono={!!buildCommit}
+                testId="build-commit"
               />
               <InfoRow label="Go version" value={info.go_version} mono />
               <InfoRow label="Operating system" value={info.os} mono />
@@ -140,7 +171,7 @@ export function AboutSection() {
 
 function InfoRow({ label, value, mono, testId }: { label: string; value: string; mono?: boolean; testId?: string }) {
   return (
-    <div className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2)]">
+    <div className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2)]" {...settingsRow(label)}>
       <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</span>
       <span data-testid={testId} className={`text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>

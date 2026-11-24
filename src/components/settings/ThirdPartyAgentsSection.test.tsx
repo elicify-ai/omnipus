@@ -1,4 +1,10 @@
-/** T11-B §4 / FR-6, FR-7. Oracles are the spec and generated T8 contract.
+/** T11-B §4 / FR-6, FR-7; Settings redesign #1519 (FR-010, FR-011, FR-013, FR-015, FR-018, FR-020, FR-022).
+ * The section's own "Save" button and its completion toast are replaced by
+ * the one Save bar: drafts count on the bar ("N unsaved change(s)"), the
+ * button is "Save changes", the saved signal is FR-018's "Saved at HH:MM",
+ * and the write outcomes follow FR-020 (the saved_not_refreshed case now
+ * shows the spec's not-in-use message instead of echoing the server
+ * sentence). The whole-section PUT oracle is FR-022 and is unchanged.
  * Real Section, HTTP client, query cache and toast store. Only fetch is fake.
  * Observe toast publication at the store boundary; host role mapping is a
  * separate, UNVERIFIED frontend-owner gap (team-lead ruling 2026-10-31).
@@ -77,7 +83,7 @@ const putCalls = () => calls.filter((c) => c.method === 'PUT' && c.path === sett
 const checkCalls = () => calls.filter((c) => c.method === 'POST' && c.path === checkURL)
 const codexPathInput = () => screen.getByRole('textbox', { name: 'Codex program path' }) as HTMLInputElement
 const codexParams = () => screen.getByRole('textbox', { name: 'Codex parameters' }) as HTMLInputElement
-const saveButton = () => screen.getByRole('button', { name: /^save$/i })
+const saveButton = () => screen.getByRole('button', { name: /save changes/i })
 
 function renderSection() {
   return render(<QueryClientProvider client={client}><Section /></QueryClientProvider>)
@@ -85,13 +91,10 @@ function renderSection() {
 async function loaded() {
   await screen.findByRole('textbox', { name: 'Codex program path' })
 }
-function expectSavedToast() {
-  // §4 calls the state "Saved". No longer sentence is specified. The
-  // dispatcher fixed this observation boundary and non-error polarity.
-  const toasts = useUiStore.getState().toasts
-  expect(toasts).toHaveLength(1)
-  expect(toasts[0].message).toContain('Saved')
-  expect(toasts[0].variant).not.toBe('error')
+async function expectSavedSignal() {
+  // FR-018: the bar's "Saved at HH:MM" signal replaces the section's
+  // completion toast; nothing announces success before it appears.
+  await screen.findByText(/Saved at/)
 }
 function expectCheckToast(exactResult: string, variants: string[]) {
   const toasts = useUiStore.getState().toasts
@@ -141,6 +144,15 @@ beforeEach(() => {
       const detect: CliDetect = { claude: stored.clis['claude-code'].detected, codex: stored.clis.codex.detected, opencode: stored.clis.opencode.detected }
       return json(detect)
     }
+    // C-6 saved-state check seam (FR-020 outcome 4, spec :246): after an
+    // unknown result the screen reads GET /config/pending-restart through
+    // the raw fetch edge (saveOutcome.ts::readPendingRestartFresh). An empty
+    // list leaves the written keys unlisted, so the saved value equals the
+    // running read — what lets the check conclude at all. The reply mirrors
+    // readPendingRestartFresh's expectations (ok + a JSON array body).
+    if (path === '/api/v1/config/pending-restart' && method === 'GET') {
+      return { ok: true, status: 200, json: async () => [] as unknown[] }
+    }
     throw new Error(`Unexpected HTTP boundary call: ${method} ${path}`)
   }))
 })
@@ -152,15 +164,22 @@ afterEach(() => {
 })
 
 describe('FR-6: rows, pre-fill and free parameters', () => {
-  it('renders exactly three CLI-qualified path/parameter/Check rows and one Save', async () => {
+  it('renders exactly three CLI-qualified path/parameter/Check rows; the Save bar appears on the first draft (FR-010, FR-011)', async () => {
     renderSection(); await loaded()
     for (const name of ['Claude Code', 'Codex', 'opencode']) {
       expect(screen.getByRole('textbox', { name: `${name} program path` })).toBeEnabled()
       expect(screen.getByRole('textbox', { name: `${name} parameters` })).toBeEnabled()
       expect(screen.getByRole('button', { name: `Check ${name} CLI` })).toBeEnabled()
     }
-    expect(screen.getAllByRole('button', { name: /^save$/i })).toHaveLength(1)
     expect(screen.getAllByRole('textbox')).toHaveLength(6)
+    // FR-011: with zero drafts the bar is hidden; the old per-section "Save"
+    // button is replaced by the bar's "Save changes".
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument()
+    expect(putCalls()).toEqual([])
+
+    fireEvent.change(codexParams(), { target: { value: PRESET } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeInTheDocument()
     expect(putCalls()).toEqual([])
   })
   it('pre-fills link_path, displays the found path, and does not save or check it', async () => {
@@ -208,25 +227,31 @@ describe('FR-7: whole-section save and failures', () => {
     renderSection(); await loaded()
     expect(codexPathInput()).toHaveValue('/opt/homebrew/bin/codex')
     fireEvent.change(codexPathInput(), { target: { value: '' } })
-    fireEvent.click(saveButton())
-    await waitFor(expectSavedToast)
-    expect(putCalls()).toHaveLength(1)
-    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave(''))
-    expect(stored.clis.codex.path).toBe('')
-    expect(stored.clis.codex.detected).toEqual(CODEX_DETECT)
+    // FR-011 typed-back rule: clearing a detected-only pre-fill returns the
+    // field to its saved (empty) value, so it is not a draft and the bar
+    // stays hidden; a saved-and-detected clear is one real draft.
+    if (initial === 'detected only') {
+      expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument()
+    } else {
+      expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    }
 
-    useUiStore.setState({ toasts: [] })
+    // FR-022: the whole-section Save carries every row, so the cleared codex
+    // path is stored empty together with the other row's change.
     fireEvent.change(screen.getByRole('textbox', { name: 'Claude Code parameters' }), {
       target: { value: '--max-turns 41' },
     })
+    await screen.findByText(initial === 'detected only' ? /1 unsaved change/ : /2 unsaved changes/)
     fireEvent.click(saveButton())
-    await waitFor(expectSavedToast)
-    expect(putCalls()).toHaveLength(2)
-    const secondSave: ThirdPartyAgentSettings = { clis: {
+    await expectSavedSignal()
+    expect(putCalls()).toHaveLength(1)
+    const wholeSave: ThirdPartyAgentSettings = { clis: {
       ...expectedSave('').clis,
       'claude-code': { path: '/Users/me/bin/claude', preset_args: '--max-turns 41' },
     } }
-    expect(JSON.parse(putCalls()[1].body ?? '')).toEqual(secondSave)
+    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(wholeSave)
+    expect(stored.clis.codex.path).toBe('')
+    expect(stored.clis.codex.detected).toEqual(CODEX_DETECT)
     expect(checkCalls()).toEqual([])
   })
   it('refreshes existing worker and agent-list caches after saving the program and parameters (FR-8)', async () => {
@@ -262,8 +287,9 @@ describe('FR-7: whole-section save and failures', () => {
 
       fireEvent.change(codexPathInput(), { target: { value: after.path } })
       fireEvent.change(codexParams(), { target: { value: after.preset_args } })
+      await screen.findByText(/2 unsaved changes/)
       fireEvent.click(saveButton())
-      await waitFor(expectSavedToast)
+      await expectSavedSignal()
       expect(putCalls()).toHaveLength(1)
       expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave(after.path, after.preset_args))
       // Do not manually invalidate/refetch or spy on invalidateQueries: both
@@ -283,23 +309,30 @@ describe('FR-7: whole-section save and failures', () => {
   it('sends one PUT containing all three rows exactly as typed', async () => {
     renderSection(); await loaded()
     fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/1 unsaved change/)
     fireEvent.click(saveButton())
     await waitFor(() => expect(putCalls()).toHaveLength(1))
     expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave('/opt/homebrew/bin/codex', PRESET))
     expect(checkCalls()).toEqual([])
   })
-  it('puts refusal under the matching field, preserves the draft and moves focus there', async () => {
+  it('puts the refusal under the matching field and preserves the draft (FR-015)', async () => {
     putSettings = async () => json(REFUSAL_BODY, 400)
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/ws/codex/fake' } })
     fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/2 unsaved changes/)
     fireEvent.click(saveButton())
-    expect(await screen.findByText(REFUSAL)).toBeInTheDocument()
+    // The refusal text renders twice (the field's describedby alert and the
+    // outcome line), so assert presence without uniqueness.
+    expect((await screen.findAllByText(REFUSAL)).length).toBeGreaterThan(0)
+    // FR-015: the server's message under its field, both drafts kept.
     expect(codexPathInput()).toHaveValue('/Users/me/ws/codex/fake')
     expect(codexParams()).toHaveValue(PRESET)
     expect(codexPathInput()).toHaveAccessibleDescription(REFUSAL)
     expect(screen.getByRole('textbox', { name: 'Claude Code program path' })).not.toHaveAccessibleDescription(REFUSAL)
-    await waitFor(() => expect(codexPathInput()).toHaveFocus())
+    // FR-015: the bar counts BOTH refused drafts ("2 changes could not be
+    // saved") and the reason shows under each setting.
+    expect(await screen.findByText(/2 changes could not be saved/)).toBeInTheDocument()
     expect(putCalls()).toHaveLength(1)
     // Backend storage atomicity is proved in the Go test, not by this mock.
   })
@@ -313,29 +346,34 @@ describe('FR-7: whole-section save and failures', () => {
     renderSection(); await loaded()
     fireEvent.change(codexParams(), { target: { value: PRESET } })
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/ws/codex/fake' } })
+    await screen.findByText(/2 unsaved changes/)
     fireEvent.click(saveButton())
-    await screen.findByText(REFUSAL)
+    expect((await screen.findAllByText(REFUSAL)).length).toBeGreaterThan(0)
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/bin/codex' } })
     fireEvent.click(saveButton())
     await waitFor(() => expect(putCalls()).toHaveLength(2))
     expect(JSON.parse(putCalls()[1].body ?? '')).toEqual(expectedSave('/Users/me/bin/codex', PRESET))
-    await waitFor(expectSavedToast)
+    await expectSavedSignal()
   })
-  it('keeps the draft and says sign in again when Save returns 401', async () => {
+  it('keeps the draft, shows the server message and says the change could not be saved on 401 (FR-015, FR-020 outcome 3)', async () => {
     putSettings = async () => json({ error: 'Session expired' }, 401)
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/bin/unsaved-codex' } })
     fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/2 unsaved changes/)
     fireEvent.click(saveButton())
-    await waitFor(() => expectFailureNotice(/sign in again/i))
+    // FR-015: the notice is the server's own message, never invented client
+    // copy ("log in again" was the retired section's own wording).
+    await waitFor(() => expectFailureNotice(/session expired/i))
+    expect(await screen.findByText(/2 changes could not be saved/)).toBeInTheDocument()
     expect(codexPathInput()).toHaveValue('/Users/me/bin/unsaved-codex')
     expect(codexParams()).toHaveValue(PRESET)
     expect(putCalls()).toHaveLength(1)
   })
-  it('shows the exact saved-but-not-applied server notice for a saved_not_refreshed 500', async () => {
-    // Round-3 dispatch: display the server sentence exactly, without falsely
-    // saying the durable save failed. This is response INPUT, not UI output
-    // copied into an oracle; exact input-to-visible-message identity is required.
+  it('says saved but not in use for a saved_not_refreshed 500, showing the rows it sent (FR-020 outcome 1, FR-022)', async () => {
+    // FR-020 outcome (1) replaces the old echoed-server-sentence oracle: a
+    // recognized saved_not_refreshed signal is shown as saved with the spec's
+    // message, and FR-022 keeps the rows it sent visible (never a re-read).
     const serverSentence = 'third-party agent settings were saved, but they are not applied yet; ' +
       'save again or restart Omnipus to apply them'
     const response: ErrorResponse = { error: serverSentence, code: 'saved_not_refreshed' }
@@ -343,27 +381,33 @@ describe('FR-7: whole-section save and failures', () => {
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/bin/saved-codex' } })
     fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/2 unsaved changes/)
     fireEvent.click(saveButton())
 
-    const notice = await screen.findByRole('alert')
-    expect(notice).toBeVisible()
-    expect(notice.textContent).toBe(serverSentence)
-    expect(notice).not.toHaveTextContent('Could not save:')
+    expect(await screen.findByText(/Saved, but not in use yet\. Restart the gateway to apply it\./)).toBeInTheDocument()
+    // FR-018: the bar shows the saved signal (the outcome counts as saved).
+    expect(await screen.findByText(/Saved at/)).toBeInTheDocument()
     expect(codexPathInput()).toHaveValue('/Users/me/bin/saved-codex')
     expect(codexParams()).toHaveValue(PRESET)
     expect(putCalls()).toHaveLength(1)
     expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave('/Users/me/bin/saved-codex', PRESET))
     expect(publishedMessages()).toEqual([])
-    expect(saveButton()).toBeEnabled()
+    // FR-011: the drafts cleared on the saved outcome, so the bar keeps only
+    // the "Saved at" signal — there is no Save changes button left to enable.
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument()
   })
-  it('shows a failed save rather than announcing success and keeps the draft', async () => {
+  it('a connection-lost Save reads back, says not saved rather than announcing success, and keeps the draft (FR-020 outcome 4)', async () => {
     putSettings = async () => json({ error: 'The server is unavailable. Please try again in a moment.' }, 503)
     renderSection(); await loaded()
     fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/1 unsaved change/)
     fireEvent.click(saveButton())
-    await waitFor(() => expectFailureNotice(/unavailable/i))
+    // The unknown result runs the saved-state check; the stored value is
+    // unchanged, so the outcome is not saved.
+    expect(await screen.findByText(/These changes were not saved\. Save them again\./)).toBeInTheDocument()
+    expect(await screen.findByText(/1 change could not be saved/)).toBeInTheDocument()
     expect(codexParams()).toHaveValue(PRESET)
-    expect(publishedMessages().some((message) => /saved/i.test(message))).toBe(false)
+    expect(publishedMessages().some((message) => /saved, but not in use|Saved at/i.test(message))).toBe(false)
     expect(saveButton()).toBeEnabled()
   })
 })
@@ -389,16 +433,21 @@ describe('§4: loading, saving and accessible interaction', () => {
     await loaded()
     expect(getCalls()).toHaveLength(2)
   })
-  it('keeps Save busy while a deferred PUT is in flight and publishes a non-error completion toast', async () => {
+  it('keeps Save changes aria-disabled while a deferred PUT is in flight, still focusable, and signals Saved at (FR-013, FR-018)', async () => {
     const pending = deferred<Response>()
     putSettings = () => pending.promise
     renderSection(); await loaded()
+    fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/1 unsaved change/)
     fireEvent.click(saveButton())
     await waitFor(() => expect(putCalls()).toHaveLength(1))
-    expect(saveButton()).toBeDisabled()
-    expect(saveButton()).toHaveAttribute('aria-busy', 'true')
+    // FR-013: the bar's Save is aria-disabled while saving but stays in the
+    // tab order (the old section button's disabled + aria-busy pair is
+    // retired with the section-owned button itself).
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'true')
+    expect(saveButton()).not.toBeDisabled()
     await act(async () => { pending.resolve(json(stored)) })
-    await waitFor(expectSavedToast)
+    await expectSavedSignal()
   })
   it('makes every path, parameter, Check and Save keyboard reachable and Enter saves', async () => {
     const user = userEvent.setup()
@@ -412,10 +461,15 @@ describe('§4: loading, saving and accessible interaction', () => {
       if (document.activeElement) seen.add(document.activeElement)
     }
     for (const control of controls) expect(seen.has(control), control.getAttribute('aria-label') ?? control.textContent ?? '').toBe(true)
+    // FR-010: the bar (and its Save changes button) appears with the first
+    // draft; Enter on the focused button saves.
+    fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/1 unsaved change/)
     saveButton().focus()
     await user.keyboard('{Enter}')
     await waitFor(() => expect(putCalls()).toHaveLength(1))
-    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave())
+    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave('/opt/homebrew/bin/codex', PRESET))
+    await expectSavedSignal()
   })
 })
 
@@ -474,10 +528,12 @@ describe('§4: optional Check CLI', () => {
   })
   it('load and Save make no spawn-capable HTTP request', async () => {
     renderSection(); await loaded()
+    fireEvent.change(codexParams(), { target: { value: PRESET } })
+    await screen.findByText(/1 unsaved change/)
     fireEvent.click(saveButton())
-    await waitFor(expectSavedToast)
+    await expectSavedSignal()
     const mutations = calls.filter((c) => c.method !== 'GET')
     expect(mutations.map(({ method, path }) => ({ method, path }))).toEqual([{ method: 'PUT', path: settingsURL }])
-    expect(JSON.parse(mutations[0].body ?? '')).toEqual(expectedSave())
+    expect(JSON.parse(mutations[0].body ?? '')).toEqual(expectedSave('/opt/homebrew/bin/codex', PRESET))
   })
 })

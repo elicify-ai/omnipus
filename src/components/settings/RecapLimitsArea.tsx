@@ -26,6 +26,7 @@ import {
   type RecapLimitGroup,
   type RecapLimitKey,
 } from './recapLimits'
+import { settingsRow } from './settingsSections'
 
 interface RecapLimitsAreaProps {
   drafts: RecapLimitDrafts
@@ -84,7 +85,7 @@ export function RecapLimitsArea({ drafts, onChange, onReset, chatGptRoute }: Rec
   const summary = recapLimitsSummary(drafts)
   return (
     <Accordion type="single" collapsible>
-      <AccordionItem value="recap-limits" className="border-0">
+      <AccordionItem value="recap-limits" className="border-0" {...settingsRow('Recap limits')}>
         <AccordionTrigger>
           <span className="flex items-baseline gap-[var(--space-2)]">
             <span>Recap limits</span>

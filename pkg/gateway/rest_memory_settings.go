@@ -6,12 +6,15 @@ package gateway
 
 // Memory settings endpoint (FR-019 / US-6).
 //
-// GET  /api/v1/settings/memory — read memory/recap/retention configuration
-// PUT  /api/v1/settings/memory — write memory/recap/retention configuration
+// GET  /api/v1/settings/memory — read memory/recap configuration
+// PUT  /api/v1/settings/memory — write memory/recap configuration
 //
 // Both routes are wrapped with withAuth (any authenticated user per A2/G-02).
-// They read from / write to agents.defaults.* and storage.retention in
-// config.json via safeUpdateConfigJSON (no SaveConfig — keys are preserved).
+// They read from / write to agents.defaults.* in config.json via
+// safeUpdateConfigJSON (no SaveConfig — keys are preserved). Retention moved
+// out (Settings redesign #1519, FR-045): a body carrying session_days or
+// memory_retros_days is refused; retention is written only through
+// PUT /api/v1/settings/retention.
 
 import (
 	"bytes"
@@ -48,15 +51,12 @@ func (a *restAPI) getMemorySettings(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	d := cfg.Agents.Defaults
-	ret := cfg.Storage.Retention
 
 	resp := gen.MemorySettings{
 		AutoRecapEnabled:           boolPtr(d.AutoRecapEnabled),
 		BootstrapRecapEnabled:      boolPtr(d.BootstrapRecapEnabled),
 		BootstrapRecapMaxPerMinute: intPtr(d.GetBootstrapRecapMaxPerMinute()),
 		IdleTimeoutMinutes:         intPtr(d.GetIdleTimeoutMinutes()),
-		SessionDays:                intPtr(ret.RetentionSessionDays()),
-		MemoryRetrosDays:           intPtr(ret.RetentionMemoryRetrosDays()),
 	}
 	// RecapModel: always emit a string (empty string when not configured).
 	recapModel := d.RecapModel
@@ -86,6 +86,12 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
+	// Retired retention fields are refused first, in both validation modes,
+	// before anything in the body is applied (FR-045, review MAJ-004).
+	if msg := retiredMemoryRetentionField(raw); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	// Effort members are checked on the raw body in both validation modes,
 	// before any decode or write (FR-060, S-94).
 	if refuseInvalidEffortBody(w, raw) {
@@ -112,14 +118,6 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 	// Validate values before touching disk: every ranged key (FR-074, S-81).
 	if msg := recapLimitRefusal(&req); msg != "" {
 		jsonErr(w, http.StatusBadRequest, msg)
-		return
-	}
-	if req.SessionDays != nil && *req.SessionDays < 0 {
-		jsonErr(w, http.StatusBadRequest, "session_days must be ≥ 0")
-		return
-	}
-	if req.MemoryRetrosDays != nil && *req.MemoryRetrosDays < 0 {
-		jsonErr(w, http.StatusBadRequest, "memory_retros_days must be ≥ 0")
 		return
 	}
 	if req.RecapFallbackModels != nil {
@@ -178,15 +176,6 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeRecapSettings(defaults, &req)
 
-		// storage.retention section. The canonical layout is top-level
-		// "storage" → "retention" (config.OmnipusStorageConfig, json:"storage").
-		// setRetentionFields writes only that path — there is no "try both keys"
-		// fallback and no "omnipus" block alternative.
-		if req.SessionDays != nil || req.MemoryRetrosDays != nil {
-			if err := setRetentionFields(m, req.SessionDays, req.MemoryRetrosDays); err != nil {
-				return err
-			}
-		}
 		return nil
 	}); err != nil {
 		slog.Error("rest: PUT /settings/memory: failed", "error", err)
@@ -198,25 +187,26 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 	a.getMemorySettings(w, r)
 }
 
-// setRetentionFields writes session_days and memory_retros_days into the raw
-// config JSON map. The canonical layout is the top-level "storage" → "retention"
-// (config.OmnipusStorageConfig, json:"storage").
-func setRetentionFields(m map[string]any, sessionDays, memoryRetrosDays *int) error {
-	storage, _ := m["storage"].(map[string]any)
-	if storage == nil {
-		storage = make(map[string]any)
-		m["storage"] = storage
+// retiredMemoryRetentionFields are the retention members MemorySettings no
+// longer carries (FR-045). Matched the way encoding/json binds a key
+// (jsonFoldKey), so a differently cased spelling is refused too.
+var retiredMemoryRetentionFields = []string{"session_days", "memory_retros_days"}
+
+// retiredMemoryRetentionField returns the 400 message for a body that carries
+// a retired retention field, or "" when it carries none. A body that is not a
+// JSON object is left to the regular decode and its own refusal.
+func retiredMemoryRetentionField(raw []byte) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return ""
 	}
-	retention, _ := storage["retention"].(map[string]any)
-	if retention == nil {
-		retention = make(map[string]any)
-		storage["retention"] = retention
+	for key := range fields {
+		for _, retired := range retiredMemoryRetentionFields {
+			if jsonFoldKey(key) == jsonFoldKey(retired) {
+				return fmt.Sprintf("%s is no longer a memory setting: chat history and memory "+
+					"retention are changed only through PUT /api/v1/settings/retention", key)
+			}
+		}
 	}
-	if sessionDays != nil {
-		retention["session_days"] = *sessionDays
-	}
-	if memoryRetrosDays != nil {
-		retention["memory_retros_days"] = *memoryRetrosDays
-	}
-	return nil
+	return ""
 }

@@ -26,7 +26,7 @@
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
@@ -83,6 +83,9 @@ import { ProviderRow, isEntitlementEligible } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
 import { DefaultModelCard } from './DefaultModelCard'
+import { useSectionSavePart } from './SectionSaveScope'
+import { toWriteResponse, checkFormPart, type PartCheck } from './saveOutcome'
+import type { FormSavePart } from './useFormSaveBar'
 import { RemoveProviderDialog } from './RemoveProviderDialog'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
 import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
@@ -90,10 +93,17 @@ import { USABLE_PROVIDER_STATUSES } from '@/lib/providerStatus'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
 import type {
   CatalogProvider,
+  DefaultModel,
   DefaultModelUpdateRequest,
   ProviderUpdateRequest,
   EntitlementResponse,
 } from '@/lib/api/generated/openapi-types'
+import { usePrimaryVariant } from './SaveBar'
+import { useSettingsShell } from './SettingsShellContext'
+import { settingsRow } from './settingsSections'
+import { useReturnFocus } from './useReturnFocus'
+import { SectionLoading } from './SectionLoading'
+import { ReadErrorCallout } from './ReadErrorCallout'
 
 // The item shown in the Sheet — either an existing configured provider (configure
 // mode) or a catalog entry for first-time setup (connect mode).
@@ -170,6 +180,12 @@ interface ProviderConfigSheetProps {
   target: SheetTarget | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * FR-069: set when the sheet opens from the provider picker. It holds the
+   * picker's opener (Connect a provider), the outermost control to return
+   * focus to when this sheet closes.
+   */
+  handedOpenerRef?: { current: HTMLElement | null }
   apiKeys: Record<string, string>
   setApiKeys: React.Dispatch<React.SetStateAction<Record<string, string>>>
   /**
@@ -244,6 +260,7 @@ function ProviderConfigSheet({
   handleTest,
   onRemove,
   obscuredByDialog,
+  handedOpenerRef,
 }: ProviderConfigSheetProps) {
   // FR-033: an accidental close (Esc / overlay) with a dirty key does not
   // close — it asks. This flag is the inline "Discard key?" prompt's state.
@@ -254,6 +271,35 @@ function ProviderConfigSheet({
   useEffect(() => {
     if (!open) setDiscardPrompt(false)
   }, [open])
+
+  // FR-069: stacked dialogs close one at a time, each returning focus to the
+  // control that opened it. The prompt's opener is whatever had focus when
+  // the close gesture asked; the sheet's opener is whatever had focus when
+  // the sheet opened. A gone opener falls back to the dialog still open (the
+  // sheet's first focusable control), else to the section heading.
+  const shell = useSettingsShell()
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const sheetOpenerRef = useRef<HTMLElement | null>(null)
+  const promptOpenerRef = useRef<HTMLElement | null>(null)
+  const promptWasOpen = useRef(false)
+  useEffect(() => {
+    const wasOpen = promptWasOpen.current
+    promptWasOpen.current = discardPrompt
+    if (!wasOpen || discardPrompt || !open) return
+    const opener = promptOpenerRef.current
+    promptOpenerRef.current = null
+    if (opener?.isConnected && sheetRef.current?.contains(opener)) {
+      opener.focus()
+      return
+    }
+    sheetRef.current
+      ?.querySelector<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')
+      ?.focus()
+  }, [discardPrompt, open])
+  const askDiscard = () => {
+    promptOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDiscardPrompt(true)
+  }
 
   if (!target) return null
 
@@ -327,7 +373,7 @@ function ProviderConfigSheet({
       action,
     })
     if (decision.prompt) {
-      setDiscardPrompt(true)
+      askDiscard()
       return
     }
     closeAndClear()
@@ -347,6 +393,31 @@ function ProviderConfigSheet({
         widthClass="w-[90vw] sm:max-w-lg"
         className="p-0"
         data-testid="provider-config-sheet"
+        ref={sheetRef}
+        // FR-069: when the sheet closes, focus goes back to the control that
+        // opened it (Configure), or to the section heading when that control
+        // is gone. The sheet is opened by state, not by a Radix Trigger, so
+        // Radix's own close handler would focus nothing (its trigger ref is
+        // empty) and also blocks the generic focus restore: this handler
+        // does the return itself and stops Radix's handler from running.
+        onOpenAutoFocus={() => {
+          const handed = handedOpenerRef?.current ?? null
+          if (handedOpenerRef) handedOpenerRef.current = null
+          const active = document.activeElement
+          sheetOpenerRef.current = handed ?? (active instanceof HTMLElement && active !== document.body ? active : null)
+        }}
+        onCloseAutoFocus={(e) => {
+          const opener = sheetOpenerRef.current
+          sheetOpenerRef.current = null
+          if (opener?.isConnected) {
+            e.preventDefault()
+            opener.focus()
+            return
+          }
+          if (!shell.focusHeading) return
+          e.preventDefault()
+          shell.focusHeading()
+        }}
         // See the ProviderConfigSheetProps.obscuredByDialog doc comment: keep
         // the background Sheet inert and hidden while the step-up dialog is
         // the one true top-level modal.
@@ -701,6 +772,7 @@ function ProviderConfigSheet({
 // ---------------------------------------------------------------------------
 
 export function ProvidersSection() {
+  const primaryVariant = usePrimaryVariant()
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const stepUp = useStepUp()
@@ -712,6 +784,15 @@ export function ProvidersSection() {
   // Picker Sheet state (FIX-3) — the SHEET is local; what it contains is the
   // one shared <ProviderPicker> onboarding step 3 renders (ADR-068 FR-021).
   const [pickerOpen, setPickerOpen] = useState(false)
+  // FR-069: Cancel or Escape on the picker returns focus to Connect a
+  // provider; moving on from the picker hands that opener to what opens next.
+  const pickerFocus = useReturnFocus()
+  const configOpenerRef = useRef<HTMLElement | null>(null)
+  const closePickerMovingOn = (toConfigSheet: boolean) => {
+    const opener = pickerFocus.handOff()
+    configOpenerRef.current = toConfigSheet ? opener : null
+    setPickerOpen(false)
+  }
 
   // ADR-068 US-3/US-4 state: the Remove confirmation and the default-model
   // selector, the latter openable from the card or from a row action.
@@ -752,7 +833,14 @@ export function ProvidersSection() {
   // session genuinely needs a fresh approval.
   const [manageTarget, setManageTarget] = useState<{ id: string; label: string; accountLabel?: string } | null>(null)
 
-  const { data: providers = [], isLoading, isError: providersError } = useQuery({
+  const {
+    data: providers = [],
+    isLoading,
+    isError: providersError,
+    error: providersReadError,
+    refetch: refetchProviders,
+    isFetching: providersFetching,
+  } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
   })
@@ -782,7 +870,10 @@ export function ProvidersSection() {
   const {
     data: defaultModel = null,
     isLoading: defaultModelLoading,
-    isError: defaultModelError,
+    // G2-F1: only a failed first read is the card's error state. A failed
+    // refresh keeps the known default (for example a Save's acknowledged
+    // answer) on screen, so a newer pick still compares against it.
+    isLoadingError: defaultModelError,
   } = useQuery({
     queryKey: ['default-model'],
     queryFn: async () => {
@@ -1036,22 +1127,83 @@ export function ProvidersSection() {
   })
 
   // ── ADR-068 US-4 — the default model ─────────────────────────────────────
-  const { mutate: saveDefaultModel, isPending: isSavingDefault } = useMutation({
-    mutationFn: (pair: DefaultModelUpdateRequest) => putDefaultModel(pair),
-    onSuccess: () => {
-      setChangingDefault(false)
-      setDefaultFilterId(undefined)
+  // Settings redesign #1519 (FR-010, FR-019): a picked default model is a
+  // draft on the Providers Save bar; Save sends it with PUT
+  // /providers/default-model (no password, spec "Sections and their endpoints").
+  const [defaultDraft, setDefaultDraft] = useState<DefaultModelUpdateRequest | null>(null)
+  const defaultChanged =
+    defaultDraft !== null &&
+    (defaultDraft.provider !== defaultModel?.provider ||
+      defaultDraft.model !== defaultModel?.model ||
+      (defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort ?? '') !== (defaultModel?.reasoning_effort ?? ''))
+  const shownDefault = defaultChanged && defaultDraft
+    ? { ...defaultModel, provider: defaultDraft.provider, model: defaultDraft.model, reasoning_effort: defaultDraft.reasoning_effort ?? defaultModel?.reasoning_effort, context_window: undefined, window_source: undefined, window_unknown: undefined } as DefaultModel
+    : defaultModel
+  const sentDefault = useRef<DefaultModelUpdateRequest | null>(null)
+  // The draft as the Save sent it: only that draft is cleared when the Save
+  // ends saved; a pick made meanwhile stays a draft (CR-04).
+  const submittedDefault = useRef<DefaultModelUpdateRequest | null>(null)
+  const sentDefaultBefore = useRef<string | null>(null)
+  // CR-05: the saved-state check compares the whole default: provider, model
+  // and reasoning effort. An omitted effort keeps the stored one, so the
+  // write's effort is the draft's or, when omitted, the one before.
+  // The text also shows in "changed somewhere else": an unset effort is left out.
+  const defaultTuple = (provider: string, model: string, effort: string | undefined) =>
+    effort ? `${provider}/${model}, effort ${effort}` : `${provider}/${model}`
+  const defaultPart: FormSavePart = {
+    id: 'default-model',
+    count: defaultChanged ? 1 : 0,
+    invalidCount: 0,
+    write: () => {
+      const pair = defaultDraft as DefaultModelUpdateRequest
+      submittedDefault.current = pair
+      sentDefault.current = { ...pair, reasoning_effort: pair.reasoning_effort ?? defaultModel?.reasoning_effort ?? '' }
+      sentDefaultBefore.current = defaultModel
+        ? defaultTuple(defaultModel.provider, defaultModel.model, defaultModel.reasoning_effort)
+        : null
+      return toWriteResponse(() => putDefaultModel(pair))
+    },
+    // C-6: this writer does not record failed applies, so a read equal to
+    // the old pair never proves "not saved"; it stays unknown.
+    check: async (): Promise<PartCheck> => {
+      const sent = sentDefault.current
+      if (!sent) return { kind: 'unknown' }
+      let fresh: DefaultModel | null = null
+      const result = await checkFormPart(
+        [{ key: 'providers.default_model', label: 'Default model', draft: defaultTuple(sent.provider, sent.model, sent.reasoning_effort), before: sentDefaultBefore.current, recorded: false }],
+        async () => {
+          const read = await getDefaultModel()
+          fresh = read
+          return defaultTuple(read.provider, read.model, read.reasoning_effort)
+        },
+      )
+      // Changed elsewhere: the read pair becomes the saved pair; the draft stays.
+      if (result.kind === 'changed-elsewhere' && fresh) queryClient.setQueryData(['default-model'], fresh)
+      return result
+    },
+    onOutcome: (outcome) => {
+      if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      // G2-F1: the acknowledged PUT answer (putDefaultModel's validated
+      // DefaultModel) is the saved baseline at once, so a newer pick equal to
+      // the old default stays a draft; the refetch below is for freshness only.
+      if (outcome.kind === 'saved' && outcome.body) queryClient.setQueryData(['default-model'], outcome.body as DefaultModel)
+      const submitted = submittedDefault.current
+      setDefaultDraft((d) =>
+        d &&
+        submitted &&
+        (d.provider !== submitted.provider || d.model !== submitted.model || (d.reasoning_effort ?? '') !== (submitted.reasoning_effort ?? ''))
+          ? d
+          : null,
+      )
       queryClient.invalidateQueries({ queryKey: ['default-model'] })
       // Effort levels: chats and agents riding the default read its effort from the config.
       queryClient.invalidateQueries({ queryKey: ['config'] })
       // backs_default moves with it, so the rows are stale too.
       queryClient.invalidateQueries({ queryKey: ['providers'] })
-      addToast({ message: 'Default model updated', variant: 'success' })
     },
-    onError: (err: Error) => {
-      addToast({ message: getErrorMessage(err, 'Could not change the default model'), variant: 'error' })
-    },
-  })
+    discard: () => setDefaultDraft(null),
+  }
+  const { outcome: defaultOutcome, ownBar } = useSectionSavePart(defaultPart)
 
   // FR-019's row action: the same selector as the card, pre-filtered to one row.
   const openSetAsDefault = (provider: Provider) => {
@@ -1065,10 +1217,10 @@ export function ProvidersSection() {
   // `handleProviderConfirm`; only Recent and Custom settle anything here.
   const handlePickerSelect = (picked: PickerSelection) => {
     if (picked.kind === 'recent') {
-      setPickerOpen(false)
       // Same FR-005 fork as handleProviderConfirm: a sign_in row has no key,
       // so Recent must not drop it into the API-key Sheet either.
       const recentEntry = catalogEntryById(catalog, picked.provider.id)
+      closePickerMovingOn(!recentEntry?.auth_methods.includes('sign_in'))
       if (recentEntry?.auth_methods.includes('sign_in')) {
         openSignInDialog(
           picked.provider.id,
@@ -1083,7 +1235,7 @@ export function ProvidersSection() {
       // The Custom endpoint panel already collected everything the PUT needs —
       // id, base URL, protocol and key — so this goes straight to the re-auth
       // gate rather than through a second form that would re-ask for the key.
-      setPickerOpen(false)
+      closePickerMovingOn(false)
       requestChange(picked.draft.id, picked.draft.id, picked.draft.api_key, undefined, {
         api_base: picked.draft.api_base,
         protocol: picked.draft.protocol,
@@ -1096,7 +1248,7 @@ export function ProvidersSection() {
   // github-copilot). Without this the button renders and does nothing.
   const handlePickerSignIn = (providerId: string) => {
     const entry = catalog.find((c) => c.id === providerId)
-    setPickerOpen(false)
+    closePickerMovingOn(false)
     openSignInDialog(providerId, entry ? catalogLabel(entry) : providerId)
   }
 
@@ -1108,8 +1260,11 @@ export function ProvidersSection() {
   // instead of leaving *Continue* inert.
   const handleProviderConfirm = (confirmed: ProviderDetailSelection) => {
     const entry = catalog.find((c) => c.id === confirmed.providerId)
-    setPickerOpen(false)
-    if (!entry) return
+    if (!entry) {
+      setPickerOpen(false)
+      return
+    }
+    closePickerMovingOn(!entry.auth_methods.includes('sign_in'))
     // ADR-068 FR-005: a catalog row offering sign_in (openai-chatgpt /
     // codex-cli / github-copilot) opens the SignInDialog directly — there is
     // no key to type, so routing it to the API-key connect Sheet would leave
@@ -1133,9 +1288,9 @@ export function ProvidersSection() {
 
   return (
     <div className="space-y-[var(--space-3)]">
-      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]" {...settingsRow('Model providers')}>
         <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
+          <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h3>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             API keys are stored encrypted in credentials.json — never in config.json.
           </p>
@@ -1148,6 +1303,7 @@ export function ProvidersSection() {
             at once. */}
         {(hasConfigured || providersError) && (
           <Button
+            variant={primaryVariant}
             size="sm"
             onClick={openPicker}
             className="h-8 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] shrink-0 gap-[var(--space-1)]"
@@ -1161,33 +1317,34 @@ export function ProvidersSection() {
       {/* ADR-068 FR-019 — the default-model control lives HERE and nowhere
           else, and it is the first card on the screen. */}
       <DefaultModelCard
-        defaultModel={defaultModel}
+        defaultModel={shownDefault}
         providers={providers}
         catalog={catalogDoc}
         status={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
-        isSaving={isSavingDefault}
         filterToProviderId={defaultFilterId}
         changing={changingDefault}
         onChangingChange={(next) => {
           setChangingDefault(next)
           if (!next) setDefaultFilterId(undefined)
         }}
-        onChange={(pair) => saveDefaultModel(pair)}
+        onChange={(pair) => {
+          setDefaultDraft(pair)
+          setChangingDefault(false)
+          setDefaultFilterId(undefined)
+        }}
       />
+      {defaultOutcome}
 
       {providersError ? (
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="providers-error">
-          Failed to load providers. Please try again.
-        </p>
+        <ReadErrorCallout
+          title="The providers could not be loaded"
+          error={providersReadError}
+          onRetry={() => void refetchProviders()}
+          retrying={providersFetching}
+          data-testid="providers-error"
+        />
       ) : isLoading ? (
-        <div className="space-y-[var(--space-2)]">
-          {[1, 2, 3].map((i) => (
-            <Card
-              key={i}
-              className="h-14 animate-pulse"
-            />
-          ))}
-        </div>
+        <SectionLoading label="Providers" />
       ) : hasConfigured ? (
         /* ── Configured-only list, grouped only when a company has ≥2
              configured variants (FIX-2); a single configured provider is a
@@ -1282,6 +1439,7 @@ export function ProvidersSection() {
         >
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No providers configured yet.</p>
           <Button
+            variant={primaryVariant}
             onClick={openPicker}
             className="gap-[var(--space-1)]"
             data-testid="connect-provider-btn"
@@ -1299,6 +1457,7 @@ export function ProvidersSection() {
           widthClass="w-[90vw] sm:max-w-lg"
           className="flex h-full flex-col p-0"
           data-testid="provider-picker-sheet"
+          onOpenAutoFocus={pickerFocus.onOpenAutoFocus} onCloseAutoFocus={pickerFocus.onCloseAutoFocus}
         >
           <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
             <SheetTitle>Connect a provider</SheetTitle>
@@ -1363,6 +1522,7 @@ export function ProvidersSection() {
         handleTest={handleTest}
         onRemove={(provider) => setRemoveTarget(provider)}
         obscuredByDialog={stepUp.open}
+        handedOpenerRef={configOpenerRef}
       />
 
       {removeTarget && (
@@ -1386,6 +1546,7 @@ export function ProvidersSection() {
       )}
 
       {stepUp.dialogs}
+      {ownBar}
 
       {signInTarget && (
         <SignInDialog

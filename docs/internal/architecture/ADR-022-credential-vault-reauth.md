@@ -2,6 +2,17 @@
 
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
+> **Correction (2026-11-20, Settings redesign #1519, B7):** `deleteCredential`
+> (`DELETE /api/v1/credentials/{key}`) no longer calls `requireReAuth`. The founder
+> chose "confirm only" for deleting a stored key (S-Q11 B, confirmed as FQ-2 A in
+> `docs/internal/specs/settings-redesign-spec.md`, FR-056): the Settings screen asks
+> one confirm before deleting, and the server keeps sign-in (`withAuth`) and the
+> authenticated-user check. `setCredential` (`POST /api/v1/credentials`) and
+> `rotateCredentials` (`POST /api/v1/credentials/rotate`) still require the re-auth
+> consent token. `TestDeleteCredential_RequiresReAuth` is replaced by
+> `TestDeleteCredential_NoReauthNeeded`; `TestSetCredential_StillNeedsReauth` pins
+> the half that stays. The delete row of the table below is historical.
+
 **Status:** Accepted
 **Date:** 2026-06-20
 **Deciders:** backend-lead, architect, operator

@@ -2088,29 +2088,76 @@ func TestContract_SessionScopeUpdateResponse_Differentiation(t *testing.T) {
 		"different session scope values must produce different JSON")
 }
 
-// ── RetentionUpdateResponse ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml
+// ── RetentionSettings / RetentionSettingsUpdate ──────────────────────────────
+// Traces to: contracts/components/schemas/RetentionSettings.yaml and
+// contracts/components/schemas/RetentionSettingsUpdate.yaml.
+//
+// The RetentionUpdateResponse component this block previously validated (via
+// FixtureRetentionUpdateResponse_*) was DELETED together with GET/PUT
+// /security/retention (Settings redesign C-3, FR-047). The replacing schemas
+// are validated here as wire JSON: the generated Go types and fixtures for
+// them land with the backend branch's contract regeneration, and the schema
+// YAMLs are the committed oracle either way (spec C-3 "Proposed
+// RetentionSettings.yaml" / "RetentionSettingsUpdate.yaml").
 
-func TestContract_RetentionUpdateResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_Populated())
+func TestContract_RetentionSettings_ReadShape(t *testing.T) {
+	// All four fields are required members of every answer (FR-041).
+	valid := []byte(`{"session_days":90,"memory_retros_days":180,"memory_retros_forever":false,"keep_everything_forever":false}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettings", valid),
+		"the read shape with all four required fields must validate (FR-041)")
+
+	// The read schema has no range: a hand-edited value is returned as
+	// stored, so 500/1000 must validate (FR-046).
+	handEdited := []byte(`{"session_days":500,"memory_retros_days":1000,"memory_retros_forever":true,"keep_everything_forever":false}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettings", handEdited),
+		"the read shape has no range — a hand-edited day count must validate (FR-046)")
+
+	// Every field is required: dropping keep_everything_forever must fail.
+	missingField := []byte(`{"session_days":90,"memory_retros_days":180,"memory_retros_forever":false}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettings", missingField),
+		"all four fields are required (FR-041) — a missing keep_everything_forever must fail")
+
+	// additionalProperties: false — an unknown member must fail.
+	unknownField := []byte(`{"session_days":90,"memory_retros_days":180,"memory_retros_forever":false,"keep_everything_forever":false,"disabled":true}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettings", unknownField),
+		"the read shape is closed — an unknown member (legacy disabled) must fail")
 }
 
-func TestContract_RetentionUpdateResponse_ZeroValue(t *testing.T) {
-	// All fields have valid zero values (booleans and ints).
-	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_ZeroValue())
-}
+func TestContract_RetentionSettingsUpdate_WriteShape(t *testing.T) {
+	// Each range end validates (D-1/D-2 accepted rows; FR-042).
+	for name, raw := range map[string][]byte{
+		"session_days 1":         []byte(`{"session_days":1}`),
+		"session_days 365":       []byte(`{"session_days":365}`),
+		"memory_retros_days 1":   []byte(`{"memory_retros_days":1}`),
+		"memory_retros_days 730": []byte(`{"memory_retros_days":730}`),
+		"forever true":           []byte(`{"memory_retros_forever":true}`),
+	} {
+		assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", raw),
+			"%s must validate against the write shape (FR-042)", name)
+	}
 
-func TestContract_RetentionUpdateResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_Edge())
-}
+	// minProperties: 1 — the empty body must fail (FR-042: 400 for {}).
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{}`)),
+		"the empty body must fail (FR-042, minProperties 1)")
 
-func TestContract_RetentionUpdateResponse_Differentiation(t *testing.T) {
-	f1 := FixtureRetentionUpdateResponse_Populated()
-	f2 := FixtureRetentionUpdateResponse_Edge()
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"enabled vs disabled retention must produce different JSON")
+	// Range bounds: 0/366 and 731 are outside the write ranges (FR-042,
+	// D-1 rows 2/6, D-2 row 5).
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"session_days":0}`)),
+		"session_days 0 is below the 1–365 range (FR-042)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"session_days":366}`)),
+		"session_days 366 is above the 1–365 range (FR-042)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"memory_retros_days":731}`)),
+		"memory_retros_days 731 is above the 1–730 range (FR-042)")
+	// Validated whenever sent, also while forever is on (D-2 row 7).
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"memory_retros_forever":true,"memory_retros_days":999}`)),
+		"days are validated whenever sent, also while forever is on (FR-042, D-2 row 7)")
+
+	// additionalProperties: false — keep_everything_forever (the read-only
+	// legacy member) and unknown fields must fail (FR-042).
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"keep_everything_forever":true}`)),
+		"keep_everything_forever is read-only (FR-042, D-2 row 9)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RetentionSettingsUpdate", []byte(`{"extra":1}`)),
+		"an unknown field must fail the closed write shape (FR-042, D-2 row 11)")
 }
 
 // ── AgentToolsResponse ────────────────────────────────────────────────────────

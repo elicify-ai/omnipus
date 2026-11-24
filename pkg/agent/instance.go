@@ -441,6 +441,10 @@ func (nai *newAgentInstance) prepareIdentity() {
 	// control to change it, because the per-agent permissions screen lists the
 	// execution registry. The gate went with the sentinel — whether an agent may
 	// remember is its tool policy, like every other tool.
+	// FR-050: recall reads reflections as far back as retention keeps them.
+	if mem := nai.contextBuilder.Memory(); mem != nil {
+		mem.SetRetroRecallWindow(nai.cfg.Storage.Retention)
+	}
 	memAdapter := NewMemoryStoreAdapter(nai.contextBuilder.Memory())
 	nai.toolsRegistry.Register(tools.NewRememberTool(memAdapter, nil))
 	nai.toolsRegistry.Register(tools.NewRecallMemoryTool(memAdapter))

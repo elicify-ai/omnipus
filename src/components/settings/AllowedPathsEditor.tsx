@@ -3,6 +3,7 @@ import { Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { settingsRow } from './settingsSections'
 
 // Read-only badge with tooltip for allowed_paths rows.
 // Deliberately a <span>, not a <button>: it performs no action (no onClick,
@@ -49,6 +50,8 @@ interface AllowedPathsEditorProps {
   onNewPathChange: (v: string) => void
   onAdd: () => void
   addError: string | null
+  /** Restart and Password badges next to the heading (FR-025). */
+  badges?: React.ReactNode
 }
 
 export function AllowedPathsEditor({
@@ -60,11 +63,13 @@ export function AllowedPathsEditor({
   onNewPathChange,
   onAdd,
   addError,
+  badges,
 }: AllowedPathsEditorProps) {
   return (
-    <div className="space-y-[var(--space-2)]">
-      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
-        Filesystem paths the sandbox may read
+    <div className="space-y-[var(--space-2)]" {...settingsRow('Allowed folders')}>
+      <p className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
+        Allowed folders
+        {badges}
       </p>
 
       {paths.length === 0 && (

@@ -1,12 +1,16 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Globe, ArrowsClockwise, Warning, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { fetchExecProxyStatus, updateConfig, getErrorMessage } from '@/lib/api'
-import { RestartConfirmDialog } from '@/components/ui/RestartConfirmDialog'
-import { useUiStore } from '@/store/ui'
+import { fetchExecProxyStatus, updateConfig } from '@/lib/api'
+import { checkFormPart, toWriteResponse, type PartCheck } from './saveOutcome'
+import { useSectionSavePart } from './SectionSaveScope'
+import type { FormSavePart } from './useFormSaveBar'
+
+const PROXY_LABEL = 'Network proxy for shell commands'
 
 // ── Status indicator ──────────────────────────────────────────────────────────
 
@@ -45,13 +49,13 @@ const STATUS_CONFIG: Record<
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ExecProxyStatusCard(): React.ReactElement {
-  const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
   const {
     data,
     isLoading,
     isError,
+    error,
     refetch,
     isFetching,
   } = useQuery({
@@ -60,49 +64,57 @@ export function ExecProxyStatusCard(): React.ReactElement {
     refetchInterval: 10_000,
   })
 
-  // Track whether we have a pending toggle intent waiting for dialog confirmation
-  const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null)
-  const [restartPending, setRestartPending] = useState(false)
-
-  const { mutate: saveProxyEnabled, isPending: isSaving } = useMutation({
-    mutationFn: (enabled: boolean) =>
-      updateConfig({ tools: { exec: { enable_proxy: enabled } } }),
-    onSuccess: (_result, enabled) => {
-      setRestartPending(true)
-      setPendingEnabled(null)
-      addToast({
-        message: `SSRF proxy ${enabled ? 'enabled' : 'disabled'}. Restart the Omnipus gateway to apply.`,
-        variant: 'success',
-      })
-      queryClient.invalidateQueries({ queryKey: ['exec-proxy-status'] })
-      queryClient.invalidateQueries({ queryKey: ['config'] })
+  // CR-02 / FR-010 / C-4: the switch is a draft on Sandbox & network's one
+  // Save bar. Save writes tools.exec.enable_proxy through PUT /config (a
+  // partial update: other exec settings stay); the change needs a gateway
+  // restart, which the shared Save offers afterwards.
+  const [draft, setDraft] = useState<boolean | null>(null)
+  // The value stored by this page's last Save: the running status keeps the
+  // old value until the gateway restarts.
+  const [storedBySave, setStoredBySave] = useState<boolean | null>(null)
+  const saved = storedBySave ?? data?.enabled ?? false
+  const changed = draft !== null && !!data && draft !== saved
+  const sent = useRef<{ value: boolean; before: boolean } | null>(null)
+  const readFailed = useRef(false)
+  readFailed.current = isError
+  const part: FormSavePart = {
+    id: 'exec-proxy',
+    count: changed ? 1 : 0,
+    invalidCount: 0,
+    blocked: () => readFailed.current,
+    restartLabels: changed ? [PROXY_LABEL] : [],
+    write: () => {
+      const value = draft as boolean
+      sent.current = { value, before: saved }
+      return toWriteResponse(() => updateConfig({ tools: { exec: { enable_proxy: value } } }))
     },
-    onError: (err: unknown) => {
-      const msg = getErrorMessage(err, 'Save failed')
-      setPendingEnabled(null)
-      addToast({ message: `Failed to save proxy setting: ${msg}`, variant: 'error' })
+    check: async (): Promise<PartCheck> => {
+      const s = sent.current
+      if (!s) return { kind: 'unknown' }
+      return checkFormPart(
+        [{ key: 'tools.exec.enable_proxy', label: PROXY_LABEL, draft: s.value, before: s.before }],
+        async () => (await fetchExecProxyStatus()).enabled,
+      )
     },
-  })
-
-  function handleToggle(nextEnabled: boolean) {
-    setPendingEnabled(nextEnabled)
+    onOutcome: (outcome) => {
+      if (outcome.kind !== 'saved' && outcome.kind !== 'saved-not-in-use') return
+      const s = sent.current
+      if (s) setStoredBySave(s.value)
+      // A choice made while this Save was running stays a draft.
+      setDraft((d) => (s && d === s.value ? null : d))
+      void queryClient.invalidateQueries({ queryKey: ['exec-proxy-status'] })
+      void queryClient.invalidateQueries({ queryKey: ['config'] })
+    },
+    discard: () => setDraft(null),
   }
-
-  function handleDialogConfirm() {
-    if (pendingEnabled !== null) {
-      saveProxyEnabled(pendingEnabled)
-    }
-  }
-
-  function handleDialogCancel() {
-    setPendingEnabled(null)
-  }
+  const { outcome, ownBar } = useSectionSavePart(part)
+  const restartPending = storedBySave !== null && data !== undefined && storedBySave !== data.enabled
 
   const status = data ? resolveStatus(data.enabled, data.running) : null
   const cfg = status ? STATUS_CONFIG[status] : null
 
   // Optimistically reflect the pending toggle in the switch; fall back to server value
-  const switchChecked = pendingEnabled !== null ? pendingEnabled : (data?.enabled ?? false)
+  const switchChecked = draft ?? saved
 
   return (
     <section className="space-y-[var(--space-2-5)]">
@@ -140,20 +152,22 @@ export function ExecProxyStatusCard(): React.ReactElement {
           </div>
           <Switch
             checked={switchChecked}
-            onCheckedChange={handleToggle}
-            disabled={isLoading || isSaving}
+            onCheckedChange={(next) => setDraft(next)}
+            disabled={isLoading || !data}
           />
         </div>
 
         {isLoading ? (
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Checking...</p>
         ) : isError ? (
-          <div className="flex items-center gap-[var(--space-2)]">
-            <XCircle size={14} style={{ color: 'var(--color-error)' }} />
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
-              Failed to reach backend
-            </p>
-          </div>
+          <ReadErrorCallout
+            title="Failed to load the proxy status"
+            error={error}
+            onRetry={() => void refetch()}
+            retrying={isFetching}
+            blocksSaving={false}
+            data-testid="exec-proxy-load-error"
+          />
         ) : data && cfg ? (
           <>
             {/* Status row */}
@@ -196,12 +210,8 @@ export function ExecProxyStatusCard(): React.ReactElement {
         </p>
       </Card>
 
-      <RestartConfirmDialog
-        open={pendingEnabled !== null}
-        onConfirm={handleDialogConfirm}
-        onCancel={handleDialogCancel}
-        saving={isSaving}
-      />
+      {outcome}
+      {ownBar}
     </section>
   )
 }

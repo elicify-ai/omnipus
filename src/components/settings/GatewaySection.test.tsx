@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -37,6 +37,7 @@ vi.mock('@/store/ui', () => ({
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
 import { fetchConfig, updateConfig, fetchGatewayStatus, fetchGodMode } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { GatewaySection } from './GatewaySection'
 
@@ -210,14 +211,117 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 
 // ── US-B2: bind_address risky control ────────────────────────────────────────
 
+// ── F03: a newer edit of the same field survives an older in-flight Save ─────
+//
+// Settings redesign #1519 (CHECK F03; FR-010/FR-011/FR-015, spec:1914–1919):
+// unsaved changes stay drafts until explicitly saved or discarded, so
+// completing an OLDER Save must not erase a NEWER edit of the same field.
+// The section rows stay editable while a write is pending, so the case is
+// reachable by a real user.
+
+describe('GatewaySection — a newer edit of the same field survives an older in-flight Save (F03)', () => {
+  it('Save held, Log level edited again, older response released: the newer draft, the count and the next Save body all keep the newer value (FR-010, FR-011, FR-015)', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({}) as never) // log_level: 'info'
+    renderSection()
+    const select = await screen.findByLabelText(/log level/i)
+    await waitFor(() => expect(select).toHaveValue('info'))
+
+    // The older save: info → debug, with its write held in flight.
+    let releaseOld: ((value?: unknown) => void) | null = null
+    vi.mocked(updateConfig).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOld = resolve
+        }) as never,
+    )
+    fireEvent.change(select, { target: { value: 'debug' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateConfig).mock.calls[0][0]).toEqual({ gateway: { log_level: 'debug' } })
+
+    // The newer edit of the SAME field, typed while the older write is
+    // still pending. Log level's options are the gateway's own levels
+    // (debug, info, warn, error — spec :953 names "saved Warn"), so the
+    // newer value is 'warn'.
+    fireEvent.change(screen.getByLabelText(/log level/i), { target: { value: 'warn' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // The older response lands now.
+    await act(async () => {
+      releaseOld?.(makeConfig({}))
+    })
+    // The newer draft must survive the older completion: the field keeps
+    // it, the bar still counts it, and no second write went out.
+    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toHaveValue('warn'))
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateConfig).toHaveBeenCalledTimes(1)
+
+    // The next Save sends the NEWER value — the older save must not have
+    // consumed it.
+    vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({}) as never)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(updateConfig).mock.calls[1][0]).toEqual({ gateway: { log_level: 'warn' } })
+    await screen.findByText(/Saved at/)
+  })
+})
+
+// ── F14: the loading state is text WITH a spinner and Skeleton cards ─────────
+//
+// Settings redesign #1519 (CHECK F14; FR-065 spec:1981): each section shows
+// "Loading <section>…" with a spinner and Skeleton cards until its reads
+// answer. The current Gateway loading branch renders the text div alone, so
+// a text-only loading assertion passes while the required affordances are
+// missing — this test holds the read and observes the primitives.
+
+describe('GatewaySection — loading state (FR-065, FR-075)', () => {
+  it('with the config read held: the loading text with a spinner and Skeleton cards, then the loaded content; the primitives stop under reduced motion (FR-065, FR-075)', async () => {
+    let releaseRead: (() => void) | null = null
+    vi.mocked(fetchConfig).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRead = () => resolve(makeConfig({}))
+        }) as never,
+    )
+    renderSection()
+    // FR-065: the loading state names the section…
+    expect(await screen.findByText('Loading Gateway…')).toBeInTheDocument()
+    // …and shows the loading PRIMITIVES, not the text alone (CHECK F14).
+    // The kit Skeleton becomes visible past the loading-visibility delay
+    // token, so the primitives are observed after that window.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const spinner = document.querySelector('.animate-spin')
+    expect(spinner, 'FR-065: the loading state must show a spinner, not only text').not.toBeNull()
+    const skeletons = document.querySelectorAll('[class*="skeleton-shimmer"]')
+    expect(skeletons.length, 'FR-065: the loading state must show Skeleton cards').toBeGreaterThanOrEqual(1)
+    // FR-075: under reduced motion the spinner rotation and the Skeleton
+    // pulse/shimmer MUST stop. jsdom cannot observe the computed animation,
+    // so the assertion is the motion-reduce classes that generate it — the
+    // kit tests' established jsdom pattern (spinner.test/skeleton.test).
+    expect(spinner?.getAttribute('class')).toContain('motion-reduce:animate-none')
+    expect(skeletons[0].getAttribute('class')).toContain('motion-reduce:animate-none')
+    expect(skeletons[0].getAttribute('class')).toContain('motion-reduce:transition-none')
+
+    // The read answers: the loaded content replaces the loading state.
+    await act(async () => {
+      releaseRead?.()
+    })
+    await waitFor(() => expect(screen.getByLabelText(/log level/i)).toBeInTheDocument())
+    expect(screen.queryByText('Loading Gateway…')).not.toBeInTheDocument()
+  })
+})
+
 // ── US-4 / FR-008: Preview toggle (ADR-044, preview-on-main-listener) ────────
 //
-// GatewaySection now routes the toggle through the standard
-// fetchConfig()/updateConfig() path (src/lib/api.ts), so these tests mock
-// the @/lib/api module like every other setting in this file, rather than
-// mocking global.fetch directly.
+// Settings redesign #1519 reconciliation (FR-010): every Gateway value waits
+// for Save changes — the old immediate autosave oracle ("toggling calls
+// updateConfig") is replaced. Toggling stores nothing and counts in the Save
+// bar; Save changes sends the write; the FR-018 saved signal replaces the
+// success toast; a refused Save keeps the draft (FR-015/FR-020), it no
+// longer reverts the toggle.
 
-describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
+describe('GatewaySection — Preview toggle (US-4 / FR-008, one save rule FR-010)', () => {
   beforeEach(() => {
     vi.mocked(updateConfig).mockResolvedValue(makeConfig({}) as never)
   })
@@ -256,7 +360,7 @@ describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
     })
   })
 
-  it('toggling off calls updateConfig with { gateway: { preview_enabled: false } }', async () => {
+  it('toggling off stores nothing until Save changes sends { gateway: { preview_enabled: false } } (FR-010)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: true }) as never)
     renderSection()
 
@@ -267,18 +371,19 @@ describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
     vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({ preview_enabled: false }) as never)
     fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
 
+    // FR-010: the change is NOT stored yet — it waits in the Save bar.
+    expect(updateConfig).not.toHaveBeenCalled()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
     await waitFor(() => {
       expect(updateConfig).toHaveBeenCalledWith({ gateway: { preview_enabled: false } })
     })
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' })
-      )
-    })
+    // FR-018: the saved signal replaces the old success toast.
+    await screen.findByText(/Saved at/)
   })
 
-  it('toggling on calls updateConfig with { gateway: { preview_enabled: true } }', async () => {
+  it('toggling on stores nothing until Save changes sends { gateway: { preview_enabled: true } } (FR-010)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: false }) as never)
     renderSection()
 
@@ -289,12 +394,16 @@ describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
     vi.mocked(updateConfig).mockResolvedValueOnce(makeConfig({ preview_enabled: true }) as never)
     fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
 
+    expect(updateConfig).not.toHaveBeenCalled()
+    await screen.findByText(/1 unsaved change/)
+
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
     await waitFor(() => {
       expect(updateConfig).toHaveBeenCalledWith({ gateway: { preview_enabled: true } })
     })
   })
 
-  it('shows an error toast and reverts the toggle when the save fails', async () => {
+  it('a refused Save keeps the drafted value instead of reverting it (FR-015/FR-020)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ preview_enabled: true }) as never)
     renderSection()
 
@@ -302,29 +411,33 @@ describe('GatewaySection — Preview toggle (US-4 / FR-008)', () => {
       expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'checked')
     })
 
-    vi.mocked(updateConfig).mockRejectedValueOnce(new Error('disk full'))
+    vi.mocked(updateConfig).mockRejectedValueOnce(new ApiError(400, 'nope'))
     fireEvent.click(screen.getByRole('switch', { name: /preview server/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
     await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error' })
-      )
+      expect(updateConfig).toHaveBeenCalledTimes(1)
     })
-
-    // Reverted back to the persisted (checked) state after the failed save.
+    // FR-020 outcome (3), not saved: the draft is kept at its typed value —
+    // the old oracle (revert to the persisted state) is replaced — and the
+    // bar says the change could not be saved (FR-015).
     await waitFor(() => {
-      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'checked')
+      expect(screen.getByRole('switch', { name: /preview server/i })).toHaveAttribute('data-state', 'unchecked')
     })
+    expect(await screen.findByText(/could not be saved/)).toBeInTheDocument()
   })
 })
 
 describe('GatewaySection — bind_address risky control (US-B2)', () => {
-  it('shows standing badge when persisted bind_address is "0.0.0.0"', async () => {
+  // Settings redesign #1519 reconciliation: the old risky-option cards with
+  // their click-time AlertDialog and standing/recommended badges are replaced
+  // — the wireframe renders Bind address as a select, and FR-016 moves the
+  // "Listen on all interfaces?" confirm to Save time, before any write.
+  it('shows the persisted all-interfaces address on the Bind address select (FR-059: the control sits in Gateway)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '0.0.0.0' }) as never)
     renderSection()
     await waitFor(() => {
-      const badges = screen.getAllByTestId('risky-standing-badge')
-      expect(badges.length).toBeGreaterThan(0)
+      expect(screen.getByLabelText(/bind address/i)).toHaveValue('0.0.0.0')
     })
   })
 
@@ -339,26 +452,40 @@ describe('GatewaySection — bind_address risky control (US-B2)', () => {
     }, { timeout: 2000 })
   })
 
-  it('"Localhost only" option has a Recommended pill', async () => {
+  it('the Bind address select offers localhost only and all interfaces (FR-016)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '127.0.0.1' }) as never)
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-127.0.0.1')).toBeInTheDocument()
-    })
-    const pills = screen.getAllByTestId('recommended-pill')
-    expect(pills.length).toBeGreaterThanOrEqual(1)
+    const select = await screen.findByLabelText(/bind address/i)
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.textContent)
+    // The choices are named in plain words (FR-016's own wording: "All
+    // interfaces"), with the address visible beside the name.
+    expect(options).toEqual(expect.arrayContaining([expect.stringMatching(/^Localhost only/), expect.stringMatching(/^All interfaces/)]))
   })
 
-  it('clicking "All interfaces" option opens AlertDialog', async () => {
+  it('choosing All interfaces asks before saving; Cancel stores nothing and keeps the change (FR-016)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '127.0.0.1' }) as never)
     renderSection()
+    const select = await screen.findByLabelText(/bind address/i)
+
+    fireEvent.change(select, { target: { value: '0.0.0.0' } })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
+    // FR-016: the confirm runs before any write — nothing is stored yet.
+    expect(
+      await screen.findByText('Listen on all interfaces?'),
+      'FR-016: the "Listen on all interfaces?" confirm must open before any write',
+    ).toBeInTheDocument()
+    expect(updateConfig).not.toHaveBeenCalled()
+
+    // Cancel keeps every change and stores nothing.
+    fireEvent.click(screen.getByRole('button', { name: /keep localhost only/i }))
     await waitFor(() => {
-      expect(screen.getByTestId('risky-option-0.0.0.0')).toBeInTheDocument()
+      expect(screen.queryByText('Listen on all interfaces?')).not.toBeInTheDocument()
     })
-    fireEvent.click(screen.getByTestId('risky-option-0.0.0.0'))
-    await waitFor(() => {
-      expect(screen.getByText(/keep localhost only/i)).toBeInTheDocument()
-    })
+    expect(updateConfig).not.toHaveBeenCalled()
+    expect(screen.getByLabelText(/bind address/i)).toHaveValue('0.0.0.0')
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
   })
 })
 

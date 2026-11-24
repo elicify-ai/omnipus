@@ -30,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
@@ -181,6 +182,15 @@ type MemoryStore struct {
 	// persisted records instead of depending on wall-clock time at write (M6).
 	// Always returns UTC. Set via SetClock; never nil after NewMemoryStore.
 	now func() time.Time
+
+	// recallMu guards recallWindow, how far back recall reads reflections
+	// (FR-050; set by SetRetroRecallWindow, nil = never set). See
+	// memory_retro_recall.go.
+	recallMu     sync.Mutex
+	recallWindow *retroRecallWindow
+	// recallSource, when set, is read on every recall search and wins over
+	// recallWindow (SetRetroRecallSource; B2).
+	recallSource func() (config.OmnipusRetentionConfig, bool)
 }
 
 // SetClock overrides the clock used to stamp persisted memory records

@@ -25,8 +25,9 @@ import { AgentMark } from '@/components/agents/AgentMark'
 import { providerBindingCopy } from '@/components/agents/AgentCard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ErrorState } from '@/components/ui/error-state'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ReadErrorCallout } from './ReadErrorCallout'
+import { settingsRow } from './settingsSections'
+import { SectionLoading } from './SectionLoading'
 
 const PURPOSE: Record<(typeof SYSTEM_AGENT_IDS)[number], string> = {
   [JUDGE_AGENT_ID]: 'Checks whether goals and tasks meet their acceptance criteria.',
@@ -41,7 +42,7 @@ const FALLBACK_NAME: Record<(typeof SYSTEM_AGENT_IDS)[number], string> = {
 }
 
 export function SystemAgentsSection(): React.ReactElement {
-  const { data, isPending, isError, refetch } = useQuery({
+  const { data, isPending, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 30_000,
@@ -51,9 +52,9 @@ export function SystemAgentsSection(): React.ReactElement {
     <section className="space-y-[var(--space-3)]" data-testid="settings-system-agents" aria-labelledby="settings-system-agents-heading">
       <div className="flex items-center gap-[var(--space-2)]">
         <Robot size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-        <h2 id="settings-system-agents-heading" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
+        <h3 id="settings-system-agents-heading" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
           System agents
-        </h2>
+        </h3>
       </div>
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         The agents the system itself runs on. They are not part of any team and cannot be deleted.
@@ -61,14 +62,16 @@ export function SystemAgentsSection(): React.ReactElement {
       </p>
 
       {isPending ? (
-        <div className="space-y-[var(--space-2)]" data-testid="system-agents-loading" aria-busy="true">
-          <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading system agents…</p>
-          {SYSTEM_AGENT_IDS.map((id) => (
-            <Skeleton key={id} className="h-[var(--space-7)] w-full" />
-          ))}
-        </div>
+        <SectionLoading label="System agents" cards={SYSTEM_AGENT_IDS.length} data-testid="system-agents-loading" />
       ) : isError && !data ? (
-        <ErrorState message="Could not load the system agents." onRetry={() => void refetch()} />
+        <ReadErrorCallout
+          title="The system agents could not be loaded"
+          error={error}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+          blocksSaving={false}
+          data-testid="system-agents-error"
+        />
       ) : (
         <>
           {isError && (
@@ -94,7 +97,7 @@ function SystemAgentRow({ id, agent }: { id: (typeof SYSTEM_AGENT_IDS)[number]; 
   const binding = agent ? providerBindingCopy(agent) : null
   return (
     <li>
-      <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-2-5)]" data-testid={`system-agent-${id}`}>
+      <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-2-5)]" data-testid={`system-agent-${id}`} {...settingsRow(FALLBACK_NAME[id])}>
         <AgentMark agent={agent} name={name} size={26} />
         <div className="min-w-0 flex-1">
           <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{name}</p>

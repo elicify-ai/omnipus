@@ -1,5 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+/**
+ * SandboxSection tests — Settings redesign #1519 reconciliation (FR-010).
+ *
+ * Covers:
+ * - Allowed folders editor (drafts; Add/Delete stage, Save stores — FR-010/FR-011/FR-015).
+ * - Internal network addresses editor (presets stage drafts; the wildcard
+ *   add asks first, per the wireframe row "asks you to confirm first"; FR-010/FR-016).
+ * - ABI v4 surfaces (read oracles, unchanged by the Save bar).
+ * - Sandbox mode radios (the kernel warning runs at pick time and gates the
+ *   draft; the Enforce draft counts change, password and restart — FR-010/FR-011/FR-025/FR-037).
+ * - The section Save bar replaces the retired per-change "Save the sandbox
+ *   configuration?" confirm (FR-010; the wireframe draws no such dialog).
+ * - Discard returns drafts to the saved values (FR-012), preserving the #142
+ *   property that a control never sticks on an unsaved target and a change
+ *   can always be re-attempted.
+ * - Shell workspace limit (drafts; refused Save keeps the typed value — FR-015/FR-020).
+ *
+ * The old per-change immediate-save oracles ("Add fires updateSandboxConfig
+ * immediately", optimistic write + confirm-cancel revert, error toast +
+ * revert) are replaced by the spec's one save rule; every replaced assertion
+ * cites the FR that replaces it.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -26,23 +49,11 @@ import type { SandboxStatus, SandboxConfigResponse, AppState } from '@/lib/api'
 
 // Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
 // ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
-// edition) equivalent lives in SandboxSection.password.test.tsx.
+// edition) counterpart lives in SandboxSection.password.test.tsx.
 const PLATFORM_APP_STATE = {
   onboarding_complete: true,
   identity: { mode: 'platform', edition: 'hosted', signed_in: true },
 } as AppState
-
-// ADR-0008 ruling 6: every sandbox-config PUT is now preceded by a
-// confirmation naming the change, staged BEFORE the request. Click through it
-// so the save actually fires.
-async function confirmSandboxChange() {
-  const dialog = await screen.findByRole('alertdialog')
-  // The confirm/action button is always the second of the two footer
-  // buttons (Cancel, then Action) — the confirm LABEL differs per setting
-  // (deny patterns / sandbox config / filesystem model / file limit /
-  // sandbox mode), so this helper matches by position, not text.
-  fireEvent.click(within(dialog).getAllByRole('button')[1])
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +61,36 @@ function makeClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+}
+
+// The shell's password prompt is the FR-026 one-per-Save prompt (shell-owned).
+// SettingsShellContext ships with the Save bar, so it is absent from the
+// pre-change tree — a Save that must pass the prompt loads it lazily and
+// fails loudly as BLOCKED RED, never as a collection error.
+let shellCtxModule: (typeof import('./SettingsShellContext')) | null = null
+async function loadShellContext() {
+  if (shellCtxModule) return shellCtxModule
+  try {
+    shellCtxModule = await vi.importActual<typeof import('./SettingsShellContext')>('./SettingsShellContext')
+    return shellCtxModule
+  } catch {
+    throw new Error(
+      'BLOCKED RED (FR-010/FR-026/FR-027, D-8 row 4): the Settings shell context (SettingsShellContext) does not ' +
+        'exist yet — required for the one password prompt per Save (FR-026) and the consent-token write (FR-027)',
+    )
+  }
+}
+
+// FR-026 recorder: one prompt per Save, listing every password-marked value
+// of the Save by its visible label; resolves with the single-use token
+// (FR-027) that the one protected write must carry.
+function promptRecorder() {
+  const prompts: string[][] = []
+  const requestPassword = vi.fn(async (labels: string[]) => {
+    prompts.push(labels)
+    return 'reauth-tok'
+  })
+  return { prompts, requestPassword }
 }
 
 function renderSection() {
@@ -60,6 +101,29 @@ function renderSection() {
     </QueryClientProvider>
   )
   return { ...utils, client }
+}
+
+/** Like renderSection(), but the section saves under the real shell contract. */
+async function renderSectionWithShell(requestPassword: (labels: string[]) => Promise<string | null>) {
+  const { SettingsShellContext } = await loadShellContext()
+  const client = makeClient()
+  return render(
+    <QueryClientProvider client={client}>
+      <SettingsShellContext.Provider
+        value={{
+          announce: () => {},
+          setDraftCount: () => {},
+          offerRestart: () => {},
+          refreshPendingRestart: () => {},
+          requestPassword,
+          saveBarVisible: false,
+          setSaveBarVisible: () => {},
+        }}
+      >
+        <SandboxSection />
+      </SettingsShellContext.Provider>
+    </QueryClientProvider>,
+  )
 }
 
 const baseStatus: SandboxStatus = {
@@ -89,9 +153,9 @@ beforeEach(() => {
   sessionStorage.clear()
 })
 
-// ── describe: allowed_paths editor ───────────────────────────────────────────
+// ── describe: allowed folders editor ──────────────────────────────────────────
 
-describe('allowed_paths editor', () => {
+describe('allowed folders editor', () => {
   it('renders two rows with read-only badges when allowed_paths has two entries', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
@@ -109,70 +173,79 @@ describe('allowed_paths editor', () => {
     expect(roBadges).toHaveLength(2)
   })
 
-  it('shows Filesystem paths the sandbox may read heading', async () => {
+  // The wireframe renames this block to "Allowed folders" and FR-025 names
+  // the row the same way; the old "Filesystem paths the sandbox may read"
+  // heading is replaced by the approved wording.
+  it('shows the Allowed folders heading (FR-025 names the row)', async () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/Filesystem paths the sandbox may read/i)).toBeInTheDocument()
+      expect(screen.getByText('Allowed folders')).toBeInTheDocument()
     })
   })
 
-  it('no Edit button for paths section (autosave — Add/Delete commit immediately)', async () => {
+  it('no Edit button for the folders editor (Add/Delete stage drafts — nothing commits until Save changes, FR-010)', async () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/Filesystem paths the sandbox may read/i)).toBeInTheDocument()
+      expect(screen.getByText('Allowed folders')).toBeInTheDocument()
     })
 
-    // No edit button — editor is always visible for admin
+    // No edit button — the editor is always visible for admin; FR-010 puts
+    // the commit point on the Save bar, not behind an Edit mode.
     expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument()
   })
 
-  it('typing /c in the path input and clicking Add fires updateSandboxConfig immediately', async () => {
+  it('typing counts nothing until Add; Add stages the draft and stores nothing; Save changes sends exactly the changed field (FR-010, FR-011, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a', '/b'],
     })
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
     })
 
+    // FR-011: text in an "Add …" field counts only after Add is pressed.
     const input = screen.getByRole('textbox', { name: /new allowed path/i })
     fireEvent.change(input, { target: { value: '/c' } })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    const addBtn = screen.getByRole('button', { name: /add path/i })
-    fireEvent.click(addBtn)
+    // Add stages the draft (FR-010: nothing is stored yet).
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText('/c')).toBeInTheDocument()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    // Save changes stores it: one prompt (FR-026), one partial write with the
+    // consent token (FR-015/FR-027).
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Allowed folders'])
     await waitFor(() => {
-      expect(screen.getByText('/c')).toBeInTheDocument()
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { allowed_paths: ['/a', '/b', '/c'] },
+        'reauth-tok',
+      ])
     })
-
-    await confirmSandboxChange()
-
-    await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({
-        allowed_paths: ['/a', '/b', '/c'],
-      })
-    })
+    // FR-018: the saved signal replaces the old success toast.
+    await screen.findByText(/Saved at/)
   })
 
-  it('server 400 for relative path displays inline error on the failing row', async () => {
+  it('a refused Save keeps the typed draft and shows the server message under the field; the bar says the change could not be saved (FR-015, FR-020 outcome 3)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['./foo'],
     })
     vi.mocked(updateSandboxConfig).mockRejectedValue(
-      new Error('400: allowed_paths[0]: must be absolute — `./foo` is relative')
+      new ApiError(400, 'allowed_paths[1]: must be absolute — `./foo` is relative'),
     )
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
-    renderSection()
-
-    // Add a new path to trigger a save
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
     })
@@ -180,27 +253,32 @@ describe('allowed_paths editor', () => {
     const input = screen.getByRole('textbox', { name: /new allowed path/i })
     fireEvent.change(input, { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
-    await confirmSandboxChange()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
     await waitFor(() => {
-      const errors = screen.getAllByText(/must be absolute/i)
-      expect(errors.length).toBeGreaterThan(0)
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
+    // FR-015: the server's message under the field, the draft kept at its
+    // typed value, and the bar naming the failure — the old oracle (an inline
+    // error after an immediate write) is replaced by the refused-Save outcome.
+    expect((await screen.findAllByText(/must be absolute/i)).length).toBeGreaterThan(0)
+    expect(await screen.findByText(/1 change could not be saved/)).toBeInTheDocument()
+    expect(screen.getByText('/valid')).toBeInTheDocument()
   })
 
-  it('delete button fires updateSandboxConfig immediately without Save button', async () => {
+  it('Delete stages the draft and stores nothing; Save changes sends exactly the surviving list (FR-010, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a', '/b'],
     })
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByText('/a')).toBeInTheDocument()
     })
 
-    // Delete first path — no Edit mode needed
+    // Delete first path — it leaves the draft list at once.
     const deleteBtn = screen.getByRole('button', { name: /delete path \/a/i })
     fireEvent.click(deleteBtn)
 
@@ -208,16 +286,16 @@ describe('allowed_paths editor', () => {
       expect(screen.queryByText('/a')).not.toBeInTheDocument()
       expect(screen.getByText('/b')).toBeInTheDocument()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    await confirmSandboxChange()
-
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Allowed folders'])
     await waitFor(() => {
-      // Confirm mode (platform edition, ADR-0010 WP3): the second argument
-      // is the consent-token parameter, always undefined here since confirm
-      // mode carries no token.
       expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
-        expect.objectContaining({ allowed_paths: ['/b'] }),
-        undefined,
+        { allowed_paths: ['/b'] },
+        'reauth-tok',
       ])
     })
   })
@@ -245,29 +323,33 @@ describe('allowed_paths editor', () => {
   })
 })
 
-// ── describe: SSRF editor ─────────────────────────────────────────────────────
+// ── describe: internal network addresses editor ───────────────────────────────
 
-describe('SSRF editor', () => {
+describe('internal network addresses editor', () => {
   const RFC1918_LIST = ['127.0.0.1', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7']
   const LOOPBACK_LIST = ['127.0.0.1', '::1']
 
-  it('clicking "Allow RFC1918 + loopback" fires updateSandboxConfig immediately with exact preset list', async () => {
-    renderSection()
+  it('clicking "Allow RFC1918 + loopback" stages the preset draft and stores nothing; Save changes sends the exact list (FR-010, FR-015)', async () => {
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })).toBeInTheDocument()
     })
 
-    const rfc1918Btn = screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })
-    fireEvent.click(rfc1918Btn)
-    await confirmSandboxChange()
+    // The preset click stages the draft (FR-010: nothing is stored yet).
+    fireEvent.click(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Internal network addresses'])
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({
-        ssrf: { allow_internal: RFC1918_LIST },
-      })
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { ssrf: { allow_internal: RFC1918_LIST } },
+        'reauth-tok',
+      ])
     })
   })
 
@@ -332,8 +414,13 @@ describe('SSRF editor', () => {
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('adding 0.0.0.0/0 triggers wildcard confirmation modal; PUT fires only on confirm', async () => {
-    renderSection()
+  // The wireframe's Add-an-address row: "Adding 0.0.0.0/0 or ::/0 (every
+  // address) turns off this protection and asks you to confirm first." The
+  // confirm now gates the DRAFT (FR-010: nothing is stored until Save
+  // changes), and it still runs before any write (FR-016).
+  it('adding 0.0.0.0/0 asks first; confirming stages the draft; only Save changes stores it (FR-010, FR-016)', async () => {
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /advanced \(custom list\)/i })).toBeInTheDocument()
@@ -346,33 +433,31 @@ describe('SSRF editor', () => {
     fireEvent.change(input, { target: { value: '0.0.0.0/0' } })
     fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
 
-    await waitFor(() => {
-      expect(screen.getByText('0.0.0.0/0')).toBeInTheDocument()
-    })
-
-    // Modal should appear immediately (autosave with wildcard check)
-    await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.getByRole('dialog')).toHaveTextContent(/disable ssrf protection/i)
-    })
-
-    // PUT should NOT have fired yet
+    // The confirm runs first — nothing is staged or sent yet (FR-016).
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/disable ssrf protection/i)
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Click Save anyway — the sandbox-config confirmation follows, then the PUT.
-    fireEvent.click(screen.getByRole('button', { name: /save anyway/i }))
-    await confirmSandboxChange()
+    // Confirming makes it a draft — still nothing stored (FR-010).
+    fireEvent.click(screen.getByRole('button', { name: /allow every address/i }))
+    expect(await screen.findByText('0.0.0.0/0')).toBeInTheDocument()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    // Save changes is the only path to a write (FR-010/FR-027).
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Internal network addresses'])
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({
-        ssrf: { allow_internal: expect.arrayContaining(['0.0.0.0/0']) },
-      })
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { ssrf: { allow_internal: ['0.0.0.0/0'] } },
+        'reauth-tok',
+      ])
     })
   })
 
-  it('cancelling wildcard modal prevents PUT from firing', async () => {
+  it('cancelling the wildcard confirm stages nothing and stores nothing (FR-016: Cancel stores nothing)', async () => {
     renderSection()
 
     await waitFor(() => {
@@ -386,42 +471,46 @@ describe('SSRF editor', () => {
     fireEvent.change(input, { target: { value: '0.0.0.0/0' } })
     fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
 
-    await waitFor(() => screen.getByText('0.0.0.0/0'))
-
     await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
+    // The entry never became a draft and nothing was stored (FR-011: the bar
+    // stays hidden with zero changes).
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('clicking "Block all" preset fires updateSandboxConfig immediately with empty allow_internal', async () => {
+  it('clicking "Block all" stages the empty-list draft and stores nothing; Save changes sends it (FR-010, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       ssrf: { allow_internal: LOOPBACK_LIST },
     })
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /block all/i })).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByRole('button', { name: /block all/i }))
-    await confirmSandboxChange()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Internal network addresses'])
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({
-        ssrf: { allow_internal: [] },
-      })
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { ssrf: { allow_internal: [] } },
+        'reauth-tok',
+      ])
     })
   })
 })
@@ -557,9 +646,9 @@ describe('ABI v4 surfaces', () => {
   })
 })
 
-// ── describe: mode radio (autosave — no Edit button) ─────────────────────────
+// ── describe: sandbox mode radios (drafts — FR-010) ───────────────────────────
 
-describe('mode radio', () => {
+describe('sandbox mode radios', () => {
   it('renders three radio options (Off, Permissive, Enforce) with current value pre-selected — no Edit button', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
@@ -581,11 +670,12 @@ describe('mode radio', () => {
       expect(enforceRadio).not.toBeChecked()
     })
 
-    // No Edit button for mode section — autosave
+    // No Edit button for the mode group — the editor is always visible;
+    // FR-010 puts the commit point on the Save bar.
     expect(screen.queryByRole('button', { name: /edit sandbox mode/i })).not.toBeInTheDocument()
   })
 
-  it('selecting enforce when abi_version >= 4 fires the enforce confirmation modal before PUT', async () => {
+  it('picking Enforce asks the kernel-compatibility warning first; confirming stages the draft; only Save changes stores it (FR-010, FR-011, FR-016)', async () => {
     vi.mocked(fetchSandboxStatus).mockResolvedValue({
       ...baseStatus,
       abi_version: 4,
@@ -595,56 +685,68 @@ describe('mode radio', () => {
       ...baseConfig,
       mode: 'permissive',
     })
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
-    renderSection()
-
-    // Radios are always shown for admin — no Edit button needed
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).toBeInTheDocument()
     })
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: enforce/i }))
 
-    // Modal should appear before PUT fires
-    await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
-      expect(screen.getByRole('dialog')).toHaveTextContent(/kernel incompatibility/i)
-    })
+    // The warning runs at pick time — nothing staged or sent yet (FR-016).
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/kernel incompatibility/i)
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Confirm — the sandbox-config confirmation follows, then the PUT fires.
-    fireEvent.click(screen.getByRole('button', { name: /save anyway/i }))
-    await confirmSandboxChange()
+    // Confirming makes it a draft; the bar counts change, password (FR-025)
+    // and restart (FR-037) — still nothing stored (FR-010).
+    fireEvent.click(screen.getByRole('button', { name: /choose enforce anyway/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.getByText(/1 needs your password/)).toBeInTheDocument()
+    expect(screen.getByText(/1 needs a gateway restart/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Sandbox mode'])
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({ mode: 'enforce' })
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { mode: 'enforce' },
+        'reauth-tok',
+      ])
     })
   })
 
-  it('changing mode from off → permissive fires PUT immediately with {mode: "permissive"}', async () => {
+  it('changing mode from off → permissive stages the draft and stores nothing; Save changes sends exactly {mode: "permissive"} (FR-010, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       mode: 'off',
     })
     vi.mocked(updateSandboxConfig).mockResolvedValue({ ...baseConfig, mode: 'permissive', requires_restart: true })
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeInTheDocument()
     })
+    // Only the Enforce pick asks first — Permissive stages its draft at once.
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: permissive/i }))
-    await confirmSandboxChange()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Sandbox mode'])
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalled()
-      const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
-      expect(firstArg).toMatchObject({ mode: 'permissive' })
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+        { mode: 'permissive' },
+        'reauth-tok',
+      ])
     })
   })
 
-  it('cancelling enforce modal reverts radio selection', async () => {
+  it('cancelling the kernel warning leaves no draft; the change can be re-attempted (FR-011, FR-016; the #142 revert property)', async () => {
     vi.mocked(fetchSandboxStatus).mockResolvedValue({
       ...baseStatus,
       abi_version: 4,
@@ -663,31 +765,44 @@ describe('mode radio', () => {
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: enforce/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
 
-    // Cancel — should revert to permissive, PUT not called
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+    // Cancel — the footer's first button (the wireframe names it
+    // "Keep Permissive"; the assert is positional so it pins the behaviour,
+    // not one wording of it).
+    const dialog = screen.getByRole('alertdialog')
+    fireEvent.click(within(dialog).getAllByRole('button')[0])
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
+    // No draft was staged and nothing was stored (FR-011: the bar stays
+    // hidden with zero changes; the radio shows the saved mode).
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
-
-    // Permissive should still be checked
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
+      expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).not.toBeChecked()
     })
+
+    // Recovery: picking Enforce again asks again — the control never sticks
+    // on a dead end (the property bug #142 pinned, under the draft model).
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: enforce/i }))
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent(/kernel incompatibility/i)
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 })
 
-// ── describe: sandbox-config confirmation (ADR-0008 ruling 6) ───────────────
+// ── describe: the section Save (the per-change confirm is retired — FR-010) ──
+//
+// ADR-0008 ruling 6's per-change "Save the sandbox configuration?" confirm is
+// replaced by the section's one Save bar: a change is a draft (FR-010), and
+// the wireframe draws no per-change dialog for this section.
 
-describe('sandbox-config confirmation', () => {
-  // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
-  // the confirm is not the destructive variant.
-  it('shows a confirmation with exactly Cancel and one confirm, and no input', async () => {
+describe('the section Save replaces the per-change confirm (FR-010)', () => {
+  it('Add stages a draft with no per-change confirm dialog (FR-010)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a'],
@@ -702,17 +817,14 @@ describe('sandbox-config confirmation', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
 
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Save the sandbox configuration?')
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
-    expect(screen.getByRole('button', { name: 'Save sandbox configuration' })).toHaveTextContent('Save sandbox configuration')
-    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Save sandbox configuration' }).className).not.toMatch(/color-error/)
-    // Nothing was sent yet.
+    // The draft is staged on the bar; no per-change dialog opens and nothing
+    // is stored (FR-010/FR-011).
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('confirming performs the save', async () => {
+  it('Save changes sends exactly the changed field, carrying the consent token, and shows the saved signal (FR-015, FR-026, FR-027, FR-018)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a'],
@@ -722,8 +834,8 @@ describe('sandbox-config confirmation', () => {
       allowed_paths: ['/a', '/valid'],
       requires_restart: true,
     })
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
@@ -731,25 +843,28 @@ describe('sandbox-config confirmation', () => {
 
     fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
-    await confirmSandboxChange()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Allowed folders'])
     await waitFor(() => {
       expect(vi.mocked(updateSandboxConfig).mock.calls).toEqual([
-        [{ allowed_paths: ['/a', '/valid'], ssrf: { allow_internal: [] } }, undefined],
+        [{ allowed_paths: ['/a', '/valid'] }, 'reauth-tok'],
       ])
     })
+    await screen.findByText(/Saved at/)
   })
 })
 
-// ── describe: CANCEL reverts optimistic state (bug #142 regression) ─────────
+// ── describe: Discard returns drafts to the saved values (FR-012) ────────────
 //
-// Most of these controls apply optimistically before the save is staged. If the
-// operator cancels the confirmation, the optimistic edit must be rolled back —
-// otherwise the radio points at an unsaved target with zero error indicator,
-// and (because handleModeChange early-returns on `mode === currentMode`) there
-// is no way to even re-click the same radio to retry.
-describe('cancelling the confirmation reverts optimistic state', () => {
-  it('cancelling a mode change reverts currentMode to the saved mode (not stuck on the unsaved target)', async () => {
+// The old suite proved the same user-facing property through the retired
+// optimistic-write + confirm-cancel machinery (bug #142): a control must
+// never sit on an unsaved target with no way back, and a change must stay
+// re-attemptable. Under the draft model that property is Discard (FR-012).
+
+describe('Discard returns the drafts to the saved values (FR-012; the #142 revert property)', () => {
+  it('discarding a mode change returns the radio to the saved mode, and the change can be re-attempted', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       mode: 'permissive',
@@ -762,51 +877,31 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     })
     expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
 
+    // The draft shows immediately (FR-010: nothing is stored).
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
-
-    // Optimistic UI: "off" is shown as selected immediately, before the PUT
-    // settles. `hidden: true` because the open confirmation aria-hides the
-    // tree behind it.
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: /sandbox mode: off/i, hidden: true })).toBeChecked()
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // The confirmation opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
-
-    // User cancels instead of confirming.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistic "off" selection must revert to the saved mode
-    // ("permissive") — this is the core bug-142 assertion.
+    // Discard returns the draft to the last saved value (FR-012).
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeChecked()
       expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).not.toBeChecked()
     })
-
-    // No error toast for a user-initiated cancel, and no request fired.
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Recovery check: clicking "off" again must still work now that
-    // currentMode is genuinely back at "permissive" (no same-value
-    // early-return trap left over from the optimistic update).
-    vi.mocked(updateSandboxConfig).mockResolvedValueOnce({ ...baseConfig, mode: 'off', requires_restart: true })
+    // Recovery: the same change is attemptable again.
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
-    await confirmSandboxChange()
-    await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
-    })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('cancelling an allowed-path add reverts pathList to the saved server list', async () => {
+  it('discarding an allowed-folder add removes the drafted row and keeps the saved list', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a'],
@@ -821,42 +916,29 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
 
-    // Optimistic add renders immediately.
+    // The drafted row renders at once.
     await waitFor(() => {
       expect(screen.getByText('/valid')).toBeInTheDocument()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    // The confirmation opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistic '/valid' row must be reverted — it was never persisted.
+    // The drafted '/valid' row is gone — it was never persisted — while the
+    // saved '/a' stays put (FR-012).
     await waitFor(() => {
       expect(screen.queryByText('/valid')).not.toBeInTheDocument()
       expect(screen.getByText('/a')).toBeInTheDocument()
     })
-
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  // SsrfEditor (extracted from SandboxSection in Wave 3, same as
-  // AllowedPathsEditor) shares revertPathsSsrfToServer with the allowed-paths
-  // editor but had zero cancel-revert coverage of its own — the other test
-  // in this block exercises the mode radio, not SsrfEditor's own optimistic
-  // add/revert path.
-  it('cancelling an SSRF allow-internal add reverts ssrfList to the saved server list', async () => {
-    // A single-entry list matches no SSRF_PRESETS (lengths are 0/2/6), so
-    // Advanced mode auto-expands on mount and '127.0.0.1' is visible without
-    // needing to click the "Advanced (custom list)" toggle first.
+  it('discarding an internal-address add removes the drafted entry and keeps the saved list', async () => {
+    // A single-entry list matches no presets (lengths are 0/2/6), so Advanced
+    // mode auto-expands on mount and '127.0.0.1' is visible without needing
+    // to click the "Advanced (custom list)" toggle first.
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1'] },
@@ -872,44 +954,26 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     fireEvent.change(input, { target: { value: '10.0.0.0/8' } })
     fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
 
-    // Optimistic add renders immediately.
     await waitFor(() => {
       expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    // The confirmation opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
-    // User cancels instead of confirming.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistic '10.0.0.0/8' entry must be reverted — it was never
-    // persisted — while the pre-existing saved entry stays put.
+    // The drafted '10.0.0.0/8' entry is gone; the saved entry stays (FR-012).
     await waitFor(() => {
       expect(screen.queryByText('10.0.0.0/8')).not.toBeInTheDocument()
       expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
     })
-
-    // No error toast for a user-initiated cancel, and no request fired.
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  // handlePresetClick routes through the exact same commitPathsSsrfWithWildcardCheck
-  // -> commitPathsSsrf -> saveMutation.mutate machinery as handleAddSsrfEntry
-  // above (SandboxSection.tsx:524-530), and saveMutation.onError's
-  // cancel branch calls the same revertPathsSsrfToServer() — but had zero
-  // cancel-revert coverage of its own.
-  it('cancelling a preset click reverts the active SSRF preset to the saved server state', async () => {
+  it('discarding a preset click returns the active preset to the saved state', async () => {
     // Server state matches "Allow loopback only" — advancedOpen stays
-    // collapsed at mount (mirrors the aria-pressed test earlier in this file).
+    // collapsed at mount.
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1', '::1'] },
@@ -924,49 +988,14 @@ describe('cancelling the confirmation reverts optimistic state', () => {
       )
     })
 
-    // Click a DIFFERENT preset — optimistically flips the active preset and
-    // fires the same commit/save-mutation machinery as the tested add path.
+    // Click a DIFFERENT preset — the draft flips the active preset at once.
     fireEvent.click(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    // Optimistic UI: RFC1918 preset shows pressed immediately, before the PUT
-    // settles. The confirmation is open at this point, and Radix's AlertDialog
-    // marks every OTHER element in the tree `aria-hidden="true"` (via the
-    // `aria-hidden` package's `hideOthers`, since jsdom has no `inert`
-    // support to prefer instead) so assistive tech only sees the dialog.
-    // Because every SegmentedControlItem is a catalogued `Button` — which
-    // renders its own `aria-live` status span next to it for loading
-    // announcements — `hideOthers` walks past that span's kept ancestor
-    // chain and marks each preset BUTTON aria-hidden individually, not just
-    // a container around the whole group (contrast the merge-base's plain,
-    // status-span-free `<button>` elements, which got one aria-hidden
-    // ancestor and stayed queryable by role). `getByRole(..., { hidden:
-    // true })` only widens which elements COUNT toward the query; it never
-    // reaches dom-testing-library's accessible-name computation
-    // (`dom-accessibility-api`), which still treats an element carrying its
-    // own `aria-hidden="true"` as nameless (accname step 2A) regardless of
-    // that option — so `getByRole('button', { name, hidden: true })` finds
-    // zero matches here even though the button is very much in the DOM.
-    // `getByText` has no such filter (it matches raw text content only), so
-    // it reaches the same button node without depending on accessible-name
-    // computation.
-    await waitFor(() => {
-      expect(screen.getByText(/allow rfc1918 \+ loopback/i)).toHaveAttribute('aria-pressed', 'true')
-    })
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
-    // The confirmation opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
-
-    // User cancels instead of confirming.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistic preset switch must revert — active preset goes back to
-    // "Allow loopback only", the never-persisted RFC1918 selection is undone.
+    // The active preset returns to the saved state (FR-012); the never-
+    // persisted RFC1918 selection is undone.
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /allow loopback only/i })).toHaveAttribute(
         'aria-pressed',
@@ -977,25 +1006,16 @@ describe('cancelling the confirmation reverts optimistic state', () => {
         'false',
       )
     })
-
-    // No error toast for a user-initiated cancel, and no request fired.
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 })
 
-describe('cancelling the confirmation reverts optimistic state — deletes', () => {
-
-  // handleDeleteSsrfEntry routes through the exact same commitPathsSsrf ->
-  // saveMutation.mutate machinery as handleAddSsrfEntry above
-  // (SandboxSection.tsx:532-539), and saveMutation.onError's
-  // cancel branch calls the same revertPathsSsrfToServer() — but had zero
-  // cancel-revert coverage of its own.
-  it('cancelling an SSRF entry delete restores the deleted entry from the saved server list', async () => {
-    // Two entries that match no SSRF_PRESETS (lengths are 0/2/6), so Advanced
-    // mode auto-expands on mount and both entries are visible without
-    // clicking the "Advanced (custom list)" toggle first.
+describe('Discard restores a drafted delete (FR-012)', () => {
+  it('discarding an internal-address delete restores the deleted entry from the saved list', async () => {
+    // Two entries that match no presets (lengths are 0/2/6), so Advanced mode
+    // auto-expands on mount and both entries are visible.
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1', '10.0.0.0/8'] },
@@ -1010,33 +1030,21 @@ describe('cancelling the confirmation reverts optimistic state — deletes', () 
 
     fireEvent.click(screen.getByRole('button', { name: /delete ssrf entry 10\.0\.0\.0\/8/i }))
 
-    // Optimistic delete: the entry disappears immediately, before the PUT settles.
+    // The drafted delete removes the row at once.
     await waitFor(() => {
       expect(screen.queryByText('10.0.0.0/8')).not.toBeInTheDocument()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    // The confirmation opens before anything is sent.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
-    // User cancels instead of confirming.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistically deleted '10.0.0.0/8' entry must reappear — the
-    // delete was never persisted — while the untouched entry stays put.
+    // The deleted entry reappears — the delete was never persisted (FR-012).
     await waitFor(() => {
       expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
       expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
     })
-
-    // No error toast for a user-initiated cancel, and no request fired.
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 })
@@ -1083,18 +1091,22 @@ describe('shell workspace limit', () => {
     expect(screen.queryByTestId('workspace-limit-unavailable')).not.toBeInTheDocument()
   })
 
-  it('switching to "any path" PUTs exactly {restrict_to_workspace: false} and nothing else', async () => {
+  it('switching to "any path" stages the draft; Save changes sends exactly {restrict_to_workspace: false} (FR-010, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
     vi.mocked(updateSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(false))
-
-    renderSection()
+    const { prompts, requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
-    await confirmSandboxChange()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(prompts.length).toBe(1))
+    expect(prompts[0]).toEqual(['Shell workspace limit'])
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
@@ -1104,25 +1116,27 @@ describe('shell workspace limit', () => {
     expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ restrict_to_workspace: false })
   })
 
-  it('switching back to "confined" PUTs exactly {restrict_to_workspace: true}', async () => {
+  it('switching back to "confined" stages the draft; Save changes sends exactly {restrict_to_workspace: true} (FR-010, FR-015)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(false))
     vi.mocked(updateSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
-
-    renderSection()
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-on'))
-    await confirmSandboxChange()
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
     expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ restrict_to_workspace: true })
   })
 
-  it('clicking the already-selected option fires no PUT', async () => {
+  it('clicking the already-selected option stages no draft and fires no PUT (FR-011: the bar stays hidden)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
 
     renderSection()
@@ -1132,6 +1146,7 @@ describe('shell workspace limit', () => {
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-on'))
 
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
@@ -1188,7 +1203,7 @@ describe('shell workspace limit', () => {
 
   // ── Failure paths ──────────────────────────────────────────────────────────
 
-  it('cancelling reverts the optimistic selection, and the change can be retried afterwards', async () => {
+  it('discarding a workspace-limit draft returns the saved selection, and the change can be re-attempted (FR-012)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
 
     renderSection()
@@ -1198,55 +1213,59 @@ describe('shell workspace limit', () => {
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
 
-    // Optimistic: the new choice shows before the PUT settles.
+    // The draft shows at once (FR-010: nothing is stored).
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
     })
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
-    // Reverted to the saved server value — otherwise the radio sits on an
-    // unsaved value with no error shown, and the equality guard in the handler
-    // means re-clicking it would not even refire onChange.
+    // Back to the saved value (FR-012) — otherwise the radio would sit on an
+    // unsaved value with no error shown.
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
     })
     expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
     expect(mockAddToast).not.toHaveBeenCalled()
-    // Cancelling means the request was never sent at all.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Recovery: the same change must be attemptable again.
+    // Recovery: the same change must be attemptable again, and Save stores it.
     vi.mocked(updateSandboxConfig).mockResolvedValueOnce(configWithWorkspaceLimit(false))
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
-    await confirmSandboxChange()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
   })
 
-  it('a server error reverts the selection and raises a toast', async () => {
+  it('a refused Save keeps the drafted selection; the bar says the change could not be saved (FR-015, FR-020 outcome 3)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
-    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(500, 'boom'))
-
-    renderSection()
+    // FR-020 outcome 3 is a 4xx REFUSAL (C-6 outcome table, spec :231): a 400
+    // refusal ends "not saved" directly. The old 500 here classified as
+    // outcome 4 (unknown → the saved-state check), whose bar line is the
+    // different "may not have been saved" wording — a 500 was the wrong seam
+    // for the outcome-3 oracle this test pins.
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(400, 'the workspace limit must be a whole number of megabytes'))
+    const { requestPassword } = promptRecorder()
+    await renderSectionWithShell(requestPassword)
 
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
-    await confirmSandboxChange()
+    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
 
     await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error' }),
-      )
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
-    expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
-    expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
+    // FR-015/FR-020: the bar names the failure and the draft is kept at its
+    // typed value — the old oracle (revert to the persisted state + an error
+    // toast) is replaced by the refused-Save outcome.
+    expect(await screen.findByText(/1 change could not be saved/)).toBeInTheDocument()
+    expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
+    expect(screen.getByTestId('sandbox-workspace-limit-on')).not.toBeChecked()
   })
 })
 
@@ -1261,6 +1280,9 @@ describe('sandbox vs workspace-limit copy', () => {
     await waitFor(() => {
       expect(screen.getByTestId('workspace-limit-section')).toBeInTheDocument()
     })
+    // The copy renders while the config read is still in flight; wait for the
+    // control itself so the assertions below see the loaded state.
+    await screen.findByTestId('sandbox-workspace-limit-on')
 
     const section = screen.getByTestId('workspace-limit-section')
     // Its own radio group name — a click here can never move the sandbox mode.
@@ -1283,5 +1305,344 @@ describe('sandbox vs workspace-limit copy', () => {
     expect(
       screen.getByText(/does not switch off the shell workspace limit/i),
     ).toBeInTheDocument()
+  })
+})
+
+// ── F03 on the Sandbox section: a newer draft survives a held saved-state read ─
+//
+// Settings redesign #1519 (C-6 / F03; FR-010, FR-011, FR-020, FR-012). The
+// F03 rule this train pinned on Gateway (a newer edit of the same field
+// survives an older in-flight Save) holds on the Sandbox section too, with
+// one more place a refill can erase a draft: the saved configuration itself
+// changes under the typed draft. FR-020's changed-elsewhere branch (the
+// saved-state check reads a THIRD value) makes the check's section read the
+// new saved base, and FR-010/FR-011 keep every unsaved change a draft until
+// it is explicitly saved or discarded — a draft typed while the Save or its
+// saved-state read is pending is a NEWER draft: not sent, so no answer may
+// reset it. FR-012 still sends Discard to the last saved value known to the
+// screen — the check's read, not the pre-save one.
+describe('Sandbox — a newer draft typed while the saved-state check reads keeps (F03/C-6)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('write unknown and the check read held: the mode drafted meanwhile survives the refill, the untouched values take the read, Discard resets every field (FR-010, FR-011, FR-020, FR-012)', async () => {
+    // The saved configuration the section opens on; the field the older Save
+    // sends is Allowed folders (holds ['/a']).
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a'] })
+
+    // C-6's one wire read is GET /config/pending-restart (the file read): the
+    // sent key is NOT listed there, so the saved value comes from the section
+    // read (C-6, spec :246). Any other wire fetch is a harness bug.
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    // The Save's answer is lost (FR-020 outcome 4: a connection failure is an
+    // unknown result), so the section runs the saved-state check — and the
+    // check's section read is the HELD seam: it answers only when released.
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    // The person stages an Allowed folders add — the value the older Save sends.
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument())
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-a' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // Save: the write rejects (unknown) and the check starts; its read hangs.
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the check read is pending, the person types a NEWER draft into a
+    // field the older Save did not send: Sandbox mode → off.
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+
+    // The read lands now, changed elsewhere: mode enforce (a value the person
+    // never typed) and Allowed folders ['/elsewhere'] — a third value for the
+    // sent field, neither its draft pair nor the pre-save ['/a'] (FR-020).
+    await act(async () => {
+      releaseCheck({ ...baseConfig, mode: 'enforce', allowed_paths: ['/elsewhere'] })
+    })
+
+    // F03: the newer mode draft SURVIVES the refill — the field keeps it and
+    // the bar still counts it alongside the kept sent draft (2 unsaved
+    // changes). The sent field keeps its draft and names the third saved
+    // value in the exact FR-020 line (a list is shown as its JSON).
+    expect(
+      await screen.findByText(
+        'This setting was changed somewhere else while you were saving. Saved value: ["/elsewhere"].',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('radio', { name: /sandbox mode: off/i }),
+      'F03: the draft typed during the pending read must survive it',
+    ).toBeChecked()
+    expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).not.toBeChecked()
+    expect(screen.getByText('/draft-a')).toBeInTheDocument()
+    expect(screen.getByText(/2 unsaved changes/)).toBeInTheDocument()
+
+    // FR-012: Discard still resets EVERY field — to the check's read (the
+    // last saved value known to the screen), not to the pre-save values.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).toBeChecked()
+      expect(screen.getByText('/elsewhere')).toBeInTheDocument()
+      expect(screen.queryByText('/draft-a')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    // The check really consulted the C-6 file read, not the running read alone.
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
+  })
+
+  it('a newer draft on a field the held Save already sent, with a different value, survives the refill too (F03/C-6; FR-010, FR-011, FR-020, FR-012)', async () => {
+    // The first held-read case drives direction one (a field the Save did
+    // not send). This case drives direction two (CHECK R4-04, survivors
+    // N39/N40): while the saved-state check read is held, the person edits
+    // the SENT field itself to a NEWER, different value — Allowed folders
+    // was sent as ['/a', '/draft-a'], and '/draft-b' is typed on top. A
+    // watcher that preserves only previously unsent fields, or that covers
+    // only the mode family, loses this draft.
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a'] })
+
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    // The person stages the Allowed folders add the older Save will send.
+    await waitFor(() => expect(screen.getByText('/a')).toBeInTheDocument())
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-a' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // Save: the write rejects (unknown) and the check starts; its read hangs.
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the read is pending, a NEWER, different value on the SENT field.
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/draft-b' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    expect(screen.getByText('/draft-b')).toBeInTheDocument()
+
+    // The read lands, changed elsewhere: Allowed folders ['/elsewhere'] — a
+    // third value, neither the sent pair nor the newer draft's list.
+    await act(async () => {
+      releaseCheck({ ...baseConfig, mode: 'enforce', allowed_paths: ['/elsewhere'] })
+    })
+
+    // The sent field names its third saved value in the exact FR-020 line.
+    expect(
+      await screen.findByText(
+        'This setting was changed somewhere else while you were saving. Saved value: ["/elsewhere"].',
+      ),
+    ).toBeInTheDocument()
+    // F03, second direction: BOTH drafts survive the refill — the staged
+    // value the Save sent and the newer one typed during the read; the
+    // elsewhere list never reaches the field.
+    expect(screen.getByText('/draft-a')).toBeInTheDocument()
+    expect(
+      screen.getByText('/draft-b'),
+      'F03: the newer, different draft typed on the sent field must survive the pending read',
+    ).toBeInTheDocument()
+    expect(screen.queryByText('/elsewhere')).not.toBeInTheDocument()
+    expect(screen.getByText(/1 unsaved change/)).toBeInTheDocument()
+
+    // FR-012: Discard resets the field to the check's read.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByText('/elsewhere')).toBeInTheDocument()
+      expect(screen.queryByText('/draft-a')).not.toBeInTheDocument()
+      expect(screen.queryByText('/draft-b')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
+  })
+
+  it('the other field families keep their newer drafts across the held read too: filesystem model, shell workspace limit and internal network (F03/C-6; FR-010, FR-011, FR-020, FR-012)', async () => {
+    // CHECK R4-04, survivors N41/N42/N43: the held-read watcher must not be
+    // generalizable from the one field its first case drives. The saved
+    // configuration reports the workspace limit, so its radios render; the
+    // older Save sends Sandbox mode (off) — and while the check read is
+    // held, the person drafts newer values in the THREE families the Save
+    // did not send. Each must survive the refill; Discard must reset every
+    // family to the read.
+    vi.mocked(fetchSandboxConfig).mockResolvedValueOnce({
+      ...baseConfig,
+      restrict_to_workspace: true,
+    } as SandboxConfigResponse)
+
+    const wireCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        const url = String(input)
+        wireCalls.push(url)
+        if (url.includes('/config/pending-restart')) return { ok: true, status: 200, json: async () => [] }
+        throw new Error(`unexpected wire fetch ${url}`)
+      }),
+    )
+
+    let releaseCheck!: (config: SandboxConfigResponse) => void
+    const heldRead = new Promise<SandboxConfigResponse>((resolve) => {
+      releaseCheck = resolve
+    })
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new TypeError('connection lost'))
+    vi.mocked(fetchSandboxConfig).mockImplementationOnce(() => heldRead)
+
+    renderSection()
+
+    await waitFor(() => expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeInTheDocument())
+    // The value the older Save sends: Sandbox mode → off.
+    fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+
+    // While the read is pending: newer drafts in the three unsent families.
+    fireEvent.click(screen.getByTestId('sandbox-fs-model-open'))
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    fireEvent.click(screen.getByRole('button', { name: /advanced \(custom list\)/i }))
+    fireEvent.change(screen.getByRole('textbox', { name: /new ssrf allow entry/i }), { target: { value: '10.0.0.0/8' } })
+    fireEvent.click(screen.getByRole('button', { name: /add ssrf entry/i }))
+    expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+    expect(screen.getByText(/4 unsaved changes/)).toBeInTheDocument()
+
+    // The read lands, changed elsewhere: every family holds a DIFFERENT
+    // saved value than the draft typed over it.
+    await act(async () => {
+      releaseCheck({
+        ...baseConfig,
+        mode: 'enforce',
+        restrict_to_workspace: true,
+        filesystem_model: 'confined',
+        ssrf: { allow_internal: ['192.168.0.0/16'] },
+      } as SandboxConfigResponse)
+    })
+
+    // The SENT field keeps what was sent as its draft on top of the saved
+    // read (FR-012/FR-020: sent drafts stay drafts), and names the saved
+    // value in the exact FR-020 line (a string is shown raw).
+    expect(
+      await screen.findByText('This setting was changed somewhere else while you were saving. Saved value: enforce.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).not.toBeChecked()
+    // Every family's newer draft survives its refill.
+    expect(
+      screen.getByTestId('sandbox-fs-model-open'),
+      'F03: the filesystem-model draft must survive the pending read',
+    ).toBeChecked()
+    expect(
+      screen.getByTestId('sandbox-workspace-limit-off'),
+      'F03: the workspace-limit draft must survive the pending read',
+    ).toBeChecked()
+    expect(
+      screen.getByText('10.0.0.0/8'),
+      'F03: the internal-network draft must survive the pending read',
+    ).toBeInTheDocument()
+    expect(screen.queryByText('192.168.0.0/16')).not.toBeInTheDocument()
+    expect(screen.getByText(/4 unsaved changes/)).toBeInTheDocument()
+
+    // FR-012: Discard resets EVERY family — the sent draft included — to
+    // the check's read.
+    fireEvent.click(screen.getByRole('button', { name: /discard/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: enforce/i })).toBeChecked()
+      expect(screen.getByTestId('sandbox-fs-model-confined')).toBeChecked()
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+      expect(screen.getByText('192.168.0.0/16')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/unsaved change/)).not.toBeInTheDocument()
+    expect(wireCalls.some((u) => u.includes('/config/pending-restart'))).toBe(true)
+  })
+})
+
+// ── Retired help text: the section names the rules that still apply (ADR-092) ─
+//
+// The shell command-text block list is a RETIRED surface — ADR-092 deleted it
+// outright (root CLAUDE.md, "Retired surfaces"; the guard
+// scripts/check-no-shell-deny-patterns.sh exists because it must stay gone).
+// docs/security.md "Shell command rules" is where the surviving control is
+// specified: shell command rules are allow/ask/deny decisions for one program
+// that live in the `sandbox.command_rules` array inside the configuration
+// file, written there by hand — "There is no screen for this". So where the
+// Sandbox section tells the reader which protections survive a choice, it
+// must name the shell command rules in the configuration file, and must never
+// name the deleted "blocked command patterns" (help text that names a deleted
+// control sends the reader looking for a setting that does not exist).
+describe('retired help text — the section names the shell command rules, never the retired block list (ADR-092)', () => {
+  it('the Off mode names the shell command rules in the configuration file and never the retired blocked command patterns', async () => {
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeInTheDocument()
+    })
+
+    // The Off option's own block (its label and its description).
+    const offOption = screen.getByRole('radio', { name: /sandbox mode: off/i }).closest('label')
+    expect(offOption, 'ADR-092: the Off description must name the shell command rules').toHaveTextContent(
+      /shell command rules/i,
+    )
+    expect(offOption, 'docs/security.md: the rules live in the configuration file').toHaveTextContent(
+      /configuration file/i,
+    )
+    expect(
+      offOption?.textContent,
+      'ADR-092: the block list is deleted — no help text may name it',
+    ).not.toMatch(/blocked command patterns/i)
+  })
+
+  it('the Any path option names the shell command rules in the configuration file and never the retired blocked command patterns', async () => {
+    // restrict_to_workspace present, so the workspace-limit radios render
+    // (the Any path option is one of them).
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeInTheDocument()
+    })
+
+    const anyPathOption = screen.getByTestId('sandbox-workspace-limit-off').closest('label')
+    expect(anyPathOption, 'ADR-092: the Any path description must name the shell command rules').toHaveTextContent(
+      /shell command rules/i,
+    )
+    expect(anyPathOption, 'docs/security.md: the rules live in the configuration file').toHaveTextContent(
+      /configuration file/i,
+    )
+    expect(
+      anyPathOption?.textContent,
+      'ADR-092: the block list is deleted — no help text may name it',
+    ).not.toMatch(/blocked command patterns/i)
   })
 })

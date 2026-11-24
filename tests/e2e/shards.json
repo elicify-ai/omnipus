@@ -100,7 +100,8 @@
         "tests/e2e/uat-audit-and-settings.spec.ts",
         "tests/e2e/side-panel-expand-multitab.spec.ts",
         "tests/e2e/workspace-header-standalone.spec.ts",
-        "tests/e2e/chat-header-narrow.spec.ts"
+        "tests/e2e/chat-header-narrow.spec.ts",
+        "tests/e2e/settings-row-jump-motion.spec.ts"
       ]
     },
     {
@@ -114,6 +115,7 @@
         "tests/e2e/steered-session-stop.spec.ts",
         "tests/e2e/mail-panel.spec.ts",
         "tests/e2e/steered-midturn-tool-rows.spec.ts",
+        "tests/e2e/settings-redesign.spec.ts",
         "tests/e2e/export-import-b1.spec.ts"
       ]
     },

@@ -26,7 +26,7 @@ Each entry in `providers` names an exact provider ID and a model ID offered by t
 }
 ```
 
-`api_key_ref` names a credential saved in the encrypted Credential Vault, not the key itself. Add it through **Settings → Security → Credential Vault**. Never put a plaintext key in the configuration.
+`api_key_ref` names a credential saved in the encrypted Credential Vault, not the key itself. Add it through **Settings → Keys & secrets**. Never put a plaintext key in the configuration.
 
 ## Endpoint and authentication choices
 

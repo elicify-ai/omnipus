@@ -116,10 +116,14 @@ type restAPI struct {
 	// cannot form below the facade.
 	mailSessions     *email.MailSessions
 	mailSessionsOnce sync.Once
-	configMu         sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	packages         packageState        // agent package staging registry and audit fallback (rest_packages.go)
-	taskStore        *task.Store         // unified task persistence
-	taskExecutor     *agent.TaskExecutor // task execution engine
+	configMu         sync.Mutex   // guards safeUpdateConfigJSON (read-modify-write cycle)
+	packages         packageState // agent package staging registry and audit fallback (rest_packages.go)
+	// applyFailed lists hot-reloaded keys whose last save did not apply
+	// since boot (Settings redesign #1519, FR-062); read by
+	// HandlePendingRestart. Zero value is ready to use.
+	applyFailed  applyFailedRegistry
+	taskStore    *task.Store         // unified task persistence
+	taskExecutor *agent.TaskExecutor // task execution engine
 
 	// outboundDedicatedWrite is true only while applyOutboundChange's save
 	// runs (guarded by configMu): the outbound guard then keeps the
@@ -865,6 +869,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// authenticated user (A2/G-02 — not admin-only because recap and retention
 	// settings are non-sensitive operational knobs without blast-radius risk).
 	rae.cm.RegisterHTTPHandler("/api/v1/settings/memory", rae.a.withAuth(rae.a.HandleMemorySettings))
+	// Retention settings (Settings redesign #1519, C-3): the only write path
+	// for storage.retention. withAuth + RequireNotBypass (adminWrap) because
+	// these values delete data on a schedule; no password step.
+	rae.cm.RegisterHTTPHandler("/api/v1/settings/retention", rae.a.adminWrap(rae.a.HandleRetentionSettings))
 	// Settings -> Third-party agents (tool-parity spec r17 §3.3): signed-in
 	// person only, behind the shared T11 slice A check — no session 401, a
 	// CLI token or a non-person identity 403, no password step — and, for
@@ -912,7 +920,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	rae.cm.RegisterHTTPHandler("/api/v1/security/rate-limits", rae.a.adminWrap(rae.a.HandleRateLimits))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", rae.a.adminWrap(rae.a.HandleSandboxConfig))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/session-scope", rae.a.adminWrap(rae.a.HandleSessionScope))
-	rae.cm.RegisterHTTPHandler("/api/v1/security/retention", rae.a.adminWrap(rae.a.HandleRetention))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", rae.a.adminWrap(rae.a.HandleRetentionSweep))
 	rae.cm.RegisterHTTPHandler("/api/v1/performance", rae.a.adminWrap(rae.a.HandlePerformance))
 	// #904 D11: read-only lowering preview — the same gate as GET
@@ -931,9 +938,13 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// GET /api/v1/credentials — even though plaintext is not returned, the
 	// credential ref names reveal what integrations exist, so this is gated
 	// behind authentication.
-	// Chain: withAuth (verifies token) → handler.
-	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
-	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
+	// Chain: withAuth (verifies token) → credentialDeleteBypassGate → handler.
+	// DELETE of a stored key needs no password (FR-056 / C-5) but keeps the
+	// dev-mode-bypass exclusion (RequireNotBypass → 503).
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials",
+		rae.a.withAuth(credentialDeleteBypassGate(rae.a.HandleCredentials)))
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials/",
+		rae.a.withAuth(credentialDeleteBypassGate(rae.a.HandleCredentials)))
 	// Agent packages (epic #1094 S1a, FR-045): local mode only.
 	if config.EditionAuthMode() == config.AuthModeLocal {
 		rae.a.registerPackageRoutes(rae.cm)
