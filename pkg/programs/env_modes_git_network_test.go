@@ -68,11 +68,13 @@ func TestProgramGitHelper_ResetChain(t *testing.T) {
 	// positive old-helper control, exact credential fields and no operations.
 
 	t.Run("S20_no_token_in_config_or_arguments", func(t *testing.T) {
-		// GREEN asserts here (spec S-20): git push to a local HTTPS receiver
-		// that only accepts x-access-token:tok_valid_12345 → the push
-		// succeeds, the receiver recorded x-access-token, and no git config
-		// file, remote URL or observed argument list contains the token.
-		t.Fatal("BLOCKED: real local HTTPS Git receiver, actual agent-driven git push and complete config/remote-URL/argv observations are not implemented in this fixture. S19 credential fill and S88's externally faked push are not an authenticated Git transfer; S88's narrower boundary authorization does not extend to S20; individual author-fixture dispute H48 — required by S-20/FR-013")
+		// Original-name runtime oracle moved intact to agent's exact same
+		// top/scenario name in programs_git_https_push_test.go after actual
+		// pre-fix05ce8 RED and fixedcfce GREEN. It drives the real loop/HTTPS
+		// transfer/account/config/URL/argv and both cwd-refusal controls.
+		// This retained row is ONLY a loud exact build/name-selection guard;
+		// execute the agent leaf separately for S20 product acceptance.
+		requireS20RealLoopLeaf(t)
 	})
 
 	// S88_new_git_gets_the_helper migrated intact to
