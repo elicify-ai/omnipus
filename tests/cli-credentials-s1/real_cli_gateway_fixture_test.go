@@ -131,7 +131,9 @@ func newRealGatewayFixture(t *testing.T, bin string) *realGatewayFixture {
 	home := t.TempDir()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
+	tcpAddr, isTCP := listener.Addr().(*net.TCPAddr)
+	require.True(t, isTCP, "the loopback listener reports a TCP address")
+	port := tcpAddr.Port
 	require.NoError(t, listener.Close())
 	hash, err := bcrypt.GenerateFromPassword([]byte("s1-real-person-password"), bcrypt.DefaultCost)
 	require.NoError(t, err)
@@ -161,8 +163,8 @@ func newRealGatewayFixture(t *testing.T, bin string) *realGatewayFixture {
 	f.client = &http.Client{Jar: jar, Timeout: 10 * time.Second}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		response, err := f.client.Get(f.base + "/health")
-		if err == nil {
+		response, getErr := f.client.Get(f.base + "/health")
+		if getErr == nil {
 			_ = response.Body.Close()
 			break
 		}

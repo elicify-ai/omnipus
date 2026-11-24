@@ -26,8 +26,8 @@ func Snapshot(t testing.TB, s *credentials.Store, receiptIDs ...string) State {
 	require.NoError(t, err)
 	out := State{Values: map[string]string{}, Generations: map[string]int64{}, Receipts: map[string]*credentials.CardReceipt{}}
 	for _, name := range names {
-		value, err := s.Get(name)
-		require.NoError(t, err, "snapshot decrypts %s", name)
+		value, getErr := s.Get(name)
+		require.NoError(t, getErr, "snapshot decrypts %s", name)
 		out.Values[name] = value
 		if gen, ok := s.ProgramEntryGeneration(name); ok {
 			out.Generations[name] = gen
