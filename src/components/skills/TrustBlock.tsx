@@ -23,7 +23,7 @@ export function TrustBlock({ queue, disabled }: { queue: PermissionSaveQueue; di
       className="flex flex-col gap-[var(--space-2)] rounded-md border border-[var(--color-border)] p-[var(--space-3)]"
     >
       <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
-        <h3 id="trust-block-title" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-text)]">
+        <h3 id="trust-block-title" className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">
           Unverified skills
         </h3>
         <div className="flex items-center gap-[var(--space-1)]">
@@ -43,7 +43,7 @@ export function TrustBlock({ queue, disabled }: { queue: PermissionSaveQueue; di
       <dl className="grid grid-cols-[auto_1fr] gap-x-[var(--space-2)] gap-y-[var(--space-1)] text-[length:var(--type-caption-size)]">
         {POLICIES.map((choice) => (
           <div key={choice} className="contents">
-            <dt className="font-medium text-[var(--color-text)]">{POLICY_WORDS[choice]}</dt>
+            <dt className="font-medium text-[var(--color-secondary)]">{POLICY_WORDS[choice]}</dt>
             <dd className="text-[var(--color-muted)]">{MEANINGS[choice]}</dd>
           </div>
         ))}

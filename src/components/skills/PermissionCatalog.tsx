@@ -180,7 +180,7 @@ export function PermissionCatalog({
               <section key={group.id} data-group-id={group.id} className="rounded-md border border-[var(--color-border)] px-[var(--space-2)]">
                 <div className="flex items-center gap-[var(--space-2)]">
                   <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} data-group-header="">
-                    <span className="font-medium text-[var(--color-text)]">{group.label}</span>
+                    <span className="font-medium text-[var(--color-secondary)]">{group.label}</span>
                     <span className="text-[var(--color-muted)]">{active ? `${group.rows.length} of ${group.items.length}` : group.items.length}</span>
                   </DisclosureRow>
                   {open && groupActions?.(group.id)}

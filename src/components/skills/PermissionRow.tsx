@@ -80,7 +80,7 @@ export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, o
     >
       <div className="flex flex-wrap items-start justify-between gap-[var(--space-2)]">
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-text)] wrap-anywhere">{item.label}</div>
+          <div className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] wrap-anywhere">{item.label}</div>
           {item.description && (
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] wrap-anywhere">{item.description}</p>
           )}

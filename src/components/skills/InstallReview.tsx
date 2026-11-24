@@ -90,7 +90,7 @@ export function InstallReview({ review, outcome, installing = false, onInstall, 
       className="flex flex-col gap-[var(--space-2)] rounded-md border border-[var(--color-border)] p-[var(--space-3)]"
     >
       <div className="flex flex-wrap items-baseline gap-[var(--space-2)]">
-        <h3 className="font-mono text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-text)]">{review.skillName}</h3>
+        <h3 className="font-mono text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">{review.skillName}</h3>
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{review.version}</span>
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {review.verified ? 'Verified' : 'Unverified'}
