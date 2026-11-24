@@ -152,7 +152,7 @@ func projectSkillsByWorkspace(home string) map[string][]string {
 		for _, m := range mounts {
 			found, _ := skills.DiscoverProjectSkills(m.Name, m.HostPath)
 			for _, ps := range found {
-				seen[config.ProjectSkillKey(w, ps.Name)] = struct{}{}
+				seen[config.ProjectSkillKey(w, ps.ID)] = struct{}{}
 			}
 		}
 		if len(seen) > 0 {

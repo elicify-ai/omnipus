@@ -212,6 +212,18 @@ func (t *AgentGetTool) detail(ctx context.Context, args map[string]any, selected
 		}
 		full["tool_permissions"] = perms
 	}
+	if slices.Contains(selected, "skill_permissions") {
+		rows, err := t.deps.skillPermissionRows(home, state.Agent)
+		if err != nil {
+			logger.ErrorCF("sysagent", "get_agent: skill permission read failed", map[string]any{
+				"agent_id": state.Agent.ID, "error": err.Error(),
+			})
+			return nil, tools.ErrorResult(errorJSON("SKILL_STATUS_UNAVAILABLE",
+				"could not read the agent's skill permissions: server storage or configuration failed. Details are in the server log.",
+				agentReadRecovery))
+		}
+		full["skill_permissions"] = rows
+	}
 	return full, nil
 }
 

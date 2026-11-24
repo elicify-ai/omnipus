@@ -39,7 +39,7 @@ func (e *FieldError) Error() string {
 
 var knownFields = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
-	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
+	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {},
 	"reasoning_effort": {}, // the primary model's effort (effort-levels spec FR-048)
@@ -55,10 +55,10 @@ var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
 var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}, "agent_md": {}}
 var hiddenProtected = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
-	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
+	"tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
-	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
+	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "memory_enabled": {},
 	"voice": {}, "context_window_override": {}, "model_params": {}, "fallback_models": {},
 	"agent_md": {},
 	// max_tool_iterations is supported (#904 D14): an external CLI worker

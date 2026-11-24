@@ -158,11 +158,16 @@ func SkillCategoryOf(skillsDir, slug string) (string, error) {
 // check. A skill that cannot be read counts as unverified.
 func SkillVerified(skillsDir, slug string) (verified bool, revision string, err error) {
 	revision, err = ContentRevision(filepath.Join(skillsDir, slug))
+	if IsBuiltin(slug) {
+		// Built-ins ship in the binary: verified whether or not the boot
+		// sync has written their folder yet.
+		if errors.Is(err, ErrNotFound) {
+			return true, "", nil
+		}
+		return err == nil, revision, err
+	}
 	if err != nil {
 		return false, "", err
-	}
-	if IsBuiltin(slug) {
-		return true, revision, nil
 	}
 	rec, ok, err := ReadInstallRecord(skillsDir, slug)
 	if err != nil {

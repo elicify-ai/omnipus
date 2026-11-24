@@ -155,10 +155,11 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"maximum":     1000,
 				"description": "Max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Omit to use the global limit.",
 			},
-			"skills":              skillsParameters(false),
-			"mcp_servers":         mcpServersParameters(),
-			"tool_policy_changes": toolPolicyChangesParameters(),
-			"memory_enabled":      map[string]any{"type": "boolean"},
+			"skills":               skillsParameters(false),
+			"mcp_servers":          mcpServersParameters(),
+			"tool_policy_changes":  toolPolicyChangesParameters(),
+			"skill_policy_changes": skillPolicyChangesParameters(true),
+			"memory_enabled":       map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
@@ -483,6 +484,20 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory(),
 		ac.t.deps.agentDefaults()); err != nil {
 		return fieldErrorResult(err), true
+	}
+	if _, present := ac.args[skillPolicyChangesField]; present {
+		home, err := resolveOmnipusHome(ac.t.deps.Home)
+		if err != nil {
+			return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), "")), true
+		}
+		// The new agent is mounted on its destination workspace only (C-23).
+		mounted := map[string]bool{}
+		if ac.target.ID != "" {
+			mounted[ac.target.ID] = true
+		}
+		if err := applySkillPolicyArgs(&ac.newAgent, ac.args, home, ac.t.deps.globalSkillPolicies(), mounted, true); err != nil {
+			return fieldErrorResult(err), true
+		}
 	}
 	return nil, false
 }

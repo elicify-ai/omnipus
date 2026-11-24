@@ -32,7 +32,7 @@ type AgentPermissionsTool struct{ deps *Deps }
 func NewAgentPermissionsTool(d *Deps) *AgentPermissionsTool { return &AgentPermissionsTool{deps: d} }
 
 var agentPermissionsArgNames = map[string]struct{}{
-	"id": {}, "revision": {}, "tool_policy_changes": {}, "mcp_servers": {},
+	"id": {}, "revision": {}, "tool_policy_changes": {}, "mcp_servers": {}, "skill_policy_changes": {},
 }
 
 func (t *AgentPermissionsTool) Name() string                 { return "set_agent_permissions" }
@@ -53,10 +53,11 @@ func (t *AgentPermissionsTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":                  map[string]any{"type": "string", "description": "Agent ID"},
-			"revision":            map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
-			"tool_policy_changes": toolPolicyChangesParameters(),
-			"mcp_servers":         mcpServersParameters(),
+			"id":                   map[string]any{"type": "string", "description": "Agent ID"},
+			"revision":             map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
+			"tool_policy_changes":  toolPolicyChangesParameters(),
+			"mcp_servers":          mcpServersParameters(),
+			"skill_policy_changes": skillPolicyChangesParameters(false),
 		},
 		"required":             []string{"id", "revision"},
 		"additionalProperties": false,
@@ -92,7 +93,7 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 	}
 	if len(fields) == 0 {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"at least one of tool_policy_changes or mcp_servers is required", ""))
+			"at least one of tool_policy_changes, skill_policy_changes or mcp_servers is required", ""))
 	}
 	sort.Strings(fields)
 	var requested map[string]config.ToolPolicy
@@ -118,6 +119,19 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 			return fieldErrorResult(err)
 		}
 	}
+	var requestedSkills map[string]config.ToolPolicy
+	if raw, present := args[skillPolicyChangesField]; present {
+		patch, err := decodeSkillPolicyPatch(raw, false)
+		if err != nil {
+			return fieldErrorResult(err)
+		}
+		requestedSkills = patch.Set
+		// Skills & Tools FR-025: Omnipus never takes a per-agent skill Ask.
+		if _, bad := coreagent.OmnipusPerAgentAskViolation(id, patch.Set); bad {
+			return tools.ErrorResult(errorJSON("OMNIPUS_PER_AGENT_ASK", coreagent.OmnipusPerAgentAskRefusal,
+				"Use deny for Omnipus, or set Ask on the global skill permission"))
+		}
+	}
 	home, err := resolveOmnipusHome(t.deps.Home)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), ""))
@@ -129,7 +143,10 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 		if err := agentmutation.ValidateFields(*a, fields); err != nil {
 			return err
 		}
-		return applyCapabilityArgs(a, args, known, inv)
+		if err := applyCapabilityArgs(a, args, known, inv); err != nil {
+			return err
+		}
+		return applySkillPolicyArgs(a, args, home, t.deps.globalSkillPolicies(), agentWorkspaceSet(home, id), false)
 	}, nil)
 	if mutateErr != nil {
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)
@@ -137,6 +154,10 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 	activation, message := publishAgentActivation(t.deps, id)
 	clamped := policyClamps(t.deps.globalToolPolicies(), requested, t.deps.godModeActive())
 	if note := clampSentence(clamped); note != "" {
+		message = strings.TrimSpace(message + " " + note)
+	}
+	skillClamped := skillClamps(t.deps.globalSkillPolicies(), requestedSkills, t.deps.godModeActive())
+	if note := skillClampSentence(skillClamped); note != "" {
 		message = strings.TrimSpace(message + " " + note)
 	}
 	return changeSuccess(map[string]any{
@@ -147,6 +168,7 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 		"changed_fields":     fields,
 		"message":            message,
 		"clamped":            clamped,
+		"skill_clamped":      skillClamped,
 	}, updateVerdict(activation, message))
 }
 
