@@ -42,7 +42,9 @@ test.describe('Programs — private real gateway', () => {
     const row = page.getByRole('row', { name: /github/i }).or(page.getByTestId('program-github'));
     await expect(row.getByText('Not connected', { exact: true })).toBeVisible();
     await row.getByRole('button', { name: /paste a token/i }).click();
-    const field = page.getByLabel(/token/i).filter({ visible: true }).first();
+    // The paste dialog's own title ("Paste a token for GitHub") also labels
+    // its dialog element, so the label lookup is narrowed to the input itself.
+    const field = page.locator('input').and(page.getByLabel(/token/i)).filter({ visible: true }).first();
     await field.fill('tok_valid_12345');
     const saved = page.waitForResponse((r) => r.url().endsWith('/api/v1/programs/github/credential') && r.request().method() === 'PUT');
     await field.press('Enter');
@@ -76,7 +78,8 @@ test.describe('Programs — private real gateway', () => {
 
   test('S33: clean catalog creates Acme once and reloads it not_connected', async ({ page, programsS1: f }) => {
     await openProgramsTab(page, f.gateway.baseURL);
-    await page.getByRole('button', { name: /add (custom )?program|new program/i }).click();
+    // Spec UI-state table, Settings → Programs row: "Add a custom program".
+    await page.getByRole('button', { name: 'Add a custom program', exact: true }).click();
     await page.getByLabel(/display name/i).fill('Acme');
     await page.getByLabel(/program words?/i).fill('acme');
     await page.getByLabel(/token variables?/i).fill('ACME_TOKEN');
