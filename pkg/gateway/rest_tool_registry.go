@@ -197,8 +197,11 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	agentType := "custom"
 	var toolsCfg *config.AgentToolsCfg
 	var wireAgentType gen.AgentType
-	for _, ac := range cfg.Agents.List {
+	var agentCfg *config.AgentConfig
+	for i := range cfg.Agents.List {
+		ac := cfg.Agents.List[i]
 		if ac.ID == agentID {
+			agentCfg = &cfg.Agents.List[i]
 			at := ac.ResolveType(coreagent.IsCoreAgent)
 			agentType = string(at)
 			wireAgentType = coreagent.ToWireType(ac)
@@ -347,6 +350,25 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	sort.Strings(overrideNames)
+	// Skill values come from the durable record (the same revision as
+	// above), so a write is read back even before the reload lands.
+	skillAgent := agentCfg
+	if state.Agent != nil {
+		skillAgent = state.Agent
+	}
+	skillEntries, skillErr := a.agentSkillEntries(skillAgent)
+	if skillErr != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read the skill permissions", skillErr)
+		return
+	}
+	var storedSkills *gen.AgentSkillsCfg
+	if skillAgent != nil && skillAgent.Tools != nil && skillAgent.Tools.Skills != nil && len(skillAgent.Tools.Skills.Policies) > 0 {
+		policies := make(map[string]gen.ToolPolicy, len(skillAgent.Tools.Skills.Policies))
+		for k, v := range skillAgent.Tools.Skills.Policies {
+			policies[k] = gen.ToolPolicy(v)
+		}
+		storedSkills = &gen.AgentSkillsCfg{Policies: policies}
+	}
 
 	mcpServers := make([]gen.AgentToolsMcpServerBinding, 0)
 	if toolsCfg != nil {
@@ -392,8 +414,10 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			Mcp: &struct {
 				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{Servers: &mcpServers},
+			Skills: storedSkills,
 		},
-		Tools: toolEntries,
+		Skills: skillEntries,
+		Tools:  toolEntries,
 	}
 	persistence := gen.AgentToolsResponsePersistenceStatusComplete
 	activation := gen.AgentToolsResponseActivationStatusActive
