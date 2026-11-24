@@ -422,6 +422,39 @@ type SkillMenuLevel func(s SkillInfo, project bool) (level string, denied bool)
 // name and description (a full skill's instructions are injected separately,
 // C-14). A nil levelOf lists every eligible skill with name and description.
 func (sl *SkillsLoader) BuildSkillsMenu(allow func(name string) bool, project ProjectShelf, levelOf SkillMenuLevel) string {
+	eligible, isProject := sl.MenuCandidates(allow, project)
+	if len(eligible) == 0 {
+		return ""
+	}
+
+	var lines []string
+	lines = append(lines, "<skills>")
+	listed := 0
+	for _, s := range eligible {
+		level, denied := VisibilityNameAndDescriptionLevel, false
+		if levelOf != nil {
+			level, denied = levelOf(s, isProject[strings.ToLower(s.ID)])
+		}
+		entry := SkillMenuEntry(s, level, denied)
+		if entry == "" {
+			continue
+		}
+		lines = append(lines, entry)
+		listed++
+	}
+	if listed == 0 {
+		return ""
+	}
+	lines = append(lines, "</skills>")
+
+	return strings.Join(lines, "\n")
+}
+
+// MenuCandidates returns the skills the menu considers, in menu order: the
+// allowed registry/builtin skills, then the project shelf's skills whose
+// slug no allowed skill already claims (D4.2). isProject is keyed by the
+// lower-cased slug.
+func (sl *SkillsLoader) MenuCandidates(allow func(name string) bool, project ProjectShelf) ([]SkillInfo, map[string]bool) {
 	allSkills := sl.ListSkills()
 
 	eligible := make([]SkillInfo, 0, len(allSkills)+len(project))
@@ -446,9 +479,6 @@ func (sl *SkillsLoader) BuildSkillsMenu(allow func(name string) bool, project Pr
 		isProject[key] = true
 		seen[key] = struct{}{}
 	}
-	if len(eligible) == 0 {
-		return ""
-	}
 
 	// Purely cosmetic now (D1.1) — kept for stable, deterministic output
 	// rather than to decide who survives a cap that no longer exists.
@@ -464,27 +494,7 @@ func (sl *SkillsLoader) BuildSkillsMenu(allow func(name string) bool, project Pr
 		return si.ID < sj.ID
 	})
 
-	var lines []string
-	lines = append(lines, "<skills>")
-	listed := 0
-	for _, s := range eligible {
-		level, denied := VisibilityNameAndDescriptionLevel, false
-		if levelOf != nil {
-			level, denied = levelOf(s, isProject[strings.ToLower(s.ID)])
-		}
-		entry := SkillMenuEntry(s, level, denied)
-		if entry == "" {
-			continue
-		}
-		lines = append(lines, entry)
-		listed++
-	}
-	if listed == 0 {
-		return ""
-	}
-	lines = append(lines, "</skills>")
-
-	return strings.Join(lines, "\n")
+	return eligible, isProject
 }
 
 // VisibilityNameAndDescriptionLevel is the menu level of a skill with no

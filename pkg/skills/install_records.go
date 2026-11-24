@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
@@ -260,4 +261,22 @@ func InstallCategory(requested, dir string) (string, error) {
 		return c, nil
 	}
 	return CategoryUncategorised, nil
+}
+
+// RecordsFingerprint fingerprints the install records (C-5 verification)
+// and trust approvals (C-24) of the global skills folder by content, so a
+// caller can tell when either changed. A read failure is fingerprinted
+// too: its clearing changes the result (the decision itself reports it).
+func RecordsFingerprint(skillsDir string) string {
+	h := fnv.New64a()
+	for _, name := range []string{installRecordsName, trustApprovalsName} {
+		raw, err := os.ReadFile(filepath.Join(systemDirFor(skillsDir), name))
+		if err != nil {
+			_, _ = h.Write([]byte(err.Error()))
+			continue
+		}
+		_, _ = h.Write(raw)
+		_, _ = h.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", h.Sum64())
 }

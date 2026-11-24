@@ -77,3 +77,37 @@ func ReadPersistedSkillSettings(home string) (PersistedSkillSettings, error) {
 	out.GodMode = doc.Sandbox.GodMode
 	return out, nil
 }
+
+// PersistedVisibility is the level part of config.json (C-1, C-6, C-15).
+// Tools is nil when config.json carries no sandbox.tool_visibility (a home
+// the tool-loading conversion has not reached yet); Skills likewise.
+type PersistedVisibility struct {
+	Tools  map[string]string
+	Skills map[string]string
+}
+
+// ReadPersistedVisibility reads the stored levels from config.json under
+// home: the one visibility authority each turn reads (C-15). A missing file
+// yields no maps.
+func ReadPersistedVisibility(home string) (PersistedVisibility, error) {
+	var out PersistedVisibility
+	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return out, nil
+		}
+		return out, fmt.Errorf("read config: %w", err)
+	}
+	var doc struct {
+		Sandbox struct {
+			ToolVisibility  map[string]string `json:"tool_visibility"`
+			SkillVisibility map[string]string `json:"skill_visibility"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return out, fmt.Errorf("parse config: %w", err)
+	}
+	out.Tools = doc.Sandbox.ToolVisibility
+	out.Skills = doc.Sandbox.SkillVisibility
+	return out, nil
+}

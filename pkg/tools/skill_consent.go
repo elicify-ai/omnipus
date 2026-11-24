@@ -63,6 +63,15 @@ func InstalledSkillDecision(home string, settings config.PersistedSkillSettings,
 	return ResolveSkillDecision(in), nil
 }
 
+// SkillLoadDecision is the C-11 decision of one skill load: a project
+// skill (folder is its directory) or an installed one.
+func SkillLoadDecision(home string, settings config.PersistedSkillSettings, agentSkills *config.AgentSkillsCfg, key, slug, folder string, project bool) (SkillDecision, error) {
+	if project {
+		return projectSkillDecision(home, settings, agentSkills, key, folder)
+	}
+	return InstalledSkillDecision(home, settings, agentSkills, slug, true)
+}
+
 // skillUsableWithoutCard reports whether an agent may use the skill now
 // without a new answer: the outcome is allow, or the only open check is the
 // permission part and the agent holds a running timed allowance for it.
