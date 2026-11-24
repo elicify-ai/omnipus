@@ -42,9 +42,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -60,6 +57,13 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: { alpha_tool: 'ask', beta_tool: 'ask', gamma_tool: 'ask' },
+  skill_policies: {}, visibility: { alpha_tool: 'full', beta_tool: 'full', gamma_tool: 'full' },
+  skill_visibility: {}, skill_trust: 'ask',
+}))
 
 function askTool(name: string): RegistryTool {
   return {
@@ -92,11 +96,6 @@ beforeEach(() => {
   vi.mocked(api.fetchSkills).mockResolvedValue([])
   vi.mocked(api.fetchRegistryTools).mockResolvedValue(TOOLS)
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: { alpha_tool: 'ask', beta_tool: 'ask', gamma_tool: 'ask' },
-  })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])
@@ -132,6 +131,8 @@ describe('SkillsToolsPage — focus after the focused row leaves a filtered list
     await waitFor(() => {
       expect(within(previousRow).getByRole('button', { name: /^deny$/i })).toHaveFocus()
     })
+
+    expectPermissionPatches(permissions(), { policies: { gamma_tool: 'deny' } })
 
     // The status region announces the exact sentence (S-100's Then).
     const status = screen.getByRole('status')

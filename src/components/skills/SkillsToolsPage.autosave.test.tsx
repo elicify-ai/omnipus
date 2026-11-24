@@ -12,7 +12,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { ApiError } from '@/lib/api-error'
 import type { RegistryTool } from '@/lib/api'
 // The pack's BLOCKED seam (support.tsx::requireModule convention): the
 // missing module is a named, loud failure — the acceptance oracles are the
@@ -43,9 +42,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -61,6 +57,13 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: { send_email: 'ask', bash: 'deny', fetch_url: 'ask' },
+  skill_policies: {}, visibility: { send_email: 'full', bash: 'full', fetch_url: 'full' },
+  skill_visibility: {}, skill_trust: 'ask',
+}))
 
 const SEND_EMAIL: RegistryTool = {
   name: 'send_email',
@@ -90,11 +93,6 @@ beforeEach(() => {
   vi.mocked(api.fetchSkills).mockResolvedValue([])
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([SEND_EMAIL, BASH, FETCH_URL])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: { send_email: 'ask', bash: 'deny', fetch_url: 'ask' },
-  })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])
@@ -111,6 +109,7 @@ function pressedPolicy(row: HTMLElement): string | null {
 
 async function openGroupAndClick(tool: string, group: RegExp, policy: string) {
   const user = userEvent.setup()
+  await user.click(await screen.findByRole('tab', { name: /omnipus tools/i }))
   const trigger = screen
     .getAllByRole('button', { name: group })
     .find((b) => b.getAttribute('aria-expanded') !== undefined)
@@ -129,10 +128,13 @@ describe('SkillsToolsPage — autosave (order 24)', () => {
       expect(screen.getByText('Saved')).toBeInTheDocument()
     })
     expect(pressedPolicy(row)).toBe('deny')
+    expectPermissionPatches(permissions(), { policies: { send_email: 'deny' } })
+    expect(permissions().stored.policies).toEqual({ send_email: 'deny', bash: 'deny', fetch_url: 'ask' })
 
-    // Reload: the stored value comes back Deny.
+    // Reload: the stored value comes back Deny from a fresh GET, not props.
     unmount()
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    await userEvent.setup().click(await screen.findByRole('tab', { name: /omnipus tools/i }))
     const trigger = screen
       .getAllByRole('button', { name: /^communication/i })
       .find((b) => b.getAttribute('aria-expanded') !== undefined)
@@ -140,12 +142,12 @@ describe('SkillsToolsPage — autosave (order 24)', () => {
     if (trigger && trigger.getAttribute('aria-expanded') === 'false') await user.click(trigger)
     const reloaded = screen.getByTestId('tool-row-send_email')
     expect(pressedPolicy(reloaded)).toBe('deny')
+    expect(permissions().seen.filter(({ method }) => method === 'GET').length).toBeGreaterThanOrEqual(2)
+    expectPermissionPatches(permissions(), { policies: { send_email: 'deny' } })
   })
 
   it('S-07: a refused save shows the reason with Retry and keeps the stored value', async () => {
-    vi.mocked(api.updateGlobalToolPolicies).mockRejectedValue(
-      new ApiError(400, 'invalid policy value'),
-    )
+    permissions().refuseNext(400, 'invalid policy value')
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
     const row = await openGroupAndClick('bash', /^shell/i, 'allow')
 
@@ -154,14 +156,14 @@ describe('SkillsToolsPage — autosave (order 24)', () => {
     })
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
     expect(pressedPolicy(row)).toBe('deny') // the value stored before the click
+    expectPermissionPatches(permissions(), { policies: { bash: 'allow' } })
+    expect(permissions().stored.policies).toEqual({ send_email: 'ask', bash: 'deny', fetch_url: 'ask' })
   })
 
   it('S-08: a saved-but-not-applied 503 is said plainly, with Retry, and the row shows the new value', async () => {
-    vi.mocked(api.updateGlobalToolPolicies).mockRejectedValue(
-      new ApiError(
-        503,
-        'The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.',
-      ),
+    permissions().refuseNext(503,
+      'The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.',
+      { ...permissions().stored, policies: { send_email: 'ask', bash: 'deny', fetch_url: 'deny' } },
     )
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
     const row = await openGroupAndClick('fetch_url', /^web/i, 'deny')
@@ -175,5 +177,7 @@ describe('SkillsToolsPage — autosave (order 24)', () => {
     })
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
     expect(pressedPolicy(row)).toBe('deny')
+    expectPermissionPatches(permissions(), { policies: { fetch_url: 'deny' } })
+    expect(permissions().stored.policies).toEqual({ send_email: 'ask', bash: 'deny', fetch_url: 'deny' })
   })
 })

@@ -11,7 +11,7 @@
 //   S-06: Set all → Deny on a group containing Tool search denies the other
 //         rows; Tool search keeps its fixed sentence and no badges.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RegistryTool } from '@/lib/api'
@@ -44,9 +44,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -62,6 +59,17 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: Object.fromEntries([
+    ...FILE_TOOLS.map(({ name }) => [name, 'deny'] as const),
+    ['execute_plan', 'ask'], ['fetch_url', 'ask'], ['ToolSearch', 'allow'],
+  ]),
+  skill_policies: {},
+  visibility: Object.fromEntries([...FILE_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS].map(({ name }) => [name, 'full'])),
+  skill_visibility: {}, skill_trust: 'ask',
+}))
 
 function makeTool(name: string, category: string, overrides: Partial<RegistryTool> = {}): RegistryTool {
   return {
@@ -81,7 +89,7 @@ const FILE_TOOLS = Array.from({ length: 12 }, (_, i) => makeTool(`file_tool_${i 
 const PLANS_TOOLS = [makeTool('execute_plan', 'plans')]
 const GENERAL_TOOLS = [
   makeTool('fetch_url', 'core'),
-  makeTool('toolsearch', 'core', {
+  makeTool('ToolSearch', 'core', {
     permission_fixed: true,
     visibility_locked: true,
     visibility: 'full',
@@ -98,8 +106,9 @@ function pageWrapper({ children }: { children: React.ReactNode }) {
   )
 }
 
-function mountPage() {
+async function mountPage() {
   render(<SkillsToolsPage />, { wrapper: pageWrapper })
+  await userEvent.setup().click(await screen.findByRole('tab', { name: /omnipus tools/i }))
 }
 
 async function openGroup(label: RegExp) {
@@ -121,11 +130,6 @@ beforeEach(() => {
   vi.mocked(api.fetchSkills).mockResolvedValue([])
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([...FILE_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: { execute_plan: 'ask' },
-  })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])
@@ -134,7 +138,7 @@ beforeEach(() => {
 
 describe('SkillsToolsPage — Set all (order 23)', () => {
   it('S-02: Set all Ask on the Files group sets all 12 rows, saves once, no confirm', async () => {
-    mountPage()
+    await mountPage()
     await openGroup(/^files/i)
     await useSetAll(/^set all/i, 'Ask')
 
@@ -142,35 +146,38 @@ describe('SkillsToolsPage — Set all (order 23)', () => {
       const row = screen.getByTestId(`tool-row-${tool.name}`)
       expect(within(row).getByRole('button', { name: /^ask$/i })).toHaveAttribute('aria-pressed', 'true')
     }
-    expect(api.updateGlobalToolPolicies).toHaveBeenCalledTimes(1) // exactly one save request
+    await waitFor(() => expectPermissionPatches(permissions(), {
+      policies: Object.fromEntries(FILE_TOOLS.map(({ name }) => [name, 'ask'])),
+    })) // exactly one per-key request; no unrelated group or fixed key
     expect(screen.queryByText(/confirm/i)).not.toBeInTheDocument() // no confirm dialog
   })
 
   it('S-05: Set all Allow on Plans asks "Confirm autonomous plan execution" first; Cancel changes nothing', async () => {
     const user = userEvent.setup()
-    mountPage()
+    await mountPage()
     await openGroup(/^plans/i)
     await useSetAll(/^set all/i, 'Allow')
 
     // The confirm appears BEFORE anything is saved.
     expect(screen.getByText('Confirm autonomous plan execution')).toBeInTheDocument()
-    expect(api.updateGlobalToolPolicies).not.toHaveBeenCalled()
+    expectPermissionPatches(permissions())
 
     await user.click(screen.getByRole('button', { name: /^cancel$/i }))
     const row = screen.getByTestId('tool-row-execute_plan')
     expect(within(row).getByRole('button', { name: /^ask$/i })).toHaveAttribute('aria-pressed', 'true')
-    expect(api.updateGlobalToolPolicies).not.toHaveBeenCalled()
+    expectPermissionPatches(permissions())
   })
 
   it('S-06: Set all Deny on the group containing Tool search denies the others; Tool search keeps its fixed text', async () => {
-    mountPage()
+    await mountPage()
     await openGroup(/^general/i)
     await useSetAll(/^set all/i, 'Deny')
 
     const row = screen.getByTestId('tool-row-fetch_url')
     expect(within(row).getByRole('button', { name: /^deny$/i })).toHaveAttribute('aria-pressed', 'true')
 
-    const searchRow = screen.getByTestId('tool-row-toolsearch')
+    await waitFor(() => expectPermissionPatches(permissions(), { policies: { fetch_url: 'deny' } }))
+    const searchRow = screen.getByTestId('tool-row-ToolSearch')
     expect(
       within(searchRow).getByText(
         'Always available for discovery. The tools it finds still follow their own permissions.',

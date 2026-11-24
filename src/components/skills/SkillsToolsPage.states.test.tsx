@@ -42,9 +42,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -60,6 +57,11 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+useSkillPermissionNetwork(() => ({
+  policies: {}, skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 function pageWrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -75,9 +77,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])

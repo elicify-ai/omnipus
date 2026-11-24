@@ -45,9 +45,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -63,6 +60,14 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: { browser_navigate: 'ask', browser_click: 'allow', fetch_url: 'allow' },
+  skill_policies: {},
+  visibility: { browser_navigate: 'full', browser_click: 'full', fetch_url: 'full' },
+  skill_visibility: {}, skill_trust: 'ask',
+}))
 
 function tool(name: string, category: string): RegistryTool {
   return {
@@ -82,7 +87,6 @@ const TOOLS = [
   tool('browser_click', 'browser'),
   tool('fetch_url', 'web'),
 ]
-const BROWSER_NAVIGATE = TOOLS[0]
 
 function pageWrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -111,9 +115,6 @@ beforeEach(() => {
   vi.mocked(api.fetchSkills).mockResolvedValue([])
   vi.mocked(api.fetchRegistryTools).mockResolvedValue(TOOLS)
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])
@@ -167,7 +168,7 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
   })
 
   it('S-50: a row whose new value no longer matches the filter leaves the list; clearing shows it', async () => {
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { browser_navigate: 'ask' } })
+    permissions().stored.policies = { browser_navigate: 'ask', browser_click: 'allow', fetch_url: 'allow' }
     const user = await openToolsTab()
     await user.click(screen.getByRole('button', { name: /permission filter/i }))
     await user.click(screen.getByRole('menuitem', { name: /^ask$/i }))
@@ -184,7 +185,7 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
     expect(
       within(screen.getByTestId('tool-row-browser_navigate')).getByRole('button', { name: /^deny$/i }),
     ).toHaveAttribute('aria-pressed', 'true')
-    void BROWSER_NAVIGATE
+    expectPermissionPatches(permissions(), { policies: { browser_navigate: 'deny' } })
   })
 
   it('S-48: Set all over a filter names "<k> of <n> matching" and changes exactly the visible row', async () => {
@@ -203,7 +204,8 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
         revision: '0'.repeat(64),
       } as never,
     ])
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { 'notes-helper': 'deny' } })
+    permissions().stored.skill_policies = { 'notes-helper': 'deny' }
+    permissions().stored.skill_visibility = { 'notes-helper': 'name_and_description' }
     const user = userEvent.setup()
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
     await user.click(screen.getByRole('tab', { name: /^skills/i }))
@@ -214,10 +216,7 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
     await user.click(setAll)
     await user.click(screen.getByRole('menuitem', { name: /^allow$/i }))
 
-    await waitFor(() => {
-      expect(api.updateGlobalToolPolicies).toHaveBeenCalledTimes(1)
-    })
-    const saved = vi.mocked(api.updateGlobalToolPolicies).mock.calls[0][0] as { policies: Record<string, string> }
-    expect(saved.policies['notes-helper']).toBe('allow')
+    await waitFor(() => expectPermissionPatches(permissions(), { skill_policies: { 'notes-helper': 'allow' } }))
+    expect(permissions().stored.policies).toEqual({ browser_navigate: 'ask', browser_click: 'allow', fetch_url: 'allow' })
   })
 })

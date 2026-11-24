@@ -6,10 +6,11 @@
 //         order, with all three meaning lines visible;
 //   S-32: choosing Allow shows the warning callout "Allow turns off the
 //         check for unverified skills. Choose Ask to turn it back on.";
-//   migration control: a warn_unverified stored value renders Ask (the
-//         legacy values are carried over, S-33's screen half).
+//   read-model control: canonical Ask from GET /security/permissions is
+//         selected. C-3's legacy config migration is tested at config load,
+//         never by making the screen consume the retired trust endpoint.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // The pack's BLOCKED seam (support.tsx::requireModule convention): the
@@ -30,9 +31,6 @@ async function requireSkillsToolsPage(): Promise<ComponentType> {
 
 let SkillsToolsPage: ComponentType
 
-beforeEach(async () => {
-  SkillsToolsPage = await requireSkillsToolsPage()
-})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -41,10 +39,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchRegistryTools: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
-    fetchSkillTrust: vi.fn(),
-    updateSkillTrust: vi.fn(),
     fetchProviders: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
     searchSkills: vi.fn(),
@@ -60,6 +54,13 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { request } from '@/lib/api/http'
+import { PermissionSettings as SettingsSchema } from '@/lib/api/generated/schemas'
+import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: {}, skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 function pageWrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -76,27 +77,25 @@ beforeEach(() => {
   vi.mocked(api.fetchSkills).mockResolvedValue([])
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.updateGlobalToolPolicies).mockResolvedValue({ policies: {} })
-  vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
-  vi.mocked(api.updateSkillTrust).mockResolvedValue({ level: 'allow_all' } as never)
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
   vi.mocked(api.searchSkills).mockResolvedValue([])
   vi.mocked(api.fetchMcpServers).mockResolvedValue([])
 })
 
-function trustBlock(): HTMLElement {
+async function trustBlock(): Promise<HTMLElement> {
   // FR-027: the trust block is FIRST on the Skills tab.
-  const block = screen.getByTestId('trust-block')
+  const block = await screen.findByTestId('trust-block')
   expect(block.parentElement?.firstElementChild).toBe(block)
   return block
 }
 
 describe('SkillsToolsPage — trust (order 25)', () => {
-  it('S-26: the first block is "Unverified skills" with Allow/Ask/Deny in order and all three meanings', () => {
+  beforeEach(async () => { SkillsToolsPage = await requireSkillsToolsPage() })
+
+  it('S-26: the first block is "Unverified skills" with Allow/Ask/Deny in order and all three meanings', async () => {
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
-    const block = trustBlock()
+    const block = await trustBlock()
 
     expect(within(block).getByText('Unverified skills')).toBeInTheDocument()
     const buttons = within(block).getAllByRole('button', { name: /^(allow|ask|deny)$/i })
@@ -113,7 +112,7 @@ describe('SkillsToolsPage — trust (order 25)', () => {
   it('S-32: choosing Allow in the trust block shows the warning callout', async () => {
     const user = userEvent.setup()
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
-    const block = trustBlock()
+    const block = await trustBlock()
 
     await user.click(within(block).getByRole('button', { name: /^allow$/i }))
 
@@ -122,16 +121,27 @@ describe('SkillsToolsPage — trust (order 25)', () => {
         'Allow turns off the check for unverified skills. Choose Ask to turn it back on.',
       ),
     ).toBeInTheDocument()
-    expect(api.updateSkillTrust).toHaveBeenCalledWith('allow_all')
+    await waitFor(() => expectPermissionPatches(permissions(), { skill_trust: 'allow' }))
   })
 
-  it('migration control: a warn_unverified stored value renders Ask', () => {
-    vi.mocked(api.fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' } as never)
+  it('C-3 read-model control: the canonical stored Ask value renders Ask without writing', async () => {
     render(<SkillsToolsPage />, { wrapper: pageWrapper })
-    const block = trustBlock()
+    const block = await trustBlock()
     expect(within(block).getByRole('button', { name: /^ask$/i })).toHaveAttribute(
       'aria-pressed',
       'true',
     )
+    expectPermissionPatches(permissions())
   })
+})
+
+it('instrument: real HTTP helper reads the generated full model and per-key PATCH preserves unrelated keys', async () => {
+  permissions().stored.policies = { bash: 'deny' }
+  const given = { policies: { bash: 'deny' }, skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask' }
+  expect(await request('/security/permissions', undefined, SettingsSchema)).toEqual(given)
+  expect(await request('/security/permissions', {
+    method: 'PATCH', body: JSON.stringify({ skill_trust: 'allow' }),
+  }, SettingsSchema)).toEqual({ ...given, skill_trust: 'allow' })
+  expectPermissionPatches(permissions(), { skill_trust: 'allow' })
+  await expect(permissions().fetch('/api/v1/security/unplanned')).rejects.toThrow('Unexpected permissions fixture request: GET /api/v1/security/unplanned')
 })

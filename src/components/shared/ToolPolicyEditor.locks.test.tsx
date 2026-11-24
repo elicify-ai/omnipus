@@ -28,7 +28,7 @@
 // guard (FR-024's Skills group is required by spec line 90 / FR-024).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
@@ -130,13 +130,13 @@ describe('ToolPolicyEditor — global locks (order 22)', () => {
 // only the rendering is missing. Every mock is at the network edge.
 import { ToolsAndPermissions } from '../agents/ToolsAndPermissions'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/api')>(),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
   fetchProviders: vi.fn(),
   fetchSkills: vi.fn().mockResolvedValue([]),
   fetchGodMode: vi.fn(),
@@ -160,6 +160,12 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+useSkillPermissionNetwork(() => ({
+  policies: {}, skill_policies: { 'write-skill': 'ask' }, visibility: {},
+  skill_visibility: { 'write-skill': 'name_and_description' }, skill_trust: 'ask',
+}))
 
 // S-22's Given: Omnipus's Tools tab, its `write-skill` row (Omnipus's own
 // skill, granted; global Ask; no per-agent value — per-agent Ask is refused
@@ -192,14 +198,18 @@ function tabWrapper({ children }: { children: React.ReactNode }) {
 // The Skills group renders inside the editor. A person sees it as a group of
 // the agent's granted skills; the pack's BLOCKED convention names the
 // missing element loudly instead of failing on a bare locator.
-function skillsGroup(): HTMLElement {
-  const group = screen.queryByTestId('skills-group')
-  if (!group) {
-    throw new Error(
-      'BLOCKED: the agent Tools tab Skills group (FR-024; spec C-table line 90: ToolPolicyEditor gains the Skills group) is not implemented',
-    )
-  }
-  return group
+async function skillsGroup(): Promise<HTMLElement> {
+  // Wait for the real agent-tools and permission queries, not a synchronous
+  // post-render lookup that rejects a correct asynchronously hydrated group.
+  return await waitFor(() => {
+    const group = screen.queryByTestId('skills-group')
+    if (!group) {
+      throw new Error(
+        'BLOCKED: the agent Tools tab Skills group (FR-024; spec C-table line 90: ToolPolicyEditor gains the Skills group) is not implemented',
+      )
+    }
+    return group
+  })
 }
 
 describe('ToolPolicyEditor — Skills group (order 22: S-22, S-24)', () => {
@@ -208,7 +218,6 @@ describe('ToolPolicyEditor — Skills group (order 22: S-22, S-24)', () => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([])
     vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
     vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
     vi.mocked(api.fetchProviders).mockResolvedValue([])
     vi.mocked(api.fetchGodMode).mockResolvedValue({
       enabled: false,
@@ -245,7 +254,7 @@ describe('ToolPolicyEditor — Skills group (order 22: S-22, S-24)', () => {
       />,
       { wrapper: tabWrapper },
     )
-    const group = skillsGroup()
+    const group = await skillsGroup()
 
     const ask = within(group).getByRole('button', { name: /^ask$/i })
     expect(ask).toBeDisabled()
@@ -277,7 +286,7 @@ describe('ToolPolicyEditor — Skills group (order 22: S-22, S-24)', () => {
       />,
       { wrapper: tabWrapper },
     )
-    const group = skillsGroup()
+    const group = await skillsGroup()
     expect(
       within(group).getByText("No skills granted. Grant skills on this agent's Skills tab."),
     ).toBeInTheDocument()

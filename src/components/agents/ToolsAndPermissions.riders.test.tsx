@@ -37,13 +37,13 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/api')>(),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
   fetchProviders: vi.fn(),
   fetchSkills: vi.fn().mockResolvedValue([]),
   fetchGodMode: vi.fn(),
@@ -71,6 +71,11 @@ vi.mock('@/store/ui', () => ({
 }))
 
 import * as api from '@/lib/api'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: {}, skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 
 const SEND_EMAIL: RegistryTool = {
@@ -140,7 +145,6 @@ beforeEach(() => {
     skills: [],
   })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   // Runtime God Mode: enabled (S-76's Given). The tab must consult it —
   // fetchGodMode reads the live runtime state ({ enabled, available,
@@ -153,7 +157,7 @@ describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mo
     // S-76's Given, copied exactly: global send_email Ask, Mia's OWN Allow.
     // Strictest-wins alone would show Ask; only the God floor of the GLOBAL
     // side lets the effective value be Allow.
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    permissions().stored.policies = { send_email: 'ask' }
     // The editor hydrates from the dedicated GET — it must carry the same
     // own value the props do (CHECK finding 9: the fixture states the Given).
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
@@ -182,7 +186,7 @@ describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mo
     // values, God off. Strictest-wins (global ask × own allow) is Ask. A
     // readout that never consults the runtime God Mode state shows Allow in
     // BOTH legs and fails here.
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    permissions().stored.policies = { send_email: 'ask' }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
       revision,
       override_names: [],
@@ -203,7 +207,7 @@ describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mo
   })
 
   it('control: the agent OWN Ask is preserved under God Mode (God floors the global side only)', async () => {
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    permissions().stored.policies = { send_email: 'ask' }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
       revision,
       override_names: [],
@@ -223,7 +227,7 @@ describe('Rider #1297 (S-76): the Tools tab shows what the run does under God Mo
   })
 
   it('control: the agent OWN Deny is preserved under God Mode', async () => {
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { send_email: 'ask' } })
+    permissions().stored.policies = { send_email: 'ask' }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
       revision,
       override_names: [],
@@ -303,8 +307,12 @@ describe('Rider #1411 (S-78): reopening the editor shows the saved value without
       skills: [],
     })
     vi.mocked(api.fetchAgentTools).mockImplementation(() => Promise.resolve(serverResponse()))
-    vi.mocked(api.updateAgentTools).mockImplementation(async (_agentId, request) => {
-      expect(request.config?.builtin?.policies).toEqual({ send_message: 'allow' })
+    const expectedPut = {
+      revision, override_names: ['send_message'], config: { builtin: { policies: { send_message: 'allow' } } },
+    }
+    vi.mocked(api.updateAgentTools).mockImplementation(async (agentId, request) => {
+      expect(agentId).toBe('agent-mia')
+      expect(request).toEqual(expectedPut)
       serverPolicies = { ...request.config?.builtin?.policies }
       return serverResponse()
     })
@@ -330,7 +338,7 @@ describe('Rider #1411 (S-78): reopening the editor shows the saved value without
       expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
     }, { timeout: 3000 })
     const [, sentRequest] = vi.mocked(api.updateAgentTools).mock.calls[0]
-    expect(sentRequest.config?.builtin?.policies).toEqual({ send_message: 'allow' })
+    expect(sentRequest).toEqual(expectedPut)
     await waitFor(() => {
       expect(serverPolicies.send_message).toBe('allow')
     }, { timeout: 3000 })
