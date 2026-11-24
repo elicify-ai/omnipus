@@ -134,6 +134,12 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		return true
 	}
 
+	// C-25 project-skill gate: ahead of every mount, work dir, path grant
+	// and widening, so none of them re-opens a gated folder.
+	if _, gated := ProjectSkillReadGate(cleanPath, policy); gated {
+		return true
+	}
+
 	// #1284 home guard (amendment §2 D1/D4/D5): the named protected inventory
 	// always wins, then default-deny inside $OMNIPUS_HOME with the explicit
 	// allowances and the (D4-narrowed) own-tree exception. Runs BEFORE the

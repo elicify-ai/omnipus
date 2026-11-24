@@ -122,6 +122,11 @@ type HomeGuard struct {
 	// an editor reads every valid-slug skill folder. Registry control
 	// entries stay refused for everyone.
 	SkillsReadAll bool
+
+	// ProjectSkillGates are the project skill folders under the mounts of
+	// the turn that the acting agent may not read or run this turn (C-25).
+	// Filled only by tools.ResolveTurnFSPolicy.
+	ProjectSkillGates []ProjectSkillGate
 }
 
 // FSPolicy is the effective, fully-resolved filesystem policy for one agent
