@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 )
 
 // Connected-programs audit events (FR-021). Every row is value-free: it names
@@ -17,6 +18,7 @@ const (
 	auditProgramReplaced       = "program.replaced"
 	auditProgramCheck          = "program.check"
 	auditProgramCheckSupersede = "program.check_superseded"
+	auditProgramCheckResult    = "program.check_result"
 	auditProgramDisconnected   = "program.disconnected"
 	auditProgramSwitchChanged  = "program.agent_switch_changed"
 	auditProgramSettingChanged = "program.setting_changed"
@@ -47,6 +49,16 @@ func (a *restAPI) auditProgram(event, decision, agentID string, details map[stri
 func (a *restAPI) auditProgramSuperseded(programID string, generation int64) {
 	a.auditProgram(auditProgramCheckSupersede, audit.DecisionAllow, "", map[string]any{
 		"program_id": programID, "generation": generation, "outcome": "superseded",
+	})
+}
+
+// auditProgramCheckResult is the programs service's audit sink for a finished
+// check (FR-021, ruling H50): one row per published result, value-free. A
+// superseded check writes program.check_superseded instead, never this.
+func (a *restAPI) auditProgramCheckResult(ev programs.CheckResultEvent) {
+	a.auditProgram(auditProgramCheckResult, audit.DecisionAllow, "", map[string]any{
+		"program_id": ev.ProgramID, "generation": ev.Generation, "check_revision": ev.CheckRevision,
+		"outcome": ev.Outcome, "reason": ev.Reason,
 	})
 }
 

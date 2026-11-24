@@ -29,6 +29,9 @@ type checkResult struct {
 	state   string
 	message string
 	label   string
+	// reason is a value-free class of the outcome for the audit row
+	// (FR-021, ruling H50); never the message, which may quote the program.
+	reason string
 }
 
 // boundedBuffer keeps at most limit bytes and drops the rest.
@@ -71,16 +74,16 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	check := entry.IdentityCheck
 	store, err := s.store()
 	if err != nil {
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read."}
+		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read.", reason: CheckReasonStoreUnreadable}
 	}
 	token, _, err := credentials.ReadProgramCredential(store, TokenReference(entry.ID))
 	if err != nil {
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read."}
+		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the credential store could not be read.", reason: CheckReasonStoreUnreadable}
 	}
 	found, err := exec.LookPath(check.ProgramWord)
 	if err != nil {
 		return checkResult{state: StateSavedNotChecked,
-			message: "Saved, not checked: " + check.ProgramWord + " was not found on this computer."}
+			message: "Saved, not checked: " + check.ProgramWord + " was not found on this computer.", reason: CheckReasonProgramNotFound}
 	}
 	// FR-005/S-08: a program agents could have planted never runs with
 	// gateway authority; the checked, resolved file is the one executed.
@@ -88,11 +91,11 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	if err != nil {
 		slog.Warn("programs: account check program refused by its location check", "program", check.ProgramWord, "error", err)
 		return checkResult{state: StateSavedNotChecked,
-			message: "Saved, not checked: " + check.ProgramWord + " is installed in a folder agents can write to, so it was not run. Install it in a system folder."}
+			message: "Saved, not checked: " + check.ProgramWord + " is installed in a folder agents can write to, so it was not run. Install it in a system folder.", reason: CheckReasonProgramRefused}
 	}
 	home, err := os.MkdirTemp("", "omnipus-program-check-")
 	if err != nil {
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start.", reason: CheckReasonNotStarted}
 	}
 	defer os.RemoveAll(home)
 
@@ -107,7 +110,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	cmd.Env = checkEnv(entry, token, home)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if attachErr := Attach(cmd, ResolvedPrograms{Tokens: []string{token}}); attachErr != nil {
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start.", reason: CheckReasonNotStarted}
 	}
 	setProcessGroup(cmd)
 	started, startRes := s.startCurrentCheck(ctx, entry, r, cmd)
@@ -127,7 +130,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 		<-done
 		awaitProcessGroupGone(cmd.Process)
 		return checkResult{state: StateCheckFailed,
-			message: fmt.Sprintf("The account check did not finish in %d s.", int(timeout/time.Second))}
+			message: fmt.Sprintf("The account check did not finish in %d s.", int(timeout/time.Second)), reason: CheckReasonTimeout}
 	case <-ctx.Done():
 		stopProcessGroup(cmd.Process)
 		<-done
@@ -137,24 +140,24 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(waitErr, &exitErr) {
-			return checkResult{state: StateCheckFailed, message: "The account check could not run."}
+			return checkResult{state: StateCheckFailed, message: "The account check could not run.", reason: CheckReasonRunError}
 		}
 		said := firstLine(stderr.String())
 		if said == "" {
 			said = firstLine(stdout.String())
 		}
 		return checkResult{state: StateCheckFailed,
-			message: "The account check failed. " + entry.DisplayName + " said: \"" + truncateRunes(said, maxCheckErrorRunes) + "\"."}
+			message: "The account check failed. " + entry.DisplayName + " said: \"" + truncateRunes(said, maxCheckErrorRunes) + "\".", reason: CheckReasonExitStatus}
 	}
 	label, err := AccountLabel(entry.DisplayName, stdout.String(), []string{token})
 	if err != nil {
 		var carries *LabelCarriesTokenError
 		if errors.As(err, &carries) {
-			return checkResult{state: StateCheckFailed, message: carries.Error()}
+			return checkResult{state: StateCheckFailed, message: carries.Error(), reason: CheckReasonLabelRefused}
 		}
-		return checkResult{state: StateCheckFailed, message: "The account check printed no account name."}
+		return checkResult{state: StateCheckFailed, message: "The account check printed no account name.", reason: CheckReasonNoAccountName}
 	}
-	return checkResult{state: StateConnected, label: label}
+	return checkResult{state: StateConnected, label: label, reason: CheckReasonAccountNamed}
 }
 
 // checkEnv is the check child's clean environment: the gateway PATH, a
@@ -222,7 +225,7 @@ var _ io.Writer = (*boundedBuffer)(nil)
 
 // replacedCheckResult is the result of a check whose reservation was
 // replaced; finish discards it, because the reservation is no longer current.
-var replacedCheckResult = checkResult{state: StateCheckFailed, message: "The account check was replaced by a newer one."}
+var replacedCheckResult = checkResult{state: StateCheckFailed, message: "The account check was replaced by a newer one.", reason: CheckReasonReplaced}
 
 // startCurrentCheck starts cmd only if r is still the entry's current,
 // uncancelled reservation (FR-047, S-139), holding s.mu across the check,
@@ -238,14 +241,14 @@ func (s *Service) startCurrentCheck(ctx context.Context, entry ProgramEntry, r *
 	}
 	if startErr := cmd.Start(); startErr != nil {
 		s.mu.Unlock()
-		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start.", reason: CheckReasonNotStarted}
 	}
 	groupErr := startProcessGroup(cmd)
 	s.mu.Unlock()
 	if groupErr != nil {
 		slog.Warn("programs: account check stopped: its processes could not be owned", "program", entry.ID, "error", groupErr)
 		_ = cmd.Wait()
-		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start.", reason: CheckReasonNotStarted}
 	}
 	return true, checkResult{}
 }

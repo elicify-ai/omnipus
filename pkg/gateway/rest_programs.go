@@ -60,6 +60,7 @@ func (a *restAPI) programService() *programs.Service {
 		a.programs.svc = programs.NewService(a.agentLoop.GetConfig, a.programStore,
 			filepath.Join(a.homePath, "programs", "connections.json"))
 		a.programs.svc.SetSupersededSink(a.auditProgramSuperseded)
+		a.programs.svc.SetResultSink(a.auditProgramCheckResult)
 		// FR-005/S-08: the account check's program passes the shared
 		// third-party program check over every agent-writable folder.
 		a.programs.svc.SetProgramPathCheck(func(word, found string, cfg *config.Config) (string, error) {

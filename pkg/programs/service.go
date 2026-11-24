@@ -39,6 +39,39 @@ const (
 	MsgNotConnected    = "Connect a token first."
 )
 
+// Outcomes of a finished account check (FR-021 audit row program.check_result,
+// ruling H50). A superseded check has no outcome row; it keeps its own.
+const (
+	CheckOutcomeConnected = "connected"
+	CheckOutcomeFailed    = "failed"
+	CheckOutcomeTimedOut  = "timed_out"
+)
+
+// Value-free reason classes of a finished check, for its audit row. They name
+// the kind of result, never the program's words or any part of a token.
+const (
+	CheckReasonAccountNamed    = "account_named"
+	CheckReasonStoreUnreadable = "store_unreadable"
+	CheckReasonProgramNotFound = "program_not_found"
+	CheckReasonProgramRefused  = "program_location_refused"
+	CheckReasonNotStarted      = "not_started"
+	CheckReasonTimeout         = "timeout"
+	CheckReasonRunError        = "run_error"
+	CheckReasonExitStatus      = "exit_status"
+	CheckReasonLabelRefused    = "label_carries_token"
+	CheckReasonNoAccountName   = "no_account_name"
+	CheckReasonReplaced        = "replaced"
+)
+
+// CheckResultEvent is what the result sink is told about one finished check.
+type CheckResultEvent struct {
+	ProgramID     string
+	Generation    int64
+	CheckRevision int64
+	Outcome       string // CheckOutcome*
+	Reason        string // CheckReason*
+}
+
 // CommitCardToken stores a program card's token with its receipt when no
 // Programs service is bound (FR-048: program-scoped store writes stay in this
 // package). It starts no account check and returns the new generation.
@@ -94,6 +127,10 @@ type Service struct {
 	// (FR-021 audit row "superseded"). Nil = not recorded.
 	superseded func(id string, generation int64)
 
+	// result is told once for every finished check whose result is published
+	// (FR-021 audit row program.check_result, ruling H50). Nil = not recorded.
+	result func(CheckResultEvent)
+
 	// pathCheck decides whether an account check's program may run (FR-005,
 	// S-08). Nil = checkProgramLocation.
 	pathCheck ProgramPathCheck
@@ -105,6 +142,28 @@ func (s *Service) SetSupersededSink(fn func(id string, generation int64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.superseded = fn
+}
+
+// SetResultSink installs the sink told about every finished check whose
+// result is published (FR-021, ruling H50): program, generation, check
+// revision, outcome and a value-free reason class. A superseded check is not
+// reported here. Call it before the first check starts.
+func (s *Service) SetResultSink(fn func(CheckResultEvent)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.result = fn
+}
+
+// checkOutcome maps a published result to its audit outcome.
+func checkOutcome(res checkResult) string {
+	switch {
+	case res.state == StateConnected:
+		return CheckOutcomeConnected
+	case res.reason == CheckReasonTimeout:
+		return CheckOutcomeTimedOut
+	default:
+		return CheckOutcomeFailed
+	}
 }
 
 // NewService builds the service. statePath is the connection-state file
@@ -407,6 +466,12 @@ func (s *Service) finish(id string, r *reservation, res checkResult) {
 	c.CheckedAt = time.Now().UTC()
 	s.conns[id] = c
 	s.persistLocked()
+	if s.result != nil {
+		s.result(CheckResultEvent{
+			ProgramID: id, Generation: c.Generation, CheckRevision: c.CheckRevision,
+			Outcome: checkOutcome(res), Reason: res.reason,
+		})
+	}
 }
 
 func checkTimeoutSeconds(e ProgramEntry) int {
