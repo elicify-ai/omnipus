@@ -12373,6 +12373,11 @@ export interface components {
              * @example false
              */
             trust_approved: boolean;
+            /**
+             * @description Skills & Tools spec FR-063 (S-80, #1570): why this skill cannot be loaded, in plain words, when its files could not be read. Present only then, with status "error"; the rest of the list is unaffected. While it is set, revision is a placeholder that matches no stored state, so a write naming it is refused as stale.
+             * @example a file in the skill folder is not readable (permission denied)
+             */
+            load_error?: string;
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
             changed_fields?: string[];

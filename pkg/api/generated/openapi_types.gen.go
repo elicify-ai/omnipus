@@ -27773,7 +27773,10 @@ type Skill struct {
 
 	// LastInvoked ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
 	LastInvoked *time.Time `json:"last_invoked,omitempty"`
-	Message     *string    `json:"message,omitempty"`
+
+	// LoadError Skills & Tools spec FR-063 (S-80, #1570): why this skill cannot be loaded, in plain words, when its files could not be read. Present only then, with status "error"; the rest of the list is unaffected. While it is set, revision is a placeholder that matches no stored state, so a write naming it is refused as stale.
+	LoadError *string `json:"load_error,omitempty"`
+	Message   *string `json:"message,omitempty"`
 
 	// Name Human-readable skill name.
 	Name string `json:"name"`

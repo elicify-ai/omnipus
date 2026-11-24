@@ -43,6 +43,15 @@ properties:
       Skills & Tools spec C-24: true when the current revision has a stored
       trust approval. Server-derived; ignored if a client sends it.
     example: false
+  load_error:
+    type: string
+    description: >
+      Skills & Tools spec FR-063 (S-80, #1570): why this skill cannot be
+      loaded, in plain words, when its files could not be read. Present only
+      then, with status "error"; the rest of the list is unaffected. While it
+      is set, revision is a placeholder that matches no stored state, so a
+      write naming it is refused as stale.
+    example: "a file in the skill folder is not readable (permission denied)"
   persistence_status:
     $ref: './ConfigurationPersistenceStatus.yaml'
   activation_status:
