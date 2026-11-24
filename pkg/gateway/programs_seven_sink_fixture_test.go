@@ -129,7 +129,7 @@ func newProgramsSentinelFixture(t *testing.T, god bool, configure ...func(*confi
 	al.SetSteerAudienceDeps(agent.NewSteerAudienceResolver(agent.NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())), steer.NopBoundaryObserver{}, agent.NewSteerUpwardDeliverer())
 	require.NotNil(t, al.AuditLogger(), "instrument: the real runtime owns the actual audit logger")
 
-	bin := t.TempDir() // Deliberately outside the agent-writable data home.
+	bin := pgFakeProgramDir(t) // Deliberately outside the agent-writable data home and the temp roots.
 	check := "#!/bin/sh\n[ \"$#\" -eq 4 ] && [ \"$1\" = api ] && [ \"$2\" = user ] && [ \"$3\" = --jq ] && [ \"$4\" = .login ] || exit 81\ncase \"$GH_TOKEN\" in\n sentinel_9f3c2a7e5b1d) printf 'octocat\\n';;\n tok_new_654321) printf 'hubot\\n';;\n *) exit 82;;\nesac\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "gh"), []byte(check), 0700))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

@@ -78,7 +78,7 @@ func pgProgramsSessionCall(t *testing.T, f *pgGateFixture, method, path, body st
 // Windows one (both end with the fixture's start marker already written).
 func pgInstallFakeGh(t *testing.T, f *pgGateFixture, shBody, cmdBody string) {
 	t.Helper()
-	bin := t.TempDir()
+	bin := pgFakeProgramDir(t)
 	name := "gh"
 	body := "#!/bin/sh\necho started >> " + f.ghStarts + "\n" + shBody + "\n"
 	if runtime.GOOS == "windows" {
@@ -359,7 +359,7 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 	t.Run("custom_identity_recipe_executes_separately_from_S93", func(t *testing.T) {
 		f := pgPersonAPI(t)
 		// Custom REST recipe coverage, NOT the embedded preset S-93 path.
-		bin := t.TempDir()
+		bin := pgFakeProgramDir(t)
 		name := "acme"
 		body := "#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = whoami ] && [ \"$ACME_TOKEN\" = acme_tok_123456 ] || exit 9\necho ex-user\n"
 		if runtime.GOOS == "windows" {
