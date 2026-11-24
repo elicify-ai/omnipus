@@ -62,10 +62,23 @@ export const test = base.extend<{ programsS1: Fixture }>({
     if (process.platform === 'win32') {
       fs.writeFileSync(path.join(directory, 'gh.cmd'), `@"${process.execPath}" "${fake}" %*\r\n`);
     } else { fs.renameSync(fake, path.join(directory, 'gh')); }
+    // The gateway treats its per-user temp folder as agent-writable wherever
+    // that folder is not the shared /tmp (S-08, FR-005:
+    // pkg/thirdpartycli/executor_settings.go::runtimeTempRoots, read from the
+    // gateway's own environment). On the cloud pods (TMPDIR=/workspace/.cache/tmp),
+    // the Fly CI cluster (TMPDIR=/cache/tmp) and macOS, a fake gh made under
+    // os.tmpdir() therefore sat inside that folder and was rightly refused, so
+    // the account check never ran (saved_not_checked). The gateway gets its own
+    // empty temp folder instead, and the fake gh stays outside it — the same
+    // placement as the Go fixtures' pgFakeProgramDir (324d1787a).
+    const gatewayTemp = fs.mkdtempSync(path.join(os.tmpdir(), 's1-programs-gateway-tmp-'));
     const provider = await startProbeProvider();
     let gateway: GatewayProcess | undefined;
     try {
-      gateway = await GatewayProcess.start({ apiBase: provider.url, env: { PATH: directory + path.delimiter + (process.env.PATH ?? '') } });
+      gateway = await GatewayProcess.start({ apiBase: provider.url, env: {
+        PATH: directory + path.delimiter + (process.env.PATH ?? ''),
+        TMPDIR: gatewayTemp, TMP: gatewayTemp, TEMP: gatewayTemp,
+      } });
       const made = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'Dev', soul: 'S1 test colleague' } satisfies AgentCreateRequestMain);
       expect(made.status, made.raw).toBe(201);
       const dev = Agent.parse(made.body);
@@ -91,7 +104,10 @@ export const test = base.extend<{ programsS1: Fixture }>({
     } finally {
       fs.writeFileSync(release, 'release');
       try { if (gateway) await gateway.stop(); }
-      finally { await provider.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+      finally {
+        await provider.close();
+        for (const folder of [directory, gatewayTemp]) fs.rmSync(folder, { recursive: true, force: true });
+      }
     }
   },
 });
