@@ -72,7 +72,7 @@ func init() {
 	projectSkillWinnerOf = func(installedPolicy, projectPolicy string, grantedInstalled bool) (string, string) {
 		const slug, workspace = "notes", "w1"
 		stored := map[string]string{
-			NormalizeSkillKey(slug):           installedPolicy,
+			NormalizeSkillKey(slug):          installedPolicy,
 			ProjectSkillKey(workspace, slug): projectPolicy,
 		}
 		key := SkillLoadKey(slug, grantedInstalled, workspace)
