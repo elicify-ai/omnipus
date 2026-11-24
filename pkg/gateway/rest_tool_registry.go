@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -518,49 +519,31 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse body.
-	var body gen.ToolApprovalActionRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
+	// Parse and check the answer before the card is looked up, so a
+	// malformed answer leaves the card as it was (C-26 refusals).
+	ans, ok := a.readApprovalAnswer(w, r)
+	if !ok {
 		return
 	}
-	// recordGrant is set only for the "allow" action. "allow" resolves THIS
-	// call exactly like "allow_once" (identical terminal transition, so the
-	// pending tool call proceeds) and, once that resolve succeeds, records a
-	// session-scoped grant so future matching calls auto-approve. The grant's
-	// scoping identity is read from the immutable approval entry below —
-	// never from client-supplied fields. grantScope defaults to "exact" when
-	// the client omits it, per the wire contract.
+	body := ans.body
 	var action ApprovalAction
-	var recordGrant bool
-	grantScope := gen.ToolApprovalActionRequestScopeExact
 	switch body.Action {
-	case gen.ToolApprovalActionRequestActionAllowOnce:
-		action = ApprovalActionApprove
-	case gen.ToolApprovalActionRequestActionAllowFor,
+	case gen.ToolApprovalActionRequestActionAllowOnce,
+		gen.ToolApprovalActionRequestActionAllowFor,
 		gen.ToolApprovalActionRequestActionApproveVersion,
 		gen.ToolApprovalActionRequestActionApproveVersionAllowFor:
-		// TODO(#1963 developer): C-24/C-26 timed allowance and skill trust
-		// approval. Until implemented these actions store nothing and are
-		// refused with the existing unknown-action error, so nothing grants.
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
-		)
-		return
+		action = ApprovalActionApprove
 	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
 	case gen.ToolApprovalActionRequestActionCancel:
 		action = ApprovalActionCancel
 	default:
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
-		)
+		// Not an answer any card offers (schema validation off): the
+		// existing unknown-action refusal.
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown action %q", string(body.Action)))
 		return
 	}
+	timed := ans.allowFor > 0
 
 	// Guard: registry is nil in pre-registry test harnesses.
 	if a.approvalReg == nil {
@@ -575,11 +558,17 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// channels-spec-r8 FR-038(b): the lasting allow action is refused for an
-	// always-ask tool BEFORE the pending call is approved or resolved, so the
-	// card stays usable for approve-once, Deny or Cancel.
-	if recordGrant && tools.IsAlwaysAsk(entry.ToolName) {
+	// An always-ask tool keeps today's 400 for a remembering answer, checked
+	// before the offered-actions rule (C-26); the card stays usable.
+	if timed && tools.IsAlwaysAsk(entry.ToolName) {
 		jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(entry.ToolName))
+		return
+	}
+	// The server accepts only the answers the card offers (C-24): an
+	// exact-action tool's time choice and any skill action on a tool card
+	// are refused, nothing stored.
+	if !isOffered(entry, body.Action) {
+		jsonErr(w, http.StatusConflict, approvalNotOfferedText)
 		return
 	}
 
@@ -589,8 +578,28 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// and that Omnipus is single-account, so there is no other account to
 	// scope against; release's ws_tool_approval.go has no audience rule.
 
-	// Attempt the state transition.
-	resolved, gone := a.approvalReg.resolveBy(approvalID, action, recordGrant, requestUsername(r))
+	resp := gen.ToolApprovalResponse{
+		ApprovalId: approvalID,
+		Action:     gen.ToolApprovalResponseAction(body.Action),
+		Status:     gen.ToolApprovalResponseStatusOk,
+	}
+	// C-24 order of effects: the timed allowance is recorded first, then
+	// the waiting call is released. A late answer to a card that is no
+	// longer waiting records nothing.
+	var allowance *timedAllowanceAnswer
+	if timed {
+		if !a.approvalReg.isPending(approvalID) {
+			jsonErr(w, http.StatusGone, "approval already resolved")
+			return
+		}
+		scope := gen.ToolApprovalActionRequestScopeExact
+		if body.Scope != nil {
+			scope = *body.Scope
+		}
+		allowance, resp = a.answerWithTime(entry, scope, *body.Duration, ans.allowFor, resp)
+	}
+
+	resolved, gone := a.approvalReg.resolveAnswer(approvalID, action, timed, requestUsername(r), allowance)
 	if gone {
 		// Entry already in terminal state — FR-018.
 		logsafeWarn("tool-approval: late action on resolved approval",
@@ -603,62 +612,43 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.awaitRoomAdmission(entry)
-
-	// "allow": the pending call is now approved — record the session-scoped
-	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable
-	// approval entry set at creation, never from client-supplied data, so a
-	// caller cannot install a grant for an arbitrary (session, agent, tool, args).
-	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops (returns false)
-	// on any empty key component (fail-safe: never records under an empty
-	// session/agent/tool key). This is now the ONLY writer of "allow" grants
-	// (ADR-036 §3.4 retired the legacy WS-frame gate, wsApprovalHook, which
-	// used to also record grants from its own decision:"always" handling).
-	//
-	// The underlying tool call is still approved either way (the state
-	// transition above already succeeded) — a no-op grant only means the NEXT
-	// matching call will prompt again, not that this call fails. We log at Warn
-	// instead of Info in that case so an operator can see the grant did not
-	// actually take effect, rather than silently believing it did.
-	resp := gen.ToolApprovalResponse{
-		ApprovalId: approvalID,
-		Action:     gen.ToolApprovalResponseAction(body.Action),
-		Status:     gen.ToolApprovalResponseStatusOk,
+	if timed && resp.Applied != nil {
+		resp.Applied.CallReleased = action == ApprovalActionApprove
 	}
-	if recordGrant {
-		record, recordedScope := a.approvalGrantRecorder(entry, grantScope)
-		recorded := record(entry.SessionID)
-		if recorded {
-			logsafeInfo("tool-approval: recorded session Allow grant",
-				"approval_id", approvalID,
-				"session_id", entry.SessionID,
-				"agent_id", entry.AgentID,
-				"tool", entry.ToolName,
-				"requested_scope", string(grantScope),
-				"recorded_scope", string(recordedScope))
-		} else {
-			logsafeWarn("tool-approval: 'allow' action approved this call but the grant was NOT recorded "+
-				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
-				"approval_id", approvalID,
-				"session_id", entry.SessionID,
-				"agent_id", entry.AgentID,
-				"tool", entry.ToolName)
-		}
-		// Bug fix: also propagate the grant onto the durable identity the
-		// NEXT delegation will inherit from, so "Allow" clicked during a
-		// delegated child's own turn survives past that child's session
-		// lifetime. See recordGrantOnDelegationParent's doc comment.
-		// Honesty: if this IS a delegated child and the parent write did
-		// not stick, grant_recorded must be false — the child session is
-		// torn down at the end of the turn and the next same-identity use
-		// will ask again.
-		parentOK := a.recordGrantOnDelegationParent(entry, approvalID, record)
-		resp.GrantRecorded = boolPtr(recorded && parentOK)
-		if recorded {
-			resp.Scope = &recordedScope
-		}
-	}
-
 	jsonOK(w, resp)
+}
+
+// answerWithTime records the timed allowance of an "allow_for" answer for
+// the card's agent and fills the response with what was stored (C-24,
+// C-26). A failed record still releases the call: the response says the
+// approval covers this request only, and why.
+func (a *restAPI) answerWithTime(
+	entry *approvalEntry, scope gen.ToolApprovalActionRequestScope,
+	duration gen.ApprovalAllowDuration, d time.Duration, resp gen.ToolApprovalResponse,
+) (*timedAllowanceAnswer, gen.ToolApprovalResponse) {
+	resp.Applied = &gen.ToolApprovalApplied{}
+	end, recorded, err := a.recordTimedAllowance(entry, scope, d)
+	if err != nil {
+		logsafeWarn("tool-approval: the time choice was not recorded; this call is approved once",
+			"approval_id", entry.ApprovalID, "agent_id", entry.AgentID, "tool", entry.ToolName, "error", err)
+		resp.GrantRecorded = boolPtr(false)
+		reason := approvalNotAppliedPrefix + err.Error() + "."
+		resp.NotAppliedReason = &reason
+		return nil, resp
+	}
+	resp.GrantRecorded = boolPtr(true)
+	resp.Scope = &recorded
+	resp.Applied.TimedAllowance = true
+	if end.IsZero() {
+		// A shell pre-flight card: the shell tool records the narrow
+		// allowance when the call is released.
+		return nil, resp
+	}
+	resp.ExpiresAt = &end
+	logsafeInfo("tool-approval: recorded timed allowance",
+		"approval_id", entry.ApprovalID, "agent_id", entry.AgentID, "tool", entry.ToolName,
+		"duration", string(duration), "scope", string(recorded))
+	return &timedAllowanceAnswer{Duration: string(duration), EndsAt: end}, resp
 }
 
 // recordGrantOnDelegationParent is the fix for the bug where an "Always

@@ -187,6 +187,11 @@ type ApprovalOutcome struct {
 	// so they recorded a persistent grant unconditionally on any approval.
 	RecordGrant bool
 
+	// Allowance is the timed allowance an "allow_for" answer recorded
+	// before the release (C-26); nil otherwise, also when the shell tool
+	// records the narrow allowance itself after the release.
+	Allowance *timedAllowanceAnswer
+
 	// ApproverUserID is the authenticated person who made an explicit
 	// decision (approve, deny, cancel through the decision route); empty for
 	// every system decision (timeout, restart, Stop, saturation, …). Used
@@ -637,6 +642,26 @@ func (r *approvalRegistryV2) resolveBy(
 	recordGrant bool,
 	approverUserID string,
 ) (resolveOK bool, gone bool) {
+	return r.resolveAnswer(approvalID, action, recordGrant, approverUserID, nil)
+}
+
+// timedAllowanceAnswer is the timed allowance a card answer recorded before
+// the call was released (C-26): its wire length and wall-clock end. Carried
+// on the outcome for the consent audit record.
+type timedAllowanceAnswer struct {
+	Duration string
+	EndsAt   time.Time
+}
+
+// resolveAnswer is resolveBy with the timed allowance the answer recorded,
+// nil for every other answer.
+func (r *approvalRegistryV2) resolveAnswer(
+	approvalID string,
+	action ApprovalAction,
+	recordGrant bool,
+	approverUserID string,
+	allowance *timedAllowanceAnswer,
+) (resolveOK bool, gone bool) {
 	r.mu.Lock()
 	e, ok := r.entries[approvalID]
 	if !ok {
@@ -653,7 +678,7 @@ func (r *approvalRegistryV2) resolveBy(
 	switch action {
 	case ApprovalActionApprove:
 		newState = ApprovalStateApproved
-		outcome = ApprovalOutcome{Approved: true, Reason: "approved", RecordGrant: recordGrant}
+		outcome = ApprovalOutcome{Approved: true, Reason: "approved", RecordGrant: recordGrant, Allowance: allowance}
 	case ApprovalActionDeny:
 		newState = ApprovalStateDeniedUser
 		outcome = ApprovalOutcome{Approved: false, Reason: denialReasonUser}
@@ -711,6 +736,14 @@ func (r *approvalRegistryV2) cancelBatchShortCircuit(approvalID string) bool {
 		listener(e, ApprovalStateDeniedBatchShortCircuit)
 	}
 	return true
+}
+
+// isPending reports whether the approval is still waiting for an answer.
+func (r *approvalRegistryV2) isPending(approvalID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[approvalID]
+	return ok && !e.state.isTerminal()
 }
 
 // get looks up an entry by approval ID.  Thread-safe; returns nil if not found.
