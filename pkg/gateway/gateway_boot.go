@@ -1398,7 +1398,13 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// retryable cleanup intent instead of a log-only success.
 	stg.api.reconcileOrphanMailState()
 	// #904: a successful reload clears the Performance pending-apply state.
-	stg.runningServices.reloadOutcome.onSuccess = stg.api.pendingApply.clearAfterReload
+	// G2-B1: it also clears the failed-apply keys of every registry-rebuild
+	// write it read, whichever request triggered it.
+	api := stg.api
+	stg.runningServices.reloadOutcome.onSuccess = func(seq uint64, configReadSeq uint64) {
+		api.pendingApply.clearAfterReload(seq, configReadSeq)
+		api.applyFailed.rebuildApplied(configReadSeq)
+	}
 	// D-107: the Library REST write handlers broadcast a library_changed WS
 	// frame after every landed mutation, so a second tab's folder listing
 	// reconciles without a reload. wsHandler was built earlier in boot; store

@@ -196,8 +196,9 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
 	if reloadErr != nil {
 		// Saved, not in use: listed as apply_failed before the answer (C-6).
-		// Recorded only if no newer rate-limit write or apply has decided
-		// the state since this write (B5, M-8).
+		// Dropped only when a successful apply already covers this write;
+		// otherwise joined with the keys other failed writes left unapplied
+		// (B5, M-8, G2-B1).
 		a.applyFailed.recordAt(applyFailedSourceRateLimits, ticket, keys)
 		slog.Warn("rest: rate limits saved but hot-reload failed; restart required",
 			"reload_error", reloadErr,
@@ -220,7 +221,10 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	a.applyFailed.clearSourceAt(applyFailedSourceRateLimits, ticket)
+	if confirmed {
+		// G2-B1: only a confirmed reload proves this write is in use.
+		a.applyFailed.appliedAt(applyFailedSourceRateLimits, ticket.seq)
+	}
 	slog.Info("rest: rate limits updated",
 		"max_agent_llm_calls_per_hour", newCfg.MaxAgentLLMCallsPerHour,
 		"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,

@@ -11,11 +11,16 @@ package gateway
 // GET /api/v1/config/pending-restart lists each key with reason
 // "apply_failed"; its persisted_value is read from config.json at request
 // time, never from this list. An entry is removed by a later successful apply
-// of the key (for a config refresh: any later successful refresh, which loads
-// the whole file) or by a restart (the list lives in memory only).
+// that covers its write (for a config refresh: any later successful refresh,
+// which loads the whole file; for a registry-rebuild-stage key: a successful
+// registry rebuild that read config.json after the write) or by a restart
+// (the list lives in memory only).
 //
 // Writers record INSIDE the config write lock, before the response is sent,
-// so a lost response can never leave a saved, unapplied key unlisted.
+// so a lost response can never leave a saved, unapplied key unlisted. A
+// writer whose apply is a registry reload that runs after the lock records
+// that reload's failure before it answers, judged against the newest
+// successful apply (applyFailedRegistry).
 
 import (
 	"encoding/json"
@@ -36,8 +41,15 @@ type applyFailedSource string
 
 const (
 	// applyFailedSourceRefresh: the live config refresh after a config.json
-	// write failed (configRefreshError, or a failed registry reload).
+	// write failed (configRefreshError). Any later successful refresh loads
+	// the whole file, so it clears these entries.
 	applyFailedSourceRefresh applyFailedSource = "config_refresh"
+	// applyFailedSourceRegistryRebuild: a context settings write whose keys
+	// are applied only by a registry rebuild (agents resolve their context
+	// windows when they are built) was not applied. Only a successful
+	// registry rebuild that read the write clears it; a refresh-only write
+	// never does (G2-B1).
+	applyFailedSourceRegistryRebuild applyFailedSource = "registry_rebuild"
 	// applyFailedSourcePromptGuard: the prompt-guard hot reload failed.
 	applyFailedSourcePromptGuard applyFailedSource = "prompt_guard"
 	// applyFailedSourceRateLimits: the rate-limit hot apply failed.
@@ -83,89 +95,158 @@ func dottedConfigKeys(paths []configKeyPath) []string {
 	return out
 }
 
-// applyFailedEntry is one listed key and the apply path that failed for it.
+// applyFailedEntry is one listed key, the apply path that failed for it, and
+// the newest failed write that left it unapplied: ticket is that write's
+// per-source ticket, readMark the config-read count taken with it (see
+// applyFailedTicket).
 type applyFailedEntry struct {
-	path   configKeyPath
-	source applyFailedSource
+	path     configKeyPath
+	source   applyFailedSource
+	ticket   uint64
+	readMark uint64
+}
+
+// applyFailedTicket identifies one recorded write, taken under the config
+// write lock right after the write reached config.json.
+//
+// seq orders the writes of one source (nextTicket). readMark is
+// reloadOutcomeTracker.configReadsCount() at the same moment: a registry
+// rebuild whose applied config was stamped with a greater read sequence read
+// config.json after this write, so it applied it (production stamps that
+// read under the config write lock, gateway_reload.go::reloadConfigForSwap).
+// readMark is 0 when no reload outcome tracker is wired.
+type applyFailedTicket struct {
+	seq      uint64
+	readMark uint64
 }
 
 // applyFailedRegistry is the zero-value-usable set of failed-apply keys.
 //
-// generation counts, per source, the writes and clears made under the
-// config write lock. A writer whose apply is a reload that runs after the
-// lock is released takes a ticket (nextTicket) under the lock and reports its
-// outcome with recordAt / clearSourceAt: an outcome whose ticket is no longer
-// the source's latest is dropped, because a newer write or apply of that
-// source has already decided the state (B5, M-8).
+// G2-B1 (SFH G1-SFH-01, arch N-1): an outcome is judged against the newest
+// SUCCESSFUL apply, never against the newest write. Per source, issued is the
+// last ticket handed out and appliedThrough the highest ticket a successful
+// apply of that source is known to cover. A failure of a write the watermark
+// does not cover adds its keys to the list (the union of still-unapplied
+// keys); a failure the watermark covers is dropped, because a newer
+// successful apply already put the key in use (B5). A success removes only
+// the entries whose newest failed write it covers.
+//
+// rebuildReadApplied is the highest config-read sequence a successful
+// registry rebuild applied (rebuildApplied, the reload outcome tracker's
+// success hook). It covers every registry-rebuild-stage write whose readMark
+// is lower, whichever request triggered the rebuild.
 type applyFailedRegistry struct {
-	mu         sync.Mutex
-	entries    map[string]applyFailedEntry
-	generation map[applyFailedSource]uint64
+	mu                 sync.Mutex
+	entries            map[string]applyFailedEntry
+	issued             map[applyFailedSource]uint64
+	appliedThrough     map[applyFailedSource]uint64
+	rebuildReadApplied uint64
 }
 
-// clearSource removes every entry the now-successful source applied. Called
-// under the config write lock; it supersedes every earlier ticket of source.
-func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.clearLocked(source)
-	r.bumpLocked(source)
-}
-
-func (r *applyFailedRegistry) clearLocked(source applyFailedSource) {
-	for id, e := range r.entries {
-		if e.source == source {
-			delete(r.entries, id)
-		}
+// appliedByRegistryRebuild reports whether source's keys are put in use by
+// a registry rebuild (ReloadProviderAndConfig), rather than by the config
+// pointer swap of a refresh.
+func appliedByRegistryRebuild(source applyFailedSource) bool {
+	switch source {
+	case applyFailedSourceRegistryRebuild, applyFailedSourcePromptGuard, applyFailedSourceRateLimits:
+		return true
 	}
+	return false
 }
 
-func (r *applyFailedRegistry) bumpLocked(source applyFailedSource) uint64 {
-	if r.generation == nil {
-		r.generation = make(map[applyFailedSource]uint64)
-	}
-	r.generation[source]++
-	return r.generation[source]
-}
-
-// nextTicket starts a new write of source and returns its ticket. Call it
-// while the config write lock is held, right after the write.
+// nextTicket starts a new write of source and returns its ticket sequence.
+// Call it while the config write lock is held, right after the write.
 func (r *applyFailedRegistry) nextTicket(source applyFailedSource) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.bumpLocked(source)
+	if r.issued == nil {
+		r.issued = make(map[applyFailedSource]uint64)
+	}
+	r.issued[source]++
+	return r.issued[source]
 }
 
-// recordAt records keys for source only when ticket is still the source's
-// latest; it reports whether it recorded.
-func (r *applyFailedRegistry) recordAt(source applyFailedSource, ticket uint64, keys []configKeyPath) bool {
+// coveredLocked reports whether a successful apply already covers ticket.
+func (r *applyFailedRegistry) coveredLocked(source applyFailedSource, ticket applyFailedTicket) bool {
+	if ticket.seq <= r.appliedThrough[source] {
+		return true
+	}
+	return appliedByRegistryRebuild(source) && ticket.readMark < r.rebuildReadApplied
+}
+
+// recordAt records the failed apply of the write ticket for keys, unless a
+// successful apply already covers that write. Keys already listed stay
+// listed (union); a key keeps the newest failed write that left it
+// unapplied. It reports whether it recorded.
+func (r *applyFailedRegistry) recordAt(source applyFailedSource, ticket applyFailedTicket, keys []configKeyPath) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.generation[source] != ticket {
+	if r.coveredLocked(source, ticket) {
 		return false
-	}
-	if len(keys) == 0 {
-		return true
 	}
 	if r.entries == nil {
 		r.entries = make(map[string]applyFailedEntry)
 	}
 	for _, k := range keys {
-		r.entries[k.identity()] = applyFailedEntry{path: append(configKeyPath(nil), k...), source: source}
+		id := k.identity()
+		e, ok := r.entries[id]
+		if ok && e.source == source && e.ticket > ticket.seq {
+			continue
+		}
+		r.entries[id] = applyFailedEntry{
+			path: append(configKeyPath(nil), k...), source: source, ticket: ticket.seq, readMark: ticket.readMark,
+		}
 	}
 	return true
 }
 
-// clearSourceAt clears source's entries only when ticket is still the
-// source's latest; it reports whether it cleared.
-func (r *applyFailedRegistry) clearSourceAt(source applyFailedSource, ticket uint64) bool {
+// appliedAt records that an apply of source covering every write up to
+// ticket sequence seq succeeded, and removes the entries of source whose
+// newest failed write it covers.
+func (r *applyFailedRegistry) appliedAt(source applyFailedSource, seq uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.generation[source] != ticket {
-		return false
+	r.appliedLocked(source, seq)
+}
+
+func (r *applyFailedRegistry) appliedLocked(source applyFailedSource, seq uint64) {
+	if r.appliedThrough == nil {
+		r.appliedThrough = make(map[applyFailedSource]uint64)
 	}
-	r.clearLocked(source)
-	return true
+	if seq > r.appliedThrough[source] {
+		r.appliedThrough[source] = seq
+	}
+	for id, e := range r.entries {
+		if e.source == source && e.ticket <= seq {
+			delete(r.entries, id)
+		}
+	}
+}
+
+// clearSource records a successful apply of every write of source issued so
+// far. Called under the config write lock (a successful refresh loads the
+// whole file, so it covers every earlier write of its source).
+func (r *applyFailedRegistry) clearSource(source applyFailedSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appliedLocked(source, r.issued[source])
+}
+
+// rebuildApplied is the reload outcome tracker's success hook: a registry
+// rebuild whose applied config was read at configReadSeq succeeded, so every
+// registry-rebuild-stage write with a lower readMark is in use. A read
+// sequence of 0 (no stamp) proves nothing and changes nothing.
+func (r *applyFailedRegistry) rebuildApplied(configReadSeq uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if configReadSeq > r.rebuildReadApplied {
+		r.rebuildReadApplied = configReadSeq
+	}
+	for id, e := range r.entries {
+		if appliedByRegistryRebuild(e.source) && e.readMark < configReadSeq {
+			delete(r.entries, id)
+		}
+	}
 }
 
 // keys returns the listed keys, sorted by display key then identity.
@@ -212,24 +293,28 @@ func writeSavedNotRefreshed(w http.ResponseWriter, text string, keys []configKey
 // apply_failed under source while configMu is still held — before the
 // caller answers. changedKeys is called only after mutate ran.
 //
-// source names the apply path: a writer whose change is applied by its own
-// reload (prompt guard, rate limits) records under its own source, so only
-// its own later successful apply clears the entry (B3, SFH-03); every other
-// writer uses applyFailedSourceRefresh. It also returns the write's ticket,
-// taken under the config write lock, for the writer's later reload outcome
-// (recordAt / clearSourceAt, B5). The ticket is 0 when nothing was written.
+// source names the apply path that puts the keys in use: a writer whose
+// change is applied by a registry rebuild (context settings, prompt guard,
+// rate limits) records under a registry-rebuild-stage source, so a later
+// refresh-only write never clears it (B3, SFH-03, G2-B1); every other writer
+// uses applyFailedSourceRefresh. It also returns the write's ticket, taken
+// under the config write lock, for the writer's later reload outcome
+// (recordAt / appliedAt). The ticket is zero when nothing was written.
 func (a *restAPI) safeUpdateConfigJSONRecorded(
 	source applyFailedSource, mutate func(m map[string]any) error, changedKeys func() []configKeyPath,
-) (uint64, error) {
+) (applyFailedTicket, error) {
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
 	err := a.orderedConfigJSONLocked(store, nil, nil, mutate)
 	var refreshErr *configRefreshError
 	if err != nil && !errors.As(err, &refreshErr) {
-		return 0, err
+		return applyFailedTicket{}, err
 	}
-	ticket := a.applyFailed.nextTicket(source)
+	ticket := applyFailedTicket{
+		seq:      a.applyFailed.nextTicket(source),
+		readMark: a.reloadOutcome.configReadsCount(),
+	}
 	if refreshErr != nil {
 		a.applyFailed.recordAt(source, ticket, changedKeys())
 	}

@@ -237,7 +237,7 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// survive in either order (same field: the later write wins; a list is
 	// one field).
 	written := contextUpdateKeys(&req, clearsDefaultWindow)
-	ticket, err := a.safeUpdateConfigJSONRecorded(applyFailedSourceRefresh, func(m map[string]any) error {
+	ticket, err := a.safeUpdateConfigJSONRecorded(applyFailedSourceRegistryRebuild, func(m map[string]any) error {
 		ctxSection := ensureMap(m, "context")
 		next, decodeErr := storedContextSettings(ctxSection)
 		if decodeErr != nil {
@@ -271,14 +271,18 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 	// reload leaves the write on disk: saved, not in use (FR-102). The keys
 	// are recorded before the answer; the reload runs outside the config
 	// write lock, so this record is made after it, not inside it.
+	//
+	// G2-B1: the keys are recorded on the registry-rebuild source, which a
+	// refresh-only write never clears. The record is dropped only when a
+	// successful registry rebuild already covers this write; otherwise it
+	// joins the keys other failed writes left unapplied (union).
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: PUT /settings/context: reload failed", "error", err)
-		// Recorded only if no newer refresh-path write or successful refresh
-		// has decided the state since this write (B5, M-8).
-		a.applyFailed.recordAt(applyFailedSourceRefresh, ticket, canonicalConfigKeys(written...))
+		a.applyFailed.recordAt(applyFailedSourceRegistryRebuild, ticket, canonicalConfigKeys(written...))
 		writeSavedNotRefreshed(w, savedNotRefreshedText, canonicalConfigKeys(written...))
 		return
 	}
+	a.applyFailed.appliedAt(applyFailedSourceRegistryRebuild, ticket.seq)
 
 	a.getContextSettings(w, r)
 }
