@@ -1,31 +1,21 @@
 /**
- * SecuritySection — Settings → Security tab.
+ * SecuritySection — Settings → Protection and Settings → Keys & secrets.
  *
- * Two-layer IA (US-B1 / #327):
- *   Primary layer  — Security health (DiagnosticsSection score + 3 plain toggles)
- *   Advanced layer — All jargon (sandbox internals, SSRF, deny-regex, tool grid,
- *                    audit log) under ONE AdvancedDisclosure.
+ * `view` picks the part: 'protection' (security health, Auto-approve, God
+ * Mode, prompt-injection defense, rate limits, audit log and the notice that
+ * tool permissions and skill trust are set in Skills & Tools) or 'keys' (the
+ * credential vault). The legacy one-page layout, its global tool grid and
+ * skill trust card were removed when Skills & Tools took them over
+ * (skills-tools-redesign C-22 row 6, ruling Q-FR060 A).
  *
- * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
- *   - Replaces GlobalToolPoliciesSection entirely.
- *   - Deletes local CATEGORY_LABELS / PolicyBadge / groupByCategory duplicates.
- *   - Imports shared canonicals from @/lib/toolCategories and @/components/shared.
- *
- * Score-as-control-surface + plain restart banner + vault reassurance (US-B4 / #330):
- *   - action_link / action_label links in DiagnosticsSection IssueCard.
- *   - RestartBanner plain summary with jargon behind "Technical details".
- *   - Credential Vault reassurance line.
- *
- * SkillTrustSection mounted (US-E4 / #340 part):
- *   - Block / Warn-unverified / Allow-all radio already built; imported here.
+ * Credential Vault reassurance line and score-as-control-surface (US-B4 /
+ * #330) stay as they were.
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
 import { PromptGuardSection, type PromptGuardDraft } from './PromptGuardSection'
-import { ExecProxyStatusCard } from './ExecProxyStatusCard'
-import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -33,12 +23,10 @@ import { Callout, CalloutDescription, CalloutTitle } from '@/components/ui/callo
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { useAutoSave } from '@/hooks/useAutoSave'
 import { PasswordBadge, SaveBarPanel, SettingRow } from './SaveBar'
 import { toWriteResponse } from './saveOutcome'
 import { ReadErrorCallout } from './ReadErrorCallout'
 import { fieldDomId, useSaveBar, type FieldMessage, type SaveBarField, type SaveBarValue } from './useSaveBar'
-import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
 import {
   Dialog,
@@ -47,7 +35,6 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Separator } from '@/components/ui/separator'
 import {
   fetchRateLimits,
   updateRateLimits,
@@ -55,10 +42,6 @@ import {
   addCredential,
   deleteCredential,
   rotateCredentials,
-  fetchBuiltinTools,
-  fetchGlobalToolPolicies,
-  updateGlobalToolPolicies,
-  isPersistedPolicyActivationError,
   fetchSandboxConfig,
   updateSandboxConfig,
   fetchSandboxStatus,
@@ -70,103 +53,13 @@ import type { PromptInjectionLevel } from '@/lib/api'
 import type { RateLimitsUpdateRequest } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
-import { SandboxSection } from './SandboxSection'
 import { Label } from '@/components/ui/label'
-import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
-import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { AutoApproveAskList } from './AutoApproveAskList'
 import { settingsRow } from './settingsSections'
 import { useReturnFocus } from './useReturnFocus'
 import { SectionLoading } from './SectionLoading'
-
-// ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
-// CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
-// shared canonicals. Local duplicates removed per #329.
-
-function GlobalToolPoliciesSection() {
-  const queryClient = useQueryClient()
-
-  const { data: builtinTools = [], isLoading: toolsLoading, isError: toolsError } = useQuery({
-    queryKey: ['tools-builtin'],
-    queryFn: fetchBuiltinTools,
-  })
-
-  const { data: globalPolicies, isLoading: policiesLoading, isError: policiesError } = useQuery({
-    queryKey: ['global-tool-policies'],
-    queryFn: fetchGlobalToolPolicies,
-  })
-
-  const [toolPolicyValue, setToolPolicyValue] = useState<ToolPolicyValue>({
-    policies: {},
-  })
-  const [isDraftReady, setIsDraftReady] = useState(false)
-
-  // PUT /api/v1/security/tool-policies has no server-side step-up and gets no
-  // confirmation either (FR-OB-046): rest_tool_policies.go:69 removed its gate
-  // deliberately, so the client asked for a password the server never demanded.
-  // It is not one of ADR-0008 ruling 6's six controls. The auto-save fires the
-  // PUT directly.
-
-  useEffect(() => {
-    if (!globalPolicies || isDraftReady) return
-    setToolPolicyValue({
-      policies: globalPolicies.policies ?? {},
-    })
-    setIsDraftReady(true)
-  }, [globalPolicies, isDraftReady])
-
-  const { status: saveStatus, error: saveError } = useAutoSave(
-    toolPolicyValue,
-    async (cfg) => {
-      await updateGlobalToolPolicies(cfg)
-      queryClient.invalidateQueries({ queryKey: ['global-tool-policies'] })
-    },
-    { disabled: !isDraftReady, isPersistedError: isPersistedPolicyActivationError },
-  )
-
-  const isLoading = toolsLoading || policiesLoading
-
-  if (isLoading) {
-    return (
-      <div className="space-y-[var(--space-2)] py-[var(--space-3)]">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="h-8 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
-        ))}
-      </div>
-    )
-  }
-
-  if (toolsError || policiesError) {
-    return (
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)] py-[var(--space-3)]">
-        Failed to load tool policies. Check that the backend is running.
-      </p>
-    )
-  }
-
-  return (
-    <div className="space-y-[var(--space-3)]">
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-        These policies apply globally across all agents. Per-agent policies cannot override a global
-        "Deny". Tools blocked here are greyed out in each agent's tool list.
-      </p>
-      <ToolPolicyEditor
-        tools={builtinTools}
-        value={toolPolicyValue}
-        onChange={setToolPolicyValue}
-        disabled={!isDraftReady}
-      />
-      <div className="pt-[var(--space-2)] flex items-center gap-[var(--space-2-5)]">
-        <AutoSaveIndicator status={saveStatus} error={saveError} />
-        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-          {Object.keys(toolPolicyValue.policies).length} tool polic{Object.keys(toolPolicyValue.policies).length !== 1 ? 'ies' : 'y'} configured
-        </span>
-      </div>
-    </div>
-  )
-}
 
 // ── Auto-approve (ADR-092) — global default ───────────────────────────────────
 //
@@ -340,7 +233,6 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
   const credFocus = useReturnFocus()
   const showProtection = view !== 'keys'
   const showKeys = view !== 'protection'
-  const legacy = view === undefined
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
@@ -635,14 +527,6 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
 
   return (
     <div className="space-y-[var(--space-4)]">
-      {legacy && (
-        <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Security & Policy</h2>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            Control how protected your setup is and adjust agent boundaries.
-          </p>
-        </div>
-      )}
 
       {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
 
@@ -668,9 +552,7 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
             whether a tool resolved to "ask" still prompts. */}
         <AutoApproveControl draft={autoApproveDraft} />
 
-        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level. In the
-            redesign it moved to Skills & Tools (FR-060). */}
-        {legacy && <SkillTrustSection />}
+        {/* Skill trust and the tool grid live on Skills & Tools (FR-060). */}
 
         {/* God Mode sits after Approvals in Protection (FR-051). */}
         {view === 'protection' && godMode}
@@ -679,84 +561,6 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
       </>
       )}
 
-      {legacy && (
-      <>
-      {/* ── ADVANCED LAYER (US-B1): all jargon behind one collapsed section ── */}
-      <AdvancedDisclosure
-        title="Advanced / technical details"
-        summary="Process isolation, tool grid, audit log — safe to skip"
-        data-testid="advanced-technical-details"
-      >
-        <div className="space-y-[var(--space-4)]">
-
-          {/* Tool Access — Global Policies (US-B3) */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              Tool Access — Global Policies
-            </p>
-            <GlobalToolPoliciesSection />
-          </section>
-
-          <Separator />
-
-          {/* SSRF Proxy */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              SSRF Proxy
-            </p>
-            <ExecProxyStatusCard />
-          </section>
-
-          <Separator />
-
-          {/* Prompt Guard */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              Prompt Injection Defense
-            </p>
-            <PromptGuardSection draft={promptGuardDraft} />
-          </section>
-
-          <Separator />
-
-          {/* Process Sandbox */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              Process Sandbox (Landlock / seccomp)
-            </p>
-            <SandboxSection />
-            {/* The old footnote read "Sandbox configuration is auto-detected at
-                startup based on your kernel capabilities" — printed directly
-                beneath a control the operator very much does set, and it read
-                as "this is not yours to change". What is actually detected is
-                the kernel's capabilities, which decide which modes will work.
-                (UAT defect 002 / ADR-068 §6.) */}
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] pt-[var(--space-1)]">
-              What your kernel supports is detected when the gateway starts, and that decides which
-              modes will actually work — the mode itself is yours to choose above. The sandbox is
-              only one of the boundaries on what an agent may touch: the shell workspace limit is a
-              separate rule with its own setting, in the same panel.
-            </p>
-          </section>
-
-          <Separator />
-
-          {/* Per-Agent Rate Limits */}
-          <section>
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
-              Per-Agent Rate Limits
-            </p>
-            {rateLimitsCard}
-          </section>
-
-          <Separator />
-
-          {auditBlock}
-
-        </div>
-      </AdvancedDisclosure>
-      </>
-      )}
 
       {view === 'protection' && (
         <>
@@ -770,9 +574,10 @@ export function SecuritySection({ view, godMode }: SecuritySectionProps = {}) {
           </section>
           {auditBlock}
           <Callout variant="info" data-testid="protection-moved-permissions">
-            <CalloutTitle>Tool permissions and skill trust are temporarily unavailable</CalloutTitle>
+            <CalloutTitle>Tool permissions and skill trust are set in Skills &amp; Tools</CalloutTitle>
             <CalloutDescription>
-              Allow, Ask or Deny for each tool, and whether unverified skills may load, are temporarily unavailable until the Skills &amp; Tools update lands.
+              Allow, Ask or Deny for each tool and skill, and whether unverified skills may load, are set on{' '}
+              <a href="/skills" className="text-[var(--color-accent)] underline underline-offset-2">Skills &amp; Tools</a>.
               An agent can still be stricter on its own profile.
             </CalloutDescription>
           </Callout>

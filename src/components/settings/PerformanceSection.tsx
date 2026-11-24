@@ -68,7 +68,6 @@ type Key =
   | 'goal_stalled_checkin_enabled'
   | 'goal_stalled_checkin_minutes'
   | 'max_tool_iterations'
-  | 'tools_on_demand'
 
 type Draft = Partial<Record<Key, string | boolean>>
 type Values = Record<Key, string | boolean>
@@ -80,7 +79,6 @@ const LABELS: Record<Key, string> = {
   goal_stalled_checkin_enabled: 'Stalled-work check-ins',
   goal_stalled_checkin_minutes: 'Check-in interval',
   max_tool_iterations: 'Max tool calls per turn',
-  tools_on_demand: 'Tool loading',
 }
 
 const ORDER: Key[] = [
@@ -90,7 +88,6 @@ const ORDER: Key[] = [
   'goal_stalled_checkin_enabled',
   'goal_stalled_checkin_minutes',
   'max_tool_iterations',
-  'tools_on_demand',
 ]
 
 function wholeNumber(raw: string): number | null {
@@ -129,7 +126,6 @@ function valuesOf(d: PerformanceSettings): Values {
     goal_stalled_checkin_enabled: d.goal_stalled_checkin_enabled ?? true,
     goal_stalled_checkin_minutes: String(d.goal_stalled_checkin_minutes ?? 30),
     max_tool_iterations: d.max_tool_iterations === undefined ? '' : String(d.max_tool_iterations),
-    tools_on_demand: d.tools_on_demand ?? true,
   }
 }
 
@@ -155,7 +151,6 @@ function bodyOf(changed: Key[], v: Values): PerformanceSettingsUpdate {
  */
 const CONFIG_KEYS: Record<Key, string> = {
   max_parallel_agents: 'performance.max_parallel_agents',
-  tools_on_demand: 'tools.manifest.compressed',
   goal_max_rounds: 'planning.goal_max_rounds',
   goal_reminder_quiet_seconds: 'planning.goal_reminder_quiet_seconds',
   goal_stalled_checkin_enabled: 'planning.goal_stalled_checkin_enabled',
@@ -334,7 +329,6 @@ function performanceView({ value, setDraft, errors, toolIterError, loweredSummar
             {loweredSummary}
           </p>
         )}
-        {switchRow('tools_on_demand', 'Load tools only when an agent needs them, so each message stays small.', 'performance-tools-on-demand-switch')}
       </Card>
     </div>
   )

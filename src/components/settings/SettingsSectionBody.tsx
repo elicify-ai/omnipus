@@ -43,8 +43,8 @@ export function SettingsSectionBody({ section, prefillOverride, focusGodMode, ba
         <SectionSaveScope>
           <div className="space-y-[var(--space-6)]">
             <ProvidersSection />
-            <Group title="Voice input and web search">
-              <IntegrationsSection />
+            <Group title="Voice input">
+              <IntegrationsSection part="voice" />
             </Group>
           </div>
         </SectionSaveScope>

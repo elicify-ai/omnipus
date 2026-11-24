@@ -10,7 +10,7 @@ Settings has 11 sections in three groups, listed down the left side (on a phone,
 - **Security**: Protection, Sandbox & network, Keys & secrets
 - **System**: Gateway, Data & retention, About
 
-The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. **Search settings** finds indexed settings by name. For example, Verbose chat is under Profile → Chat display. Web search remains under Providers; the global permission and skill-trust editors are temporarily unavailable until the Skills & Tools update lands. Choosing an indexed row opens its section, scrolls to that setting and highlights it with a short flash (with reduced motion turned on, it is marked without the flash). A link can do the same with `row`, for example `/settings?tab=gateway&row=port`.
+The open section is part of the address (`/settings?tab=gateway`), so a reload or a shared link opens the same section, and Back and Forward move between sections. **Search settings** finds indexed settings by name. For example, Verbose chat is under Profile → Chat display. Searching for web search, tool permissions or skill trust shows that they moved to Skills & Tools, with a link there. Choosing an indexed row opens its section, scrolls to that setting and highlights it with a short flash (with reduced motion turned on, it is marked without the flash). A link can do the same with `row`, for example `/settings?tab=gateway&row=port`.
 
 Personal things are not sections here. Profile is its own screen, holding your name, timezone, password, the context your agents read about you, and **Chat display** (Verbose chat). Usage is its own screen, showing token totals by agent, model, provider, and session.
 
@@ -51,7 +51,7 @@ The page can only talk to the address it was opened from. When a restart moves t
 - You want agents to know your role and preferences without repeating yourself in every chat.
 - You want to change how long transcripts are kept, check storage use, or cap how hard agents can call a model.
 
-See [tool permissions](tools.md) for what agents may do and [security](security.md) for how the sandbox confines them. The installation-wide permission editor and skill-trust control are temporarily unavailable in the web app; the agent editor still lets you tighten one agent's permissions.
+See [tool permissions](tools.md) for what agents may do and [security](security.md) for how the sandbox confines them. The installation-wide tool permissions and the unverified-skill setting are on **Skills & Tools**; the agent editor lets you tighten one agent's permissions.
 
 ## How to connect a model provider
 
@@ -67,7 +67,7 @@ API keys are stored encrypted on this server, never in the main configuration fi
 
 ## Web search
 
-In **Settings → Providers**, **Web Search** says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
+Web search moved out of Settings: open **Skills & Tools → Omnipus tools**, find the **Web & Search** group and click its **Settings** button. Searching Settings for "web search" says it moved, with a link. The panel says: "Your agents search with the default service. If it fails, the fallback takes over." When the search roles are available, two cards appear:
 
 | Card | What you can do |
 |---|---|
@@ -164,7 +164,7 @@ Old links keep working. An old `?tab=` name opens the section that holds those s
 | `backup`, `backups`, `restore` | Data & retention, with the notice "Backup and restore were removed." |
 | `context`, `devices`, `signin`, or a name Settings does not know | Providers |
 
-Device pairing and signed-in browsers are not in Settings at the moment. The installation-wide tool-permission editor and unverified-skill trust control are also temporarily unavailable: neither the new Settings nor [Skills & Tools](skills.md) has replacement controls yet. Existing configured values still apply.
+Device pairing and signed-in browsers are not in Settings at the moment. The installation-wide tool permissions, the unverified-skill setting and web search are not in Settings either: they live on [Skills & Tools](skills.md).
 
 **Voice input**, under **Settings → Providers**, holds the **Active transcriber**: the one service that turns your voice messages into text. Only configured services are offered. A keyed voice service needs its saved key; Audio Model is configured by its voice-model setting and does not need a separate service key here. Changing the transcriber is part of the Providers Save and asks for your password. Each voice service has its own row; for a keyed service, **Add key** or **Edit key** opens a side panel with the key field and a show/hide button, and **Save key** there asks for your password. The default model on the same page is saved by the same **Save changes**; it does not ask for the password.
 
@@ -238,9 +238,7 @@ Each worker's **Runtime** tab shows the saved program and parameters read-only, 
 
 ## Tool loading
 
-**Settings → Limits → Agents and goals → Tool loading** is on by default. It keeps each request smaller by advertising common tools first and loading additional tool definitions when needed. Turning it off sends the full available tool definitions with each request instead. See [Loaded tools stay with the conversation](tools.md#loaded-tools-stay-with-the-conversation) for how an on-demand load is retained.
-
-This switch changes the tool definitions sent to the model, not tool permissions or connected-server assignments. It is separate from MCP discovery settings. Changing it edits a draft: press **Save changes** to store it. The Save asks for your password once on a local install, or confirmation where there is no local password. Cancelling keeps the draft without storing it.
+The **Load tools on demand** switch is gone from **Settings → Limits**. What the model sees about each tool and skill is now set per item on **Skills & Tools** with the **What the model sees** level (Hidden, Name only, Name and short description, Full); see [tools](tools.md#what-the-model-sees). Searching Settings for "load tools on demand" points there. See [Loaded tools stay with the conversation](tools.md#loaded-tools-stay-with-the-conversation) for how an on-demand load is retained.
 
 For scripts, the switch is `tools_on_demand` on `GET` / `PUT /api/v1/performance` and `tools.manifest.compressed` in `config.json`: `true` means on-demand loading; `false` means the full available tool definitions.
 

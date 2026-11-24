@@ -40,7 +40,12 @@ import type { FormSavePart } from './useFormSaveBar'
 import { settingsRow } from './settingsSections'
 import { useReturnFocus } from './useReturnFocus'
 
-export function IntegrationsSection() {
+/**
+ * `part` splits the section between its two homes (Skills & Tools C-22 row 5):
+ * Settings → Providers shows voice input only, and the Web & Search side
+ * panel of Skills & Tools shows web search only. 'all' keeps both.
+ */
+export function IntegrationsSection({ part = 'all' }: { part?: 'all' | 'voice' | 'search' } = {}) {
   // FR-069: focus returns to the control that opened the dialog.
   const voiceSheetFocus = useReturnFocus()
   const { addToast } = useUiStore()
@@ -500,8 +505,12 @@ export function IntegrationsSection() {
       <div>
         <h3 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h3>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-          Configure the web-search and voice-input providers your agents use. API keys are stored
-          encrypted; changes require re-typing your password.
+          {part === 'voice'
+            ? 'Configure the voice-input providers your agents use.'
+            : part === 'search'
+              ? 'Configure the web-search providers your agents use.'
+              : 'Configure the web-search and voice-input providers your agents use.'}{' '}
+          API keys are stored encrypted; changes require re-typing your password.
         </p>
       </div>
 
@@ -526,6 +535,7 @@ export function IntegrationsSection() {
         </div>
       ) : data ? (
         <>
+          {part !== 'voice' && (
           <section className="space-y-[var(--space-2)]">
             <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <MagnifyingGlass size={13} weight="bold" /> Web Search
@@ -556,7 +566,9 @@ export function IntegrationsSection() {
               </>
             )}
           </section>
+          )}
 
+          {part !== 'search' && (
           <section className="space-y-[var(--space-2)]" {...settingsRow('Voice input')}>
             <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <Microphone size={13} weight="bold" /> Voice input
@@ -606,6 +618,7 @@ export function IntegrationsSection() {
               </>
             )}
           </section>
+          )}
         </>
       ) : null}
 

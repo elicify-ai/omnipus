@@ -196,12 +196,13 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   S('data', 'Clear all chat history', 'Deletes all chat transcripts.'),
   S('about', 'Version', 'Version, build and system information.'),
   // Moved, removed and hidden items (FR-007).
-  // G2-F5 (founder 2026-11-23, Q1 A): web search is still under Providers;
-  // tool permissions and skill trust are in no place until the Skills & Tools
-  // landing, so their entries say so and lead nowhere.
-  { section: 'providers', label: 'Web search', description: 'Search providers and keys.' },
-  { label: 'Tool permissions', description: 'Allow, Ask or Deny for each tool.', note: 'Temporarily unavailable until the Skills & Tools update lands.' },
-  { label: 'Skill trust', description: 'Whether unverified skills may load.', note: 'Temporarily unavailable until the Skills & Tools update lands.' },
+  // Skills & Tools C-22 row 5 (ruling Q-FR060 A): web search, tool
+  // permissions and skill trust live on Skills & Tools; Load tools on demand
+  // was replaced by the "What the model sees" levels there.
+  { label: 'Web search', description: 'Search providers and keys.', note: 'Moved to Skills & Tools.', href: '/skills' },
+  { label: 'Tool permissions', description: 'Allow, Ask or Deny for each tool.', note: 'Moved to Skills & Tools.', href: '/skills' },
+  { label: 'Skill trust', description: 'Whether unverified skills may load.', note: 'Moved to Skills & Tools.', href: '/skills' },
+  { label: 'Load tools on demand', description: 'Send tool definitions only when needed.', note: 'Replaced by levels in Skills & Tools.', href: '/skills' },
   { label: 'Verbose chat', description: 'Show every tool call in the transcript.', note: 'Moved to Profile → Chat display.', href: '/profile' },
   { label: 'Backup', description: 'Create or restore a backup.', note: 'Backup and restore were removed.' },
   { label: 'Restore', description: 'Restore a backup.', note: 'Backup and restore were removed.' },
