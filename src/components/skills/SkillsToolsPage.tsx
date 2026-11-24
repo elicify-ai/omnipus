@@ -72,7 +72,17 @@ export function SkillsToolsPage() {
         title="Skills & Tools"
         description="What agents may run, and what the model sees about each tool and skill."
         primaryAction={(
-          <NewSkillMenu onUpload={() => fileInput.current?.click()} onBrowse={() => setBrowseOpen(true)} />
+          <NewSkillMenu
+            onUpload={() => {
+              const input = fileInput.current
+              if (!input) return
+              // Cleared before the chooser opens, so the same file can be
+              // picked again; never cleared inside its own change event.
+              input.value = ''
+              input.click()
+            }}
+            onBrowse={() => setBrowseOpen(true)}
+          />
         )}
       />
       <input
@@ -83,7 +93,6 @@ export function SkillsToolsPage() {
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0]
-          event.target.value = ''
           if (file) void install.upload(file)
         }}
       />
