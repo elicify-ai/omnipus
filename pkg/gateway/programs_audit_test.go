@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,11 +38,39 @@ func TestProgramSentinel_AllSinks(t *testing.T) {
 		control := read()
 		require.Len(t, control, 1)
 		require.Contains(t, string(control[0]), "s1-test-instrument")
+		// Instrument for the action check below: it tells the five actions apart.
+		// A disconnect row must not satisfy "connect", nor a setting row "switch".
+		require.True(t, auditEventNamesAction("x.connected", "connect"))
+		require.False(t, auditEventNamesAction("x.disconnected", "connect"))
+		require.True(t, auditEventNamesAction("x.disconnected", "disconnect"))
+		require.False(t, auditEventNamesAction("x.connected", "disconnect"))
+		require.True(t, auditEventNamesAction("X_Switch.changed", "switch"))
+		require.False(t, auditEventNamesAction("x.setting_changed", "switch"))
+		require.False(t, auditEventNamesAction("", "check"))
 		baseline := 1
 		check := func(action string) {
 			t.Helper()
 			rows := read()
 			assert.Len(t, rows, baseline+1, "S50: exactly one new audit row for %s", action)
+			// S-50 also says WHICH action each row records. Expected values come
+			// from its five action words, not from the event strings the product
+			// happens to write.
+			var fresh []string
+			if len(rows) > baseline {
+				for _, row := range rows[baseline:] {
+					var fields map[string]any
+					require.NoError(t, json.Unmarshal(row, &fields), "each real audit line is one JSON object")
+					event, _ := fields["event"].(string)
+					fresh = append(fresh, event)
+				}
+			}
+			named := 0
+			for _, event := range fresh {
+				if auditEventNamesAction(event, action) {
+					named++
+				}
+			}
+			assert.Equal(t, 1, named, "S50: exactly one new audit row must name the action %q; the new rows' events are %q", action, fresh)
 			baseline = len(rows)
 			for _, row := range rows {
 				assert.NotContains(t, string(row), "tok_valid_12345", "audit remains value-free after %s", action)
@@ -62,4 +91,21 @@ func TestProgramSentinel_AllSinks(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
 		check("disconnect")
 	})
+}
+
+// auditEventNamesAction reports whether an audit event name records the given
+// action. S-50 gives the five action words (connect, check, switch, setting,
+// disconnect) but not the event strings, so a row names its action when one word
+// of its event name starts with the action word. Matching by word, not by
+// substring, keeps "disconnected" from passing as "connect".
+func auditEventNamesAction(event, action string) bool {
+	words := strings.FieldsFunc(strings.ToLower(event), func(r rune) bool {
+		return r == '.' || r == '_' || r == '-' || r == ':' || r == ' '
+	})
+	for _, word := range words {
+		if strings.HasPrefix(word, action) {
+			return true
+		}
+	}
+	return false
 }
