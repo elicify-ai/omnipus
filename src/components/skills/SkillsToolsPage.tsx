@@ -21,9 +21,11 @@ import { InstallReview } from './InstallReview'
 import { NewSkillMenu } from './NewSkillMenu'
 import { PermissionCatalog } from './PermissionCatalog'
 import { SkillBrowser } from './SkillBrowser'
+import { SkillRowActions } from './SkillRowActions'
 import { TrustBlock } from './TrustBlock'
 import { skillItems, toolItems } from './skillsToolsModel'
 import { useSkillInstall } from './useSkillInstall'
+import { useExternalServices } from './useExternalServices'
 
 const WEB_GROUP_ID = 'web & search'
 
@@ -65,6 +67,11 @@ export function SkillsToolsPage() {
   }
   const disabled = failures.length > 0 || !queue.stored || skillsQuery.isPending || toolsQuery.isPending
   const trust = queue.valueOf('skill_trust')
+  const services = useExternalServices(disabled)
+  const skillByKey = useMemo(
+    () => new Map((skillsQuery.data ?? []).map((skill) => [skill.id.toLowerCase(), skill])),
+    [skillsQuery.data],
+  )
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-[var(--space-3)] overflow-y-auto p-[var(--space-4)]">
@@ -96,6 +103,9 @@ export function SkillsToolsPage() {
           if (file) void install.upload(file)
         }}
       />
+      {install.cancelNotice && (
+        <Callout variant="info"><CalloutDescription>{install.cancelNotice}</CalloutDescription></Callout>
+      )}
       {install.stageError && (
         <Callout variant="error"><CalloutDescription>{install.stageError}</CalloutDescription></Callout>
       )}
@@ -114,6 +124,8 @@ export function SkillsToolsPage() {
           installing={install.busy}
           onInstall={(category) => void install.install(category)}
           onRetry={install.retry}
+          onCancel={() => void install.cancel()}
+          cancelling={install.cancelling}
           onClose={install.close}
         />
       )}
@@ -151,6 +163,12 @@ export function SkillsToolsPage() {
             loading={skillsQuery.isPending}
             disabled={disabled}
             announce={setAnnouncement}
+            rowActions={(item) => {
+              const skill = skillByKey.get(item.key)
+              return skill
+                ? <SkillRowActions skill={skill} skills={skillsQuery.data ?? []} trust={typeof trust === 'string' ? trust : undefined} disabled={disabled} />
+                : null
+            }}
           >
             <TrustBlock queue={queue} disabled={disabled} />
           </PermissionCatalog>
@@ -181,11 +199,25 @@ export function SkillsToolsPage() {
             loading={toolsQuery.isPending}
             disabled={disabled}
             announce={setAnnouncement}
-          />
+            toolbarAction={services.addButton}
+            extraGroups={services.extraGroups}
+            groupControls={services.controls}
+            groupNotice={services.notice}
+          >
+            {services.serversQuery.isError && (
+              <Callout variant="error">
+                <CalloutDescription>{`Could not load the services: ${loadErrorText(services.serversQuery.error).replace(/\.+$/, '')}.`}</CalloutDescription>
+                <CalloutActions>
+                  <Button size="sm" variant="outline" onClick={() => void services.serversQuery.refetch()}>Retry</Button>
+                </CalloutActions>
+              </Callout>
+            )}
+          </PermissionCatalog>
         </TabsContent>
       </Tabs>
       <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
       {browseOpen && <SkillBrowser open onOpenChange={setBrowseOpen} />}
+      {services.dialogs}
       <Sheet open={webSettingsOpen} onOpenChange={setWebSettingsOpen}>
         <SheetContent className="overflow-y-auto">
           <SheetHeader>

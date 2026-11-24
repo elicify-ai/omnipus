@@ -63,10 +63,17 @@ interface InstallReviewProps {
   onInstall?: (category: SkillCategory) => void
   /** Reads the install status again; never installs again. */
   onRetry?: () => void
+  /** Before Install: discards the staged copy (DELETE) and closes. */
+  onCancel?: () => void
+  /** True while the discard request is on its way. */
+  cancelling?: boolean
+  /** After a known outcome: closes the review. */
   onClose?: () => void
 }
 
-export function InstallReview({ review, outcome, installing = false, onInstall, onRetry, onClose }: InstallReviewProps) {
+export function InstallReview({
+  review, outcome, installing = false, onInstall, onRetry, onCancel, cancelling = false, onClose,
+}: InstallReviewProps) {
   const [category, setCategory] = useState<SkillCategory | null>(isCategory(review.category) ? review.category : null)
   const [missingCategory, setMissingCategory] = useState(false)
   const blockedId = useId()
@@ -121,15 +128,24 @@ export function InstallReview({ review, outcome, installing = false, onInstall, 
         {!started && (
           <Button
             size="sm"
-            disabled={blocked || installing}
+            disabled={blocked || installing || cancelling}
             aria-describedby={blocked ? blockedId : undefined}
             onClick={install}
           >
             Install skill
           </Button>
         )}
-        {onClose && (outcome === undefined || outcome.kind !== 'checking' && outcome.kind !== 'confirming') && (
-          <Button size="sm" variant="ghost" onClick={onClose}>{started ? 'Close' : 'Cancel'}</Button>
+        {/* Before Install, Cancel discards the staged copy. After Install
+            is pressed it stays disabled until the outcome is known (C-13),
+            then the review closes with Close. */}
+        {!started && onCancel && (
+          <Button size="sm" variant="ghost" disabled={installing || cancelling} onClick={onCancel}>Cancel</Button>
+        )}
+        {started && (outcome.kind === 'checking' || outcome.kind === 'confirming') && (
+          <Button size="sm" variant="ghost" disabled>Cancel</Button>
+        )}
+        {started && outcome.kind !== 'checking' && outcome.kind !== 'confirming' && onClose && (
+          <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
         )}
       </div>
       {outcome && (

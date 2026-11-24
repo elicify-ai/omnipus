@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { SkillCategory, SkillInstallRequest, SkillInstallReview, SkillInstallReviewStatus } from '@/lib/api/generated/openapi-types'
-import { fetchSkillInstallStatus, installReviewedSkill, stageSkillInstallReview, uploadFiles } from '@/lib/api'
+import { discardSkillInstallReview, fetchSkillInstallStatus, installReviewedSkill, stageSkillInstallReview, uploadFiles } from '@/lib/api'
 import { serverErrorText } from '@/lib/api/permissions'
 import { isApiError } from '@/lib/api-error'
 import { generateId } from '@/lib/constants'
@@ -34,6 +34,9 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
   const [outcome, setOutcome] = useState<InstallOutcome | undefined>(undefined)
   const [stageError, setStageError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  /** What Cancel reported: the review is gone and nothing was installed. */
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const deadline = useRef(0)
   const alive = useRef(true)
@@ -87,6 +90,7 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
 
   const upload = useCallback(async (file: File) => {
     setStageError(null)
+    setCancelNotice(null)
     setOutcome(undefined)
     setBusy(true)
     try {
@@ -142,5 +146,34 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
     setOutcome(undefined)
   }, [])
 
-  return { review, outcome, busy, stageError, upload, install, retry, close }
+  /**
+   * Cancel before Install (C-13): discards the staged copy. Nothing was
+   * published either way; a 404 means the review had already expired. Any
+   * other failure is said, because the staged copy may still be there until
+   * it expires.
+   */
+  const cancel = useCallback(async () => {
+    if (!review) return
+    setCancelling(true)
+    try {
+      await discardSkillInstallReview(review.review_id)
+      if (alive.current) setCancelNotice('Nothing was installed.')
+    } catch (err) {
+      if (!alive.current) return
+      if (isApiError(err) && err.status === 404) {
+        setCancelNotice('Nothing was installed.')
+      } else {
+        setCancelNotice(`Nothing was installed. The staged copy was not discarded: ${errorReason(err).replace(/\.+$/, '')}. It is removed when the review expires.`)
+      }
+    } finally {
+      if (alive.current) {
+        setCancelling(false)
+        setReview(null)
+        setSource(null)
+        setOutcome(undefined)
+      }
+    }
+  }, [review])
+
+  return { review, outcome, busy, cancelling, cancelNotice, stageError, upload, install, retry, cancel, close }
 }

@@ -1,6 +1,7 @@
 // PermissionRow — one tool or skill on Skills & Tools: Allow / Ask / Deny,
 // "What the model sees" and the row's own save status (C-16).
 
+import type { ReactNode } from 'react'
 import { CaretDown } from '@phosphor-icons/react'
 import type { ModelVisibility, ToolPolicy } from '@/lib/api/generated/openapi-types'
 import { Button } from '@/components/ui/button'
@@ -63,9 +64,11 @@ interface PermissionRowProps {
   onPolicy: (item: CatalogItem, policy: ToolPolicy) => void
   onLevel: (item: CatalogItem, level: ModelVisibility) => void
   onRowFocus: (key: string, choice: string | null) => void
+  /** The row's own menu (More actions on a skill row). */
+  actions?: ReactNode
 }
 
-export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, onLevel, onRowFocus }: PermissionRowProps) {
+export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, onLevel, onRowFocus, actions }: PermissionRowProps) {
   const policy = policyOf(queue, item)
   const level = levelOf(queue, item)
   const statusSection = queue.statusOf(item.levelSection, item.key) && !queue.statusOf(item.policySection, item.key)
@@ -102,8 +105,10 @@ export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, o
                 {POLICY_WORDS[choice]}
               </TextToggle>
             ))}
+            {actions}
           </div>
         )}
+        {item.fixedSentence && actions}
       </div>
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {item.levelLocked ? (

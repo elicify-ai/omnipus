@@ -48,8 +48,18 @@ interface PermissionCatalogProps {
   /** Writing is off while anything the page needs is missing (S-66, S-67). */
   disabled: boolean
   announce: (text: string) => void
-  /** Extra controls in a group's header line (Web & Search → Settings). */
+  /** Extra controls in an open group's header line (Web & Search → Settings). */
   groupActions?: (groupId: string) => ReactNode
+  /** Controls always in a group's header line (an external service's switch, Test, Edit, Remove). */
+  groupControls?: (groupId: string) => ReactNode
+  /** Shown at the top of an open group (an external service's error with Retry and Edit). */
+  groupNotice?: (groupId: string) => ReactNode
+  /** Groups shown even with no rows (an external service that reports no tools). */
+  extraGroups?: ReadonlyArray<{ id: string; label: string }>
+  /** A row's own menu (More actions on a skill row). */
+  rowActions?: (item: CatalogItem) => ReactNode
+  /** The tab's main action beside the search line (Add service). */
+  toolbarAction?: ReactNode
   /** Shown above the list on its tab (the trust block on Skills). */
   children?: ReactNode
 }
@@ -59,13 +69,19 @@ function emptyFilters(): CatalogFilters {
 }
 
 export function PermissionCatalog({
-  items, queue, noun, testIdPrefix, loading, disabled, announce, groupActions, children,
+  items, queue, noun, testIdPrefix, loading, disabled, announce, groupActions, groupControls, groupNotice,
+  extraGroups, rowActions, toolbarAction, children,
 }: PermissionCatalogProps) {
   const [filters, setFilters] = useState<CatalogFilters>(emptyFilters)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [pendingAllow, setPendingAllow] = useState<PolicyChange[] | null>(null)
   const active = filtersActive(filters)
-  const groups = useMemo(() => groupItems(items), [items])
+  const groups = useMemo(() => {
+    const withRows = groupItems(items)
+    const missing = (extraGroups ?? []).filter((extra) => !withRows.some((group) => group.id === extra.id))
+    return [...withRows, ...missing.map((extra) => ({ ...extra, items: [] as CatalogItem[] }))]
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [items, extraGroups])
   const visibleGroups = groups
     .map((group) => ({ ...group, rows: group.items.filter((item) => rowMatches(queue, item, filters)) }))
     .filter((group) => !active || group.rows.length > 0)
@@ -154,6 +170,7 @@ export function PermissionCatalog({
           options={LEVELS.map((value) => ({ value, label: LEVEL_WORDS[value] }))}
           disabled={searchDisabled}
         />
+        {toolbarAction}
       </div>
       {filters.level !== null && (
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -178,13 +195,14 @@ export function PermissionCatalog({
             const open = active || expanded.has(group.id)
             return (
               <section key={group.id} data-group-id={group.id} className="rounded-md border border-[var(--color-border)] px-[var(--space-2)]">
-                <div className="flex items-center gap-[var(--space-2)]">
+                <div className="flex flex-wrap items-center gap-[var(--space-2)]">
                   <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} data-group-header="">
                     <span className="font-medium text-[var(--color-secondary)]">{group.label}</span>
                     <span className="text-[var(--color-muted)]">{active ? `${group.rows.length} of ${group.items.length}` : group.items.length}</span>
                   </DisclosureRow>
+                  {groupControls?.(group.id)}
                   {open && groupActions?.(group.id)}
-                  {open && (
+                  {open && group.items.length > 0 && (
                     <SetAllMenu
                       rows={group.rows}
                       label={active ? `Set ${group.rows.filter((row) => !row.fixedSentence).length} of ${group.rows.length} matching…` : 'Set all…'}
@@ -193,6 +211,7 @@ export function PermissionCatalog({
                     />
                   )}
                 </div>
+                {open && groupNotice?.(group.id)}
                 {open && group.rows.map((item) => (
                   <PermissionRow
                     key={item.key}
@@ -203,6 +222,7 @@ export function PermissionCatalog({
                     onPolicy={(row, policy) => change([{ item: row, policy }])}
                     onLevel={changeLevel}
                     onRowFocus={(key, choice) => { focusRef.lastFocus.current = { key, choice } }}
+                    actions={rowActions?.(item)}
                   />
                 ))}
               </section>

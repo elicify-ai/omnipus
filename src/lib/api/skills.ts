@@ -10,6 +10,7 @@ import {
   ConfigurationMutationState as ConfigurationMutationStateSchema,
   SkillInstallReview as SkillInstallReviewSchema,
   SkillInstallReviewStatus as SkillInstallReviewStatusSchema,
+  SkillTrustApproval as SkillTrustApprovalSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
 } from '@/lib/api/generated/schemas'
@@ -21,6 +22,10 @@ import type {
   SkillInstallReview,
   SkillInstallReviewStatus,
   SkillCopyRequest,
+  SkillCategory,
+  SkillCategoryUpdateRequest,
+  SkillTrustApproval,
+  SkillTrustApprovalRequest,
   ConfigurationMutationState,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
@@ -98,6 +103,41 @@ export function fetchSkillInstallStatus(reviewId: string): Promise<SkillInstallR
     `/skills/install/review/${encodeURIComponent(reviewId)}`,
     undefined,
     SkillInstallReviewStatusSchema as ZodType<SkillInstallReviewStatus>,
+  )
+}
+
+/**
+ * C-13: Cancel before Install discards the staged copy (DELETE). 204 means
+ * "Nothing was installed." is true; an unknown or expired review is a 404.
+ */
+export async function discardSkillInstallReview(reviewId: string): Promise<void> {
+  await request<unknown>(`/skills/install/review/${encodeURIComponent(reviewId)}`, { method: 'DELETE' })
+}
+
+/**
+ * C-21: "Choose category" for an Uncategorised skill. Allowed once; after
+ * that the server answers 409 "The category is set at install and cannot be
+ * changed."
+ */
+export function setSkillCategory(name: string, category: SkillCategory): Promise<Skill> {
+  const body: SkillCategoryUpdateRequest = { category }
+  return request<Skill>(
+    `/skills/${encodeURIComponent(name)}/category`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    SkillSchema as ZodType<Skill>,
+  )
+}
+
+/**
+ * C-24: More actions → "Approve this version" of an unverified skill. Sends
+ * the revision the screen showed; 409 when the skill changed since.
+ */
+export function approveSkillVersion(name: string, revision: string): Promise<SkillTrustApproval> {
+  const body: SkillTrustApprovalRequest = { revision }
+  return request<SkillTrustApproval>(
+    `/skills/${encodeURIComponent(name)}/trust-approval`,
+    { method: 'POST', body: JSON.stringify(body) },
+    SkillTrustApprovalSchema as ZodType<SkillTrustApproval>,
   )
 }
 
