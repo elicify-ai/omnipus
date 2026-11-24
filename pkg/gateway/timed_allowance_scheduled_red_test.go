@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,15 +154,20 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 			require.NoError(t, err)
 			var literal map[string]any
 			require.NoError(t, json.Unmarshal(raw, &literal))
-			tools, _ := literal["tools_cfg"].(map[string]any)
+			// The store record is flat: the agent tool settings are the top-level tools member
+			// (tests/helpers/agentrecord); tools_cfg is only the REST request name, so a value
+			// planted there is dead data no reader ever sees.
+			tools, _ := literal["tools"].(map[string]any)
 			if tools == nil {
 				tools = map[string]any{}
-				literal["tools_cfg"] = tools
+				literal["tools"] = tools
 			}
 			tools["skills"] = map[string]any{"policies": map[string]string{"weather": own}}
 			raw, err = json.Marshal(literal)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(path, raw, 0o600))
+			require.Equal(t, map[string]any{"weather": own}, agentrecord.Policies(t, home, id, agentrecord.Skills),
+				"the Given is planted at the carrier the store keeps, not in a place nothing reads")
 		}
 		persisted, err := store.Get(id)
 		require.NoError(t, err)
@@ -368,9 +374,10 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 			require.NoError(t, err)
 			var entity map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(raw, &entity))
+			// A marshalled AgentConfig is flat: tools is the agent tool settings member.
 			tools := map[string]json.RawMessage{}
-			if len(entity["tools_cfg"]) != 0 {
-				require.NoError(t, json.Unmarshal(entity["tools_cfg"], &tools))
+			if len(entity["tools"]) != 0 {
+				require.NoError(t, json.Unmarshal(entity["tools"], &tools))
 			}
 			if len(tools["skills"]) == 0 {
 				t.Fatal("BLOCKED: agent tools.skills.policies is not implemented — required by C-4/C-26 point 5; a global Ask alone does not prove own-Ask retention")

@@ -36,6 +36,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -318,15 +319,20 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		require.NoError(t, err)
 		var record map[string]any
 		require.NoError(t, json.Unmarshal(raw, &record))
-		ownTools, _ := record["tools_cfg"].(map[string]any)
+		// The store record is flat: the agent tool settings are the top-level tools member
+		// (tests/helpers/agentrecord); tools_cfg is only the REST request name, so a value
+		// planted there is dead data no reader ever sees.
+		ownTools, _ := record["tools"].(map[string]any)
 		if ownTools == nil {
 			ownTools = map[string]any{}
-			record["tools_cfg"] = ownTools
+			record["tools"] = ownTools
 		}
 		ownTools["skills"] = map[string]any{"policies": map[string]string{key: in.own}}
 		raw, err = json.Marshal(record)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(path, raw, 0o600))
+		require.Equal(t, map[string]any{key: in.own}, agentrecord.Policies(t, h.api.homePath, "test-agent", agentrecord.Skills),
+			"the Given is planted at the carrier the store keeps, not in a place nothing reads")
 		persisted, err := agentstore.New(h.api.homePath).Get("test-agent")
 		require.NoError(t, err)
 		for i := range cfg.Agents.List {
@@ -421,9 +427,10 @@ func assertNativeD10RawInputs(t *testing.T, cfg *config.Config, key string, in d
 		require.NoError(t, err)
 		var entity map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(raw, &entity))
+		// A marshalled AgentConfig is flat: tools is the agent tool settings member.
 		own := map[string]json.RawMessage{}
-		if len(entity["tools_cfg"]) != 0 {
-			require.NoError(t, json.Unmarshal(entity["tools_cfg"], &own))
+		if len(entity["tools"]) != 0 {
+			require.NoError(t, json.Unmarshal(entity["tools"], &own))
 		}
 		var skillsInput struct {
 			Policies map[string]string `json:"policies"`
