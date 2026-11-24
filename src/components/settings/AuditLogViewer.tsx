@@ -86,19 +86,27 @@ function hasNonEmpty(obj?: Record<string, unknown>): boolean {
   return obj != null && Object.keys(obj).length > 0
 }
 
-// U1-2: a security_setting_change old/new value is whatever the setting held —
-// an object, but just as often a plain string, number or true/false (the
-// gateway writes `any`). An empty object counts as no value, as before; every
-// other present value is shown, an empty string included.
+// U1-2: a security_setting_change old/new value is any JSON value the setting
+// held (contract AuditEntry.old_value/new_value): an object, an array, a plain
+// string, a number, true/false, or null for "not set". Only an absent value
+// or an empty object (the old "nothing recorded" shape) shows no block; every
+// other value is shown, an empty string, an empty list and null included.
+function isEmptyPlainObject(value: object): boolean {
+  return !Array.isArray(value) && Object.keys(value).length === 0
+}
+
 function hasChangeValue(value: unknown): boolean {
-  if (value === undefined || value === null) return false
-  if (typeof value === 'object') return Object.keys(value).length > 0
+  if (value === undefined) return false
+  if (value !== null && typeof value === 'object') return !isEmptyPlainObject(value)
   return true
 }
 
 function formatValue(value: unknown): string {
+  if (value === null) return '(not set)'
   if (typeof value === 'string') return value === '' ? '(empty)' : value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  // JSON carries no other kinds; anything else still shows rather than vanishing.
   return String(value)
 }
 
