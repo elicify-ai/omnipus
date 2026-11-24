@@ -293,6 +293,17 @@ The same rules apply everywhere an agent is created or changed, including when y
 
 A change applies from the agent's next turn; a turn already running keeps the limit it started with.
 
+## Programs
+
+The **Programs** section at the end of an agent's **Basics** tab lists every connected program (see [settings](settings.md#programs)) with a switch named after the program and the agent, for example **GitHub for Dev**. Every program starts off for a new agent. Switched on, the agent's commands get the program's token in its variables. Each change saves on its own.
+
+- A program that is switched on but has no saved token shows **Not connected yet**. Its switch is kept, and the agent's commands get no token until one is saved.
+- Switching a program on is refused when it would clash, and the profile shows the reason, for example "GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off." Two programs that supply the git login for the same site cannot both be on for one agent.
+- Only a person signed in to the web app can change the switch here. Omnipus can change it with `set_agent_permissions` after you approve it; an agent cannot change its own programs, and `update_agent` refuses them.
+- An agent imported from another install arrives with every program off.
+
+External command-line workers have no Programs section: their runner does not run Omnipus commands.
+
 ## Workers and delegation
 
 A worker is just a session that another agent owns and steers. The delegating agent hands the worker a task and keeps working; the worker runs in its own session, with its own tools, its own transcript, and a chat you can open to watch it live.
