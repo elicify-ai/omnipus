@@ -15,20 +15,25 @@ package agent
 // Harness: the real loop with the recording provider (order 36's harness).
 // Rows 4 and 5 seed the REAL persisted policy store (config.json
 // sandbox.tool_policies) — no seam, they assert what the next turn resolves.
-// Rows 1, 2, 3 and 6 need the visibility storage (C-6/C-15:
-// sandbox.tool_visibility / sandbox.skill_visibility), which does not exist
-// yet — seedToolVisibility below is that missing storage WRITE; GREEN wires
-// it to the real store and makes the per-turn surface and menu consult it.
+// Rows 1, 2, 3 and 6 write the spec-named visibility stores (C-6/C-15:
+// sandbox.tool_visibility / sandbox.skill_visibility) as literal JSON through
+// the loop's own reload (tests/helpers/sandboxkeys decodes the key into a copy
+// of the product's sandbox section and makes the copy live through
+// AgentLoop.ReloadProviderAndConfig — the path that rebuilds every agent
+// instance's snapshot, as a person's settings change does in production).
+// A config that does not carry the key stops the row with BLOCKED "config does
+// not carry the key"; there is no test-owned variable a stub could assign
+// (CHECK round 3 finding N11).
 //
-// CHECK round 1 finding 3: rows 1, 2, 3 and 6 previously only nil-checked
-// the seam, so a no-op GREEN seed passed them without ever changing
-// visibility or running a turn. Each is now a REAL transition on ONE
-// continuing loop: the pre-transition state is captured and asserted first,
-// the stored level changes through the seam between captured turns, and the
-// per-row outcome is asserted on later turns of the same loop (old-chat
-// retention, new-chat absence, next-turn definition/menu). An unaffected
-// ordinary tool is the control in row 1. A GREEN seed that does not change
-// what the next turn resolves now fails these rows.
+// CHECK round 1 finding 3: rows 1, 2, 3 and 6 previously only nil-checked a
+// seam, so a no-op GREEN seed passed them without ever changing visibility or
+// running a turn. Each is a REAL transition on ONE continuing loop: the
+// pre-transition state is captured and asserted first, the stored level
+// changes between captured turns, and the per-row outcome is asserted on later
+// turns of the same loop (old-chat retention, new-chat absence, next-turn
+// definition/menu). An unaffected ordinary tool is the control in row 1. A
+// GREEN that does not make the next turn consult the stored level fails these
+// rows at their request assertions.
 import (
 	"context"
 	"os"
@@ -37,23 +42,10 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/helpers/sandboxkeys"
 
 	"github.com/stretchr/testify/require"
 )
-
-// seedToolVisibility is the test-local seam for the C-6/C-15 visibility
-// storage writes. key is the tool or skill name; level is the persisted
-// visibility level (C-6 vocabulary: hidden, name_only, name_and_description,
-// full). GREEN wires it to the real persisted store the per-turn surface and
-// the skill menu read; nil keeps the RED run loud (BLOCKED), never a skip.
-var seedToolVisibility func(t testing.TB, home, key, level string)
-
-func requireVisibilitySeam(t *testing.T, what string) {
-	t.Helper()
-	if seedToolVisibility == nil {
-		t.Fatal("BLOCKED: the visibility storage (C-6/C-15 sandbox.tool_visibility / sandbox.skill_visibility) is not implemented — " + what)
-	}
-}
 
 // visibilityLoop boots the real loop whose ceiling carries basePolicies (the
 // in-memory global ceiling the compositor resolves against), runs one turn,
@@ -72,7 +64,17 @@ type transitionsHarness struct {
 	t        *testing.T
 	al       *AgentLoop
 	provider *capturingProvider
-	home     string
+}
+
+// storeVisibility writes one stored level (C-6 vocabulary: hidden, name_only,
+// name_and_description, full) into sandbox.<store> of the loop's live config:
+// "tool_visibility" for a tool or external server, "skill_visibility" for a
+// skill. The write is literal JSON made live through the loop's own reload; a
+// config that does not carry the key ends the row with BLOCKED, never a skip.
+func (h *transitionsHarness) storeVisibility(store, key, level, required string) {
+	h.t.Helper()
+	sandboxkeys.Store(h.t, h.al.GetConfig, reloadPublisher(h.al, h.provider),
+		map[string]any{store: map[string]string{key: level}}, required)
 }
 
 func newTransitionsHarness(t *testing.T, basePolicies map[string]string, skills ...string) *transitionsHarness {
@@ -110,7 +112,7 @@ func newTransitionsHarness(t *testing.T, basePolicies map[string]string, skills 
 		cfg.Sandbox.ToolPolicies[key] = value
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-	return &transitionsHarness{t: t, al: al, provider: provider, home: tmp}
+	return &transitionsHarness{t: t, al: al, provider: provider}
 }
 
 // turn runs one turn on the given session and returns the tool names of that
@@ -167,8 +169,7 @@ func TestVisibilityTransitions(t *testing.T) {
 		}
 		require.NotEmpty(t, control, "fixture: an unaffected tool is present to serve as the control")
 
-		requireVisibilitySeam(t, "required by D11 row 1 and S-91")
-		seedToolVisibility(t, h.home, "read_file", "hidden")
+		h.storeVisibility("tool_visibility", "read_file", "hidden", "D11 row 1 and S-91 (C-6/C-15 sandbox.tool_visibility)")
 
 		require.Contains(t, h.turn("chat-a"), "read_file",
 			"D11#1: the loaded tool STAYS in the chat that already loaded it")
@@ -185,8 +186,8 @@ func TestVisibilityTransitions(t *testing.T) {
 		require.Contains(t, h.turn("chat-a"), "read_file",
 			"fixture: the tool is in the surface before the demotion")
 
-		requireVisibilitySeam(t, "required by D11 row 2 and S-92 (the ToolSearch half is order 56's capture surface)")
-		seedToolVisibility(t, h.home, "read_file", "hidden")
+		h.storeVisibility("tool_visibility", "read_file", "hidden",
+			"D11 row 2 and S-92 (C-6/C-15 sandbox.tool_visibility; the ToolSearch half is order 56's capture surface)")
 
 		require.NotContains(t, h.turn("chat-b"), "read_file",
 			"D11#2: the first new chat after the demotion omits the tool")
@@ -196,13 +197,14 @@ func TestVisibilityTransitions(t *testing.T) {
 
 	t.Run("D11#3 S-38: hidden → full restores the definition from the next turn", func(t *testing.T) {
 		h := newTransitionsHarness(t, nil)
-		requireVisibilitySeam(t, "required by D11 row 3 and S-38 (the demoted starting state)")
-		seedToolVisibility(t, h.home, "read_file", "hidden")
+		h.storeVisibility("tool_visibility", "read_file", "hidden",
+			"D11 row 3 and S-38 (C-6/C-15 sandbox.tool_visibility: the demoted starting state)")
 
 		require.NotContains(t, h.turn("chat-a"), "read_file",
 			"fixture: the hidden tool is out of the surface")
 
-		seedToolVisibility(t, h.home, "read_file", "full")
+		h.storeVisibility("tool_visibility", "read_file", "full",
+			"D11 row 3 and S-38 (C-6/C-15 sandbox.tool_visibility: the level returns to full)")
 
 		require.Contains(t, h.turn("chat-a"), "read_file",
 			"D11#3: the definition is back from the NEXT TURN after the level returns to full")
@@ -218,8 +220,8 @@ func TestVisibilityTransitions(t *testing.T) {
 		require.Contains(t, first, "Notes helper.",
 			"fixture: the default level lists the description too (name_and_description, C-6)")
 
-		requireVisibilitySeam(t, "required by D11 row 6 and S-43 (the menu line itself is order 11's surface)")
-		seedToolVisibility(t, h.home, "notes-helper", "name_only")
+		h.storeVisibility("skill_visibility", "notes-helper", "name_only",
+			"D11 row 6 and S-43 (C-6/C-15 sandbox.skill_visibility; the menu line itself is order 11's surface)")
 
 		h.turn("chat-skill")
 		second := h.requestOf()

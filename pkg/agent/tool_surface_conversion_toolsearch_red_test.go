@@ -39,6 +39,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -84,11 +85,8 @@ func TestToolSurface_ConversionToolSearch(t *testing.T) {
 	})
 
 	t.Run("D7#16 offered after: the conversion locks ToolSearch full and the normal request offers it", func(t *testing.T) {
-		if runToolLoadingConversion == nil {
-			t.Fatal("BLOCKED: the C-19 step-3 tool-loading conversion (writing the D7 starting " +
-				"levels, ToolSearch locked full) is not implemented — required by Dataset D7 " +
-				"row 16 and S-44/SC-003")
-		}
+		nativebinding.Require(t, "pkg/config", runToolLoadingConversion,
+			"C-19/D7#16: actual startup tool-loading conversion; actual model request remains the observer")
 		home := conversionHome(t)
 		t.Setenv(config.EnvHome, home)
 		runToolLoadingConversion(t, home)

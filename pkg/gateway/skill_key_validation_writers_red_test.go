@@ -520,6 +520,9 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		rec := httptest.NewRecorder()
 		api.HandleAgents(rec, r)
 		require.Equal(t, http.StatusOK, rec.Code, "setup: %s", rec.Body.String())
+		require.Equal(t, map[string]any{"plan": "deny"},
+			sysStoredSkillOverrides(t, api.homePath, "test-agent"),
+			"D16#14 setup must persist the skill override before the unrelated MCP write")
 
 		r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 			strings.NewReader(`{"tools_cfg":{"mcp":{"servers":[]}}}`))

@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -60,11 +61,8 @@ func writePlanSkillFixture(t *testing.T, home, agentID string) {
 // TestGetAgent_SkillPermissions (order 16, S-74).
 // Traces to: BDD S-74; spec C-9; generated AgentDetail.skill_permissions.
 func TestGetAgent_SkillPermissions(t *testing.T) {
-	if seedSkillSettingsForAgent == nil {
-		t.Fatal("BLOCKED: the C-9 skill_permissions selection of get_agent and the " +
-			"C-2 storage it reads are not implemented — required by " +
-			"skills-tools-redesign-spec C-9 and S-74")
-	}
+	nativebinding.Require(t, "pkg/config", seedSkillSettingsForAgent,
+		"C-2/C-4/C-9/S-74: native persisted settings inputs; actual get_agent is the observer")
 	deps, _ := newTestDepsWithRealSave(t)
 	t.Setenv("OMNIPUS_HOME", deps.Home)
 	writePlanSkillFixture(t, deps.Home, "mia")
@@ -82,8 +80,11 @@ func TestGetAgent_SkillPermissions(t *testing.T) {
 	require.Len(t, rows, 2, "one row per skill the agent can use (S-74): %s", res.ForLLM)
 	bySkill := map[string]map[string]any{}
 	for _, r := range rows {
-		row := r.(map[string]any)
-		bySkill[row["skill"].(string)] = row
+		row, rowIsObject := r.(map[string]any)
+		require.True(t, rowIsObject, "each skill_permissions row is an object: %v", r)
+		name, nameIsString := row["skill"].(string)
+		require.True(t, nameIsString, "each skill_permissions row names its skill as a string: %v", row)
+		bySkill[name] = row
 	}
 	require.Equal(t, "deny", bySkill["plan"]["effective"], "S-74: plan effective deny")
 	require.Equal(t, "deny", bySkill["plan"]["override"], "S-74: plan override deny")

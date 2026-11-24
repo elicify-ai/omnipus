@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -47,11 +48,8 @@ var setGlobalSkillPolicyForTest func(cfg *config.Config, key, value string)
 // TestSetAgentPermissions_SkillPolicyChangesParity (order 15, S-70).
 // Traces to: BDD S-70; spec C-21.
 func TestSetAgentPermissions_SkillPolicyChangesParity(t *testing.T) {
-	if setGlobalSkillPolicyForTest == nil {
-		t.Fatal("BLOCKED: the C-2 global skill policy storage is not implemented — " +
-			"required by skills-tools-redesign-spec C-2 and S-70's Given (global plan " +
-			"at Ask), and the set_agent_permissions skill_policy_changes parity of C-21")
-	}
+	nativebinding.Require(t, "pkg/config", setGlobalSkillPolicyForTest,
+		"C-2/C-21/S-70: native global skill map input; actual writer/store is the observer")
 	deps, _ := newTestDepsWithRealSave(t)
 	t.Setenv("OMNIPUS_HOME", deps.Home)
 	setGlobalSkillPolicyForTest(deps.GetCfg(), "plan", "ask")

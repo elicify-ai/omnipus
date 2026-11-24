@@ -31,16 +31,17 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateAgent_SkillPolicyChangesParity(t *testing.T) {
-	if setGlobalSkillPolicyForTest == nil {
-		t.Fatal("BLOCKED: the C-2 global skill policy storage is not implemented — " +
-			"required by skills-tools-redesign-spec S-103's Given (global plan at Allow) " +
-			"and the create_agent skill_policy_changes parity of C-21")
-	}
+	// The same guard as the S-70 parity test: a test-owned closure, a nil or a
+	// bound-method wrapper is not the native global skill map input; the actual
+	// create_agent writer and the stored agent entity are the observers.
+	nativebinding.Require(t, "pkg/config", setGlobalSkillPolicyForTest,
+		"C-2/C-21/S-103: native global skill map input (S-103's Given: global plan at Allow); actual create_agent writer/store is the observer")
 	deps, _ := newTestDepsWithRealSave(t)
 	t.Setenv("OMNIPUS_HOME", deps.Home)
 	setGlobalSkillPolicyForTest(deps.GetCfg(), "plan", "allow")

@@ -197,11 +197,11 @@ func TestCardLabels_GuardInstrument_PlantedPositiveControl(t *testing.T) {
 	write2 := func(rel, body string) {
 		t.Helper()
 		path := filepath.Join(cleanRoot, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("fixture: %v", err)
+		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+			t.Fatalf("fixture: %v", mkErr)
 		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatalf("fixture: %v", err)
+		if writeErr := os.WriteFile(path, []byte(body), 0o644); writeErr != nil {
+			t.Fatalf("fixture: %v", writeErr)
 		}
 	}
 	write2("clean.ts", "export const ok = 1\n")

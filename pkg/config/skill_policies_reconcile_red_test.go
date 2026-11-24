@@ -20,7 +20,11 @@ package config
 // reconcileSkillMapsOf is the test-local seam the fix wires to the
 // production entry point.
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+)
 
 // reconcileSkillInput is one self-heal scenario: the stored skill maps plus
 // the installed skills the reconciler runs over.
@@ -46,19 +50,15 @@ type installedSkillInfo struct {
 // (the skills twin of ReconcileToolPolicyCeiling). The GREEN step wires it
 // to the production entry point; it stays nil here so the RED run fails
 // with BLOCKED instead of panicking.
-var reconcileSkillMapsOf func(storedPolicies, storedVisibility map[string]string, installed []installedSkillInfo) (policies, visibility map[string]string)
+// The native input is key -> shipped-by-new-release. It contains no expected
+// policy/level maps and does not require production to import a private test type.
+var reconcileSkillMapsOf func(storedPolicies, storedVisibility map[string]string, installed map[string]bool) (policies, visibility map[string]string)
 
 // TestSkillPolicyReconcile_NewSkillAsk drives the C-2 self-heal rows.
 // Traces to: BDD S-17; spec C-2 (self-heal), ST-Q3 B, ST-Q10 A.
 func TestSkillPolicyReconcile_NewSkillAsk(t *testing.T) {
-	if reconcileSkillMapsOf == nil {
-		t.Fatal("BLOCKED: the C-2 skill-map self-heal is not implemented — " +
-			"required by skills-tools-redesign-spec C-2 (self-heal, same pattern " +
-			"as ReconcileToolPolicyCeiling): a skill key with no stored global " +
-			"permission gets ask (ST-Q3 B; built-in of a newer release gets its " +
-			"shipped allow, ST-Q10 A) and no stored level gets " +
-			"name_and_description; S-17")
-	}
+	nativebinding.Require(t, "pkg/config", reconcileSkillMapsOf,
+		"C-2/S-17: native additive skill-map reconciliation; post-GREEN load-path re-audit required")
 	cases := []reconcileSkillInput{
 		{
 			name:                "S-17 newly installed skill starts at ask (ST-Q3 B)",
@@ -96,9 +96,12 @@ func TestSkillPolicyReconcile_NewSkillAsk(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			gotPolicies, gotVisibility := reconcileSkillMapsOf(tc.storedSkillPolicies, tc.storedSkillVisibility, tc.installed)
+			installed := make(map[string]bool, len(tc.installed))
+			for _, skill := range tc.installed {
+				installed[skill.key] = skill.builtinNewRelease
+			}
+			gotPolicies, gotVisibility := reconcileSkillMapsOf(tc.storedSkillPolicies, tc.storedSkillVisibility, installed)
 			assertStringMap(t, "skill_policies", gotPolicies, tc.wantSkillPolicies)
 			assertStringMap(t, "skill_visibility", gotVisibility, tc.wantSkillVisibility)
 		})

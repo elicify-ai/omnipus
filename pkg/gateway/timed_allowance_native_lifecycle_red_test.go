@@ -185,8 +185,8 @@ func testTimedNativeGatewayRestart(t *testing.T) {
 		require.NoError(t, agentstore.New(home).Create(id, &record))
 		cfg.Agents.List = append(cfg.Agents.List, record)
 	}
-	raw, err := json.Marshal(cfg)
-	require.NoError(t, err)
+	raw, marshalErr := json.Marshal(cfg)
+	require.NoError(t, marshalErr)
 	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), raw, 0o600))
 	ensureTestWorkspaceMembership(t, cfg)
 	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))

@@ -2,13 +2,8 @@
 
 package agent
 
-// Order 36 — TestFullSkills_SentinelAndBudget (S-42, S-89, S-90; Dataset D9,
-// all ten rows; C-14). Oracle: skills-tools-redesign-spec.md D9 —
-//   1 Full, Allow, verified, chat → sentinel in first request (S-42)
-//   2 Full, Ask, verified, not approved → sentinel absent; listed with
-//     description (S-89)
-//   3 Full, Allow, unverified, trust Ask, no approval → sentinel absent (S-89)
-//   4 row 3 after "Approve this version" → sentinel present from NEXT turn
+// Order 36 — TestFullSkills_SentinelAndBudget (S-89, S-90; Dataset D9 rows
+// 5–10; C-14). Oracle: skills-tools-redesign-spec.md D9 —
 //   5 Full, Ask, unattended run → sentinel absent; the load is refused (the
 //     load-refusal surface itself is order 50's path gate, D14)
 //   6 Full, Deny → not listed at all, sentinel absent
@@ -16,20 +11,28 @@ package agent
 //     ceil(context/20) − (pinnedCore + FullSkills); send when toolDefs +
 //     message ≤ B) with FIXED token estimators, driven on the real loop.
 //
-// CHECK round 1 finding 7: the earlier rows 1 and 2 shared one fixture that
-// set NONE of the raw D9 inputs (no policy, no level, no verification, no
-// approval), so a correct deterministic implementation could not satisfy
-// both rows' opposite sentinel expectations, and the RED log showed
-// missing-policy errors with a zero tool surface instead of a configured
-// acceptance fixture. Every row now seeds its own raw D9 state explicitly
-// through the seedSkillState seam and asserts the observable fixture state
-// before the turn; rows 3–6 are added; the budget rows run on the REAL loop
-// with fixed estimators (fixLoopTokenEstimators) instead of a standalone
-// boolean comparator.
+// D9 rows 1–4 are pkg/gateway::TestFullSkills_VerifiedConsentInjection: their
+// dataset inputs include the install-time verification result (C-5) and a
+// person's revision approval (C-24), which exist only through the real review/
+// install and trust-approval routes, and a pkg/agent test cannot import
+// pkg/gateway (CHECK round 3 finding N11: "verification and approval seeds
+// through the real review and trust routes as in F22").
 //
-// RED today: none of the C-5/C-12/C-24 state stores or the fixed-estimator
-// injection exists — every row fails loud (BLOCKED) at its first seam,
-// never a skip.
+// Every row here seeds ONLY the spec-named config stores — sandbox.skill_policies
+// (C-2), sandbox.skill_visibility (C-6), sandbox.skill_trust (C-3) — as literal
+// JSON made live through the loop's own reload (tests/helpers/sandboxkeys;
+// AgentLoop.ReloadProviderAndConfig, the path that rebuilds every agent
+// instance's snapshot). A config that does not carry a key stops the row with
+// BLOCKED "config does not carry the key"; there is no test-owned variable a
+// stub could assign. Rows
+// 7–10 name no verification input in the dataset, so trust Allow keeps the
+// unverified fixture from being stopped by the trust check (their subject is
+// the budget). The budget rows run on the REAL loop with fixed estimators
+// (fixLoopTokenEstimators), never a standalone comparator (CHECK round 1
+// finding 7).
+//
+// RED today: the C-2/C-3/C-6 stores and the fixed-estimator input do not exist
+// — every row fails loud (BLOCKED), never a skip.
 import (
 	"context"
 	"encoding/json"
@@ -41,6 +44,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+	"github.com/elicify-ai/omnipus/tests/helpers/sandboxkeys"
 
 	"github.com/stretchr/testify/require"
 )
@@ -65,25 +69,6 @@ func (m *capturingProvider) Chat(ctx context.Context, msgs []providers.Message, 
 }
 
 func (m *capturingProvider) GetDefaultModel() string { return "sentinel-test-model" }
-
-// d9SkillState is the raw D9 state one row seeds. Zero values mean "leave
-// unset" for strings/bools except where the row names the value; the test
-// always passes the row's full input explicitly (D10's rule: defaults are
-// never implied).
-type d9SkillState struct {
-	policy   string // "allow" | "ask" | "deny" — the stored global skill permission
-	level    string // "full" | "name_only" | "name_and_description" | "hidden" — the stored level
-	verified bool   // the stored install-time verification result (C-5)
-	trust    string // "allow" | "ask" | "deny" — sandbox.skill_trust ("" leaves config untouched)
-	approved bool   // a stored C-24 revision approval for the skill's current revision
-}
-
-// seedSkillState is the test-local seam for the raw D9 stores: the global
-// skill permission (sandbox.skill_policies), the level (C-6 visibility
-// store), the verification result (C-5), the trust floor (config) and the
-// revision approval (C-24). GREEN wires it to the real stores; nil keeps
-// the RED run loud (BLOCKED), never a skip.
-var seedSkillState func(t testing.TB, home, slug string, st d9SkillState)
 
 // tokenEstimators is the fixed-estimator set a budget row installs on the
 // real loop (D9 rows 7–10: "fixed token estimators in the test").
@@ -186,103 +171,34 @@ func (h *d9Harness) turn(session, run string) d9Turn {
 	return out
 }
 
-// requireSeeded asserts the OBSERVABLE fixture state before the turn (CHECK
-// round 1 finding 7: assert the fixture state before the turn): the skill is
-// installed and, when the row names trust, the config carries it.
-func (h *d9Harness) requireSeeded(st d9SkillState) {
+// store writes the row's literal config inputs for the skill into the
+// spec-named stores of the loop's live config — C-2 sandbox.skill_policies,
+// C-6 sandbox.skill_visibility, C-3 sandbox.skill_trust — as JSON made live
+// through the loop's own reload. An empty value leaves that store untouched. The
+// fixture's skill must be installed first (CHECK round 1 finding 7: assert the
+// fixture state before the turn); a config that does not carry a key ends the
+// row with BLOCKED.
+func (h *d9Harness) store(required, policy, level, trust string) {
 	h.t.Helper()
 	_, err := os.Stat(filepath.Join(h.home, "skills", "notes-helper", "SKILL.md"))
 	require.NoError(h.t, err, "fixture: the granted skill is installed")
-	if st.trust != "" {
-		require.Equal(h.t, config.SkillTrustLevel(st.trust), h.al.GetConfig().Sandbox.SkillTrust,
-			"fixture: the seeded trust floor is the config's stored value")
+	patch := map[string]any{}
+	if policy != "" {
+		patch["skill_policies"] = map[string]string{"notes-helper": policy}
 	}
-}
-
-// requireStateSeam fails loud when the raw-D9 store seam is unwired.
-func requireStateSeam(t *testing.T, row string) {
-	t.Helper()
-	if seedSkillState == nil {
-		t.Fatal("BLOCKED: the raw D9 skill-state stores (C-5 verification, C-6 level, " +
-			"C-12/C-21 global skill permission, C-24 revision approval) are not implemented — " + row)
+	if level != "" {
+		patch["skill_visibility"] = map[string]string{"notes-helper": level}
 	}
+	if trust != "" {
+		patch["skill_trust"] = trust
+	}
+	sandboxkeys.Store(h.t, h.al.GetConfig, reloadPublisher(h.al, h.provider), patch, required)
 }
 
 func TestFullSkills_SentinelAndBudget(t *testing.T) {
-	t.Run("D9#1 S-42: a Full Allow verified skill's sentinel is in the first request", func(t *testing.T) {
-		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 row 1 (S-42)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: true, trust: "allow",
-		})
-		h.requireSeeded(d9SkillState{trust: "allow"})
-
-		turn := h.turn("session-full-1", "chat")
-		require.True(t, turn.sent, "D9#1: the request is sent")
-		require.Contains(t, turn.request, "ZEBRA-NOTES-3",
-			"D9#1: the Full skill's instructions (sentinel) are injected into the first request")
-	})
-
-	t.Run("D9#2 S-89: Full Ask verified, not approved — listed with description, never injected", func(t *testing.T) {
-		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 row 2 (S-89)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "ask", level: "full", verified: true, trust: "ask",
-		})
-		h.requireSeeded(d9SkillState{trust: "ask"})
-
-		turn := h.turn("session-full-2", "chat")
-		require.True(t, turn.sent, "D9#2: the chat turn still reaches the model")
-		require.NotContains(t, turn.request, "ZEBRA-NOTES-3",
-			"D9#2: no instructions leak without approval")
-		require.Contains(t, turn.request, "notes-helper", "D9#2: the skill is listed")
-		require.Contains(t, turn.request, "Notes helper.",
-			"D9#2: the listing carries the description")
-	})
-
-	t.Run("D9#3 S-89: Full Allow unverified under trust Ask, no approval — sentinel absent", func(t *testing.T) {
-		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 row 3 (S-89)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: false, trust: "ask",
-		})
-		h.requireSeeded(d9SkillState{trust: "ask"})
-
-		turn := h.turn("session-full-3", "chat")
-		require.True(t, turn.sent, "D9#3: the turn runs; the trust gate decides the load")
-		require.NotContains(t, turn.request, "ZEBRA-NOTES-3",
-			"D9#3: an unverified skill under trust Ask is not injected without approval")
-	})
-
-	t.Run("D9#4 S-89: after Approve this version the sentinel is present from the next turn", func(t *testing.T) {
-		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 rows 3 and 4 (S-89)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: false, trust: "ask",
-		})
-		h.requireSeeded(d9SkillState{trust: "ask"})
-
-		first := h.turn("session-full-4", "chat")
-		require.True(t, first.sent, "D9#4 setup: the first turn runs")
-		require.NotContains(t, first.request, "ZEBRA-NOTES-3",
-			"D9#4 setup: row 3's state holds — nothing is injected before the approval")
-
-		// The person's "Approve this version" writes the C-24 revision approval.
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{approved: true})
-
-		second := h.turn("session-full-4", "chat")
-		require.True(t, second.sent, "D9#4: the next turn runs")
-		require.Contains(t, second.request, "ZEBRA-NOTES-3",
-			"D9#4: the approved version's instructions are injected FROM THE NEXT TURN")
-	})
-
 	t.Run("D9#5 S-89: Full Ask unattended — sentinel absent, the load is refused", func(t *testing.T) {
 		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 row 5 (S-89; the load-refusal surface itself is order 50's path gate)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "ask", level: "full", verified: false,
-		})
-		h.requireSeeded(d9SkillState{})
+		h.store("D9 row 5 (S-89; the load-refusal surface itself is order 50's path gate)", "ask", "full", "")
 
 		turn := h.turn("session-full-5", "scheduled")
 		require.True(t, turn.sent, "D9#5: the scheduled run starts its request")
@@ -292,11 +208,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 
 	t.Run("D9#6 S-89: Full Deny — not listed at all, sentinel absent", func(t *testing.T) {
 		h := newD9Harness(t)
-		requireStateSeam(t, "required by D9 row 6 (S-89)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "deny", level: "full",
-		})
-		h.requireSeeded(d9SkillState{})
+		h.store("D9 row 6 (S-89)", "deny", "full", "")
 
 		turn := h.turn("session-full-6", "chat")
 		require.True(t, turn.sent, "D9#6: the turn runs; the Deny removes the skill from the surface")
@@ -313,10 +225,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 	t.Run("D9#7 S-90: budget B=1600 with toolDefs 1400 + message 200 sends the request", func(t *testing.T) {
 		h := newD9Harness(t)
 		requireNativeEstimators(t)
-		requireStateSeam(t, "required by D9 row 7 (a Full skill must exist to be charged)")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: true, trust: "allow",
-		})
+		h.store("D9 row 7 (a Full skill must exist to be charged)", "allow", "full", "allow")
 		fixLoopTokenEstimators(t, h.al, tokenEstimators{
 			contextTokens: 8000, maxTokens: 1000, pinnedCore: 2000,
 			fullSkills: 3000, toolDefs: 1400, message: 200,
@@ -331,10 +240,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 	t.Run("D9#8 S-90: one token over (Full skills 3001) stops the turn with the C-14 text", func(t *testing.T) {
 		h := newD9Harness(t)
 		requireNativeEstimators(t)
-		requireStateSeam(t, "required by D9 row 8")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: true, trust: "allow",
-		})
+		h.store("D9 row 8", "allow", "full", "allow")
 		fixLoopTokenEstimators(t, h.al, tokenEstimators{
 			contextTokens: 8000, maxTokens: 1000, pinnedCore: 2000,
 			fullSkills: 3001, toolDefs: 1400, message: 200,
@@ -350,10 +256,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 	t.Run("D9#9 S-90: a model switch to a smaller context stops sending", func(t *testing.T) {
 		h := newD9Harness(t)
 		requireNativeEstimators(t)
-		requireStateSeam(t, "required by D9 row 9")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: true, trust: "allow",
-		})
+		h.store("D9 row 9", "allow", "full", "allow")
 		fixLoopTokenEstimators(t, h.al, tokenEstimators{
 			contextTokens: 8000, maxTokens: 1000, pinnedCore: 2000,
 			fullSkills: 3000, toolDefs: 1400, message: 200,
@@ -377,10 +280,7 @@ func TestFullSkills_SentinelAndBudget(t *testing.T) {
 	t.Run("D9#10 S-90: a Full skill growing past the limit stops the next turn", func(t *testing.T) {
 		h := newD9Harness(t)
 		requireNativeEstimators(t)
-		requireStateSeam(t, "required by D9 row 10")
-		seedSkillState(t, h.home, "notes-helper", d9SkillState{
-			policy: "allow", level: "full", verified: true, trust: "allow",
-		})
+		h.store("D9 row 10", "allow", "full", "allow")
 		fixLoopTokenEstimators(t, h.al, tokenEstimators{
 			contextTokens: 8000, maxTokens: 1000, pinnedCore: 2000,
 			fullSkills: 3000, toolDefs: 1400, message: 200,

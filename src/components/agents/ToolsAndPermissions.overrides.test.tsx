@@ -200,7 +200,11 @@ function lastToolsConfig() {
   }
 }
 
-describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () => {
+// The residual-GET, preset and MCP-binding cases are split across three describe
+// blocks so each callback stays under the function-size budget
+// (scripts/check-function-budget.sh); the cases are unchanged and in their
+// original order.
+describe('ToolsAndPermissions — MCP bindings: policy-only saves and unassign', () => {
   it('keeps assigned connectors when a policy-only inherit is saved', async () => {
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
       revision: REVISION,
@@ -289,7 +293,9 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
       expect(lastToolsConfig().config?.mcp).toEqual({ servers: [] })
     })
   })
+})
 
+describe('ToolsAndPermissions — MCP bindings: connector tool subsets', () => {
   it('round-trips a selected connector tool subset', async () => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([READ_FILE, TOOL_SEARCH, MCP_SEARCH, MCP_FETCH])
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
@@ -351,7 +357,9 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
       })
     })
   })
+})
 
+describe('ToolsAndPermissions — residual GET failures, preset gating, and overrides', () => {
   it('surfaces an agent-tools GET failure with retry', async () => {
     vi.mocked(api.fetchAgentTools)
       .mockRejectedValueOnce(new Error('offline'))
