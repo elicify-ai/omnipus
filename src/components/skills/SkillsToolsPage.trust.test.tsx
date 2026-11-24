@@ -10,6 +10,7 @@
 //         selected. C-3's legacy config migration is tested at config load,
 //         never by making the screen consume the retired trust endpoint.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ZodError } from 'zod'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -144,4 +145,32 @@ it('instrument: real HTTP helper reads the generated full model and per-key PATC
   }, SettingsSchema)).toEqual({ ...given, skill_trust: 'allow' })
   expectPermissionPatches(permissions(), { skill_trust: 'allow' })
   await expect(permissions().fetch('/api/v1/security/unplanned')).rejects.toThrow('Unexpected permissions fixture request: GET /api/v1/security/unplanned')
+})
+
+it('instrument: invalid PATCH trust is rejected before a queued server response and changes no state', async () => {
+  const network = permissions()
+  const before = structuredClone(network.stored)
+  network.refuseNext(503, 'fixture reload failed')
+  const failure = structuredClone(network.rejection)
+  // C-3 and the generated PATCH contract allow only allow/ask/deny. The queued
+  // response deliberately bypasses final SettingsSchema parsing: rejection must
+  // come from PATCH input validation, not an invalid full response by accident.
+  const result = network.fetch('/api/v1/security/permissions', {
+    method: 'PATCH', body: JSON.stringify({ skill_trust: 'allow_all' }),
+  })
+  await expect(result).rejects.toBeInstanceOf(ZodError)
+  await expect(result).rejects.toMatchObject({
+    issues: [{ code: 'invalid_enum_value', path: ['skill_trust'], received: 'allow_all' }],
+  })
+  expect(network.stored).toEqual(before)
+  expect(network.rejection).toEqual(failure)
+  expect(network.patches()).toEqual([{ skill_trust: 'allow_all' }])
+
+  const response = await network.fetch('/api/v1/security/permissions', {
+    method: 'PATCH', body: JSON.stringify({ skill_trust: 'allow' }),
+  })
+  expect(response.status).toBe(503)
+  expect(await response.json()).toEqual({ error: 'fixture reload failed' })
+  expect(network.stored).toEqual(before)
+  expect(network.rejection).toBeUndefined()
 })
