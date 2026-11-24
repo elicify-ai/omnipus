@@ -357,7 +357,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 
 			// A valid local re-auth token is minted before EACH mutator call
 			// (S-113's Given); every mint is asserted (F04).
-			reauth := pgReauthTokenFor(t, f)
+			pgReauthTokenFor(t, f)
 
 			t.Logf("sweep: %d registered route patterns, edition %s", len(routes), edition)
 			probes := 0
@@ -378,7 +378,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 				subtree := strings.HasSuffix(pattern, "/")
 				for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 					var path, body string
-					isRow := false
+					var isRow bool
 					probeReauth := false
 					switch {
 					case strings.HasPrefix(pattern, "/api/v1/credentials") && (method == http.MethodPost || method == http.MethodPut) && !subtree:
@@ -436,8 +436,7 @@ func TestProgramCredential_RouteSweep(t *testing.T) {
 					if probeReauth {
 						// A fresh consent token per call (S-113's Given), the
 						// mint asserted successful (F04).
-						reauth = pgReauthTokenFor(t, f)
-						callReauth = reauth
+						callReauth = pgReauthTokenFor(t, f)
 					}
 					pgSweepServe(t, f, method, path, body, f.token, callReauth)
 					probes++

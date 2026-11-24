@@ -107,7 +107,7 @@ func TestProgramEnv_ActualUnmatchedAndScript(t *testing.T) {
 			require.Equal(t, "octocat", strings.TrimSpace(finish()), "actual unmatched-program child verifies token presence/absence before emitting this instrument")
 			requests := x.approver.snapshot()
 			require.NotEmpty(t, requests, "S28: ordinary network approval remains reachable")
-			var args []map[string]any
+			args := make([]map[string]any, 0, len(requests))
 			for _, req := range requests {
 				require.Equal(t, "bash", req.ToolName)
 				args = append(args, req.Args)

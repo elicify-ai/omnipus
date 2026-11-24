@@ -73,8 +73,8 @@ func TestAgentPrograms_RealLoopApproval(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				_, err := loop.ProcessDirectAs(ctx, "omnipus", "switch GitHub on for Dev", "s14-programs")
-				done <- err
+				_, turnErr := loop.ProcessDirectAs(ctx, "omnipus", "switch GitHub on for Dev", "s14-programs")
+				done <- turnErr
 			}()
 			t.Cleanup(func() {
 				cancel()
@@ -88,9 +88,9 @@ func TestAgentPrograms_RealLoopApproval(t *testing.T) {
 			case req := <-barrier.entered:
 				require.Equal(t, "set_agent_permissions", req.ToolName)
 				require.Equal(t, "omnipus", req.AgentID)
-			case err := <-done:
-				done <- err
-				t.Fatalf("approval was never requested (turn ended: %v)", err)
+			case endedErr := <-done:
+				done <- endedErr
+				t.Fatalf("approval was never requested (turn ended: %v)", endedErr)
 			case <-time.After(5 * time.Second):
 				t.Fatal("real Programs write did not reach approval")
 			}
@@ -99,9 +99,9 @@ func TestAgentPrograms_RealLoopApproval(t *testing.T) {
 			require.Equal(t, before, held, "no write while real approval is held")
 			barrier.decision <- row.approved
 			select {
-			case err := <-done:
-				done <- err
-				require.NoError(t, err)
+			case endedErr := <-done:
+				done <- endedErr
+				require.NoError(t, endedErr)
 			case <-time.After(5 * time.Second):
 				t.Fatal("approved/rejected turn did not finish")
 			}

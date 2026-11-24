@@ -78,8 +78,8 @@ func pgSinkRunCampaign(t *testing.T, god bool) {
 	_, hasRecord := payload["omnipus/agents/dev/agent.json"]
 	require.True(t, hasRecord)
 	packageView, err := json.Marshal(struct {
-		Manifest any
-		Files    map[string]string
+		Manifest any               `json:"Manifest"`
+		Files    map[string]string `json:"Files"`
 	}{Manifest: manifest, Files: pgSinkPayloadStrings(payload)})
 	require.NoError(t, err)
 	pgSinkAssertValueFree(t, packageView, "actual decompressed export manifest and payload")

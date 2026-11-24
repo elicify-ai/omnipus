@@ -180,7 +180,7 @@ func spawnImportAliases(f *ast.File) map[string]string {
 		} else {
 			continue
 		}
-		name := ""
+		var name string
 		if imp.Name != nil {
 			name = imp.Name.Name
 		} else {

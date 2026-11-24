@@ -47,8 +47,8 @@ func TestProgramProvenance_ActualMixedHelperSteering(t *testing.T) {
 			require.Equal(t, x.parent, before.SteeringSessionID())
 			if row.doRestart {
 				x.restart(t)
-				reloaded, err := x.f.al.GetSessionLifecycleStore().Load(child)
-				require.NoError(t, err)
+				reloaded, reloadErr := x.f.al.GetSessionLifecycleStore().Load(child)
+				require.NoError(t, reloadErr)
 				require.Equal(t, before, reloaded, "S123: the actual helper/edge/lineage survive runtime restart unchanged")
 			}
 			path := filepath.Join(x.work, row.name+"-count")

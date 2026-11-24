@@ -65,8 +65,8 @@ printf 'S88_GIT_EXECUTED'
 		// The source resolves the actual encrypted store and trusted test turn;
 		// it does not fabricate a TurnPrograms or helper environment.
 		source := func(ctx context.Context, private []string) *programs.TurnPrograms {
-			p, err := programs.Resolve(cfg, store, nil, programs.TurnRequest{AgentID: ToolAgentID(ctx), Provenance: ToolTurnProvenance(ctx), PrivateVariables: private})
-			require.NoError(t, err)
+			p, resolveErr := programs.Resolve(cfg, store, nil, programs.TurnRequest{AgentID: ToolAgentID(ctx), Provenance: ToolTurnProvenance(ctx), PrivateVariables: private})
+			require.NoError(t, resolveErr)
 			return p
 		}
 		tool, err := NewExecToolWithDeps(project, true, cfg, ExecToolDeps{Programs: source})

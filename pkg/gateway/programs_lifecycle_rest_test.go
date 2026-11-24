@@ -388,8 +388,8 @@ func TestProgramCredential_SaveCheckStates(t *testing.T) {
 		// Real added-data test build: no REST-created custom surrogate and no
 		// replacement loader. The probe drives login, GET and credential PUT.
 		var actual struct { // test-build output containing generated wire carriers
-			List  gen.ProgramList
-			Entry gen.ProgramEntry
+			List  gen.ProgramList  `json:"List"`
+			Entry gen.ProgramEntry `json:"Entry"`
 		}
 		require.NoError(t, json.Unmarshal(presetbuild.ProbeHTTP(t), &actual))
 		require.Len(t, actual.List.Entries, 3, "S37: shipped GitHub/Fly plus the added JSON preset")
@@ -528,7 +528,9 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "the disconnect is processed: %s", w.Body.String())
 		after := pgPollEntryState(t, f, "github", "not_connected", 15*time.Second)
 		afterConn := pgConnection(t, after)
-		require.Equal(t, before["generation"].(float64)+1, afterConn["generation"],
+		beforeGeneration, generationOK := before["generation"].(float64)
+		require.True(t, generationOK, "instrument: persisted generation is a JSON number")
+		require.Equal(t, beforeGeneration+1, afterConn["generation"],
 			"disconnect increments the generation: %v -> %v", before["generation"], afterConn["generation"])
 		// Dev's switch stays on (the disconnect keeps switches).
 		dev := pgProgramsSessionCall(t, f, http.MethodGet, "/api/v1/agents/dev", "")
@@ -543,7 +545,6 @@ func TestProgramReplaceCheckDisconnect(t *testing.T) {
 		// (FR-011 runtime; S-32's row covers that surface). The dialog's
 		// stays-valid-at-GitHub text is the UI face — programs.spec.ts S53.
 	})
-
 }
 
 // TestProgramError_PassThrough/S32_program_error_passed_through moved to
