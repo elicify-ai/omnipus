@@ -1,3 +1,5 @@
+//go:build s1seams
+
 package gateway
 
 // H46/S113 v2. This is an explicit, frozen input table prepared from declared
