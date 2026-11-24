@@ -36,29 +36,39 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 
 	"github.com/stretchr/testify/require"
 )
 
-// The seams GREEN wires: patchPermissionSettings drives the real C-2 PATCH
-// /security/permissions route with the given PermissionSettingsPatch body;
-// the allowance trio drives the C-26 store (seed answers a card with
+// patchPermissionSettings directly dispatches the real C-2 PATCH route with
+// bearer authentication and re-auth consent. It is not an assignable action.
+// The allowance trio drives the C-26 store (seed answers a card with
 // "Allow for 3 hours" per S-128's Given); applyConfigReload drives the
 // fourth writer — a config reload that changes a stored value (C-26's
 // writer list) — with the mutation applied through the real config
 // persistence, not a map edit. Declared before the test so the RED failure
 // names the missing behaviour first.
 var (
-	patchPermissionSettings func(t testing.TB, api *restAPI, body string) *httptest.ResponseRecorder
 	seedRunningAllowance    func(t testing.TB, api *restAPI, agentID, subject string)
 	agentAllowanceActive    func(t testing.TB, api *restAPI, agentID, subject string) bool
 	agentEgressTokenRevoked func(t testing.TB, api *restAPI, agentID string) bool
 	applyConfigReload       func(t testing.TB, api *restAPI, mutate func(cfg *config.Config))
 )
+
+func patchPermissionSettings(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", permissionsTestBearer)
+	routes := routeTable{}
+	api.registerAdditionalEndpoints(routes)
+	return patchPermissions(t, api, routes, body)
+}
 
 // putAgentToolValue PUTs the agent's tools with ONE explicit tool override
 // through the real PUT /agents/{id}/tools writer (CHECK round 1 finding 16:
@@ -67,14 +77,18 @@ var (
 // the deliberate stored change.
 func putAgentToolValue(t *testing.T, api *restAPI, agentID, tool, policy string) *httptest.ResponseRecorder {
 	t.Helper()
+	cfg := api.agentLoop.GetConfig()
+	config.ReconcileToolPolicyCeiling(cfg, buildKnownBuiltinToolNames())
 	full := map[string]string{}
 	for name := range buildKnownBuiltinToolNames() {
-		full[name] = api.agentLoop.GetConfig().Sandbox.ToolPolicies[name]
+		full[name] = cfg.Sandbox.ToolPolicies[name]
 	}
 	full[tool] = policy
 	policies, err := json.Marshal(full)
 	require.NoError(t, err)
-	body := `{"override_names":[],"builtin":{"policies":` + string(policies) + `}}`
+	names, err := json.Marshal([]string{tool})
+	require.NoError(t, err)
+	body := `{"override_names":` + string(names) + `,"builtin":{"policies":` + string(policies) + `}}`
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withAdminRole(r)
@@ -109,17 +123,53 @@ func allowanceEndedEntriesFor(t *testing.T, auditDir string) []map[string]any {
 	return out
 }
 
-func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
+// Seed both actual actors, not just buildExecutorTestAPI's test-agent. All
+// writers share these durable records and the loop registry built from them.
+func newPermissionChangeAPI(t *testing.T) *restAPI {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvConfig, filepath.Join(home, "config.json"))
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
+	cfg.Agents.List = nil
+	cfg.Sandbox.AutoApprove, cfg.Sandbox.GodMode = false, false
+	cfg.Sandbox.ToolPolicies["delete_task"] = "ask"
+	for _, id := range []string{"mia", "jim"} {
+		record := config.AgentConfig{ID: id, Name: id, Type: config.AgentTypeCustom}
+		require.NoError(t, agentstore.New(home).Create(id, &record))
+		cfg.Agents.List = append(cfg.Agents.List, record)
+	}
+	require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), cfg))
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	return &restAPI{agentLoop: al, homePath: home}
+}
 
+// This instrument must execute even before the timed store exists: a PUT
+// with override_names: [] only echoes the ceiling and does not create Ask.
+func TestPermissionChangeToolWriter_Fixture(t *testing.T) {
+	api := newPermissionChangeAPI(t)
+	w := putAgentToolValue(t, api, "mia", "delete_task", "ask")
+	require.Equal(t, http.StatusOK, w.Code, "actual explicit-override PUT: %s", w.Body.String())
+	stored, err := agentstore.New(api.homePath).ReadState("mia")
+	require.NoError(t, err)
+	require.NotNil(t, stored.Agent.Tools)
+	require.Equal(t, config.ToolPolicyAsk, stored.Agent.Tools.Builtin.Policies["delete_task"], "native durable record, not echoed response")
+}
+
+func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	t.Run("D17#10: a global Deny ends Mia's allowance, once audited", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 running-allowance store and its permission-change " +
 				"ending (C-26 'A permission change' row) are not implemented — required by " +
 				"D17 row 10")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
-		seedRunningAllowance(t, api, "mia", "delete_task")
 
 		// Pin the floor the Deny changes: the stored global is Ask first, so
 		// the audit entry's old/new are exact fixture values, not assumptions
@@ -127,6 +177,8 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"setup: the floor stores as Ask, got %d, body: %s", w.Code, w.Body.String())
+		seedRunningAllowance(t, api, "mia", "delete_task")
+		require.True(t, agentAllowanceActive(t, api, "mia", "delete_task"), "positive running allowance before the change")
 
 		w = patchPermissionSettings(t, api, `{"policies":{"delete_task":"deny"}}`)
 		require.Equal(t, http.StatusOK, w.Code,
@@ -138,10 +190,10 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#11: after the Deny ends it, setting Ask back does not revive it", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 row 11")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"deny"}}`)
@@ -154,15 +206,17 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#14 and #15: a global change ends every agent it affects, then cards return", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 rows 14 and 15")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
+		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
+		require.Equal(t, http.StatusOK, w.Code, "setup Ask before allowances: %s", w.Body.String())
 		seedRunningAllowance(t, api, "mia", "delete_task")
 		seedRunningAllowance(t, api, "jim", "delete_task")
 
-		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"allow"}}`)
+		w = patchPermissionSettings(t, api, `{"policies":{"delete_task":"allow"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "setup: the global Allow stores, body: %s", w.Body.String())
 
 		require.False(t, agentAllowanceActive(t, api, "mia", "delete_task"),
@@ -184,7 +238,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 row 16")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 		seedRunningAllowance(t, api, "jim", "delete_task")
@@ -216,7 +270,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 row 17")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		installPlanSkillFixture(t, api.homePath)
 		grantPlanSkill(t, api, "mia")
 		seedRunningAllowance(t, api, "mia", "plan")
@@ -234,14 +288,16 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#18 control: sending the stored value ends nothing", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 row 18")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
+		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
+		require.Equal(t, http.StatusOK, w.Code, "setup stored Ask before allowance: %s", w.Body.String())
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
-		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
+		w = patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"D17#18: the same-value request is valid — 200, got %d, body: %s", w.Code, w.Body.String())
 		require.True(t, agentAllowanceActive(t, api, "mia", "delete_task"),
@@ -251,12 +307,12 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#19: ending bash allowances revokes the agent's live egress tokens", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil || agentEgressTokenRevoked == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil || agentEgressTokenRevoked == nil {
 			t.Fatal("BLOCKED: the C-26 store, its ending and the egress-token revocation " +
 				"(C-26 'A permission change': ending a bash allowance also revokes the " +
 				"agent's live egress tokens, FR-094) are not implemented — required by D17 row 19")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		seedRunningAllowance(t, api, "mia", "bash addresses example.com")
 		seedRunningAllowance(t, api, "mia", "bash family npm run test")
 
@@ -277,10 +333,10 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#20 control: a trust change ends nothing", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by D17 row 20")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		installPlanSkillFixture(t, api.homePath)
 		grantPlanSkill(t, api, "mia")
 		seedRunningAllowance(t, api, "mia", "plan")
@@ -301,12 +357,12 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			t.Fatal("BLOCKED: the config-reload writer's permission-change ending (C-26 writer list: " +
 				"a config reload that changes a stored value) is not implemented — required by the D17 writer rows")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
-		seedRunningAllowance(t, api, "mia", "delete_task")
-
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "setup: the floor stores as Ask, body: %s", w.Body.String())
+		seedRunningAllowance(t, api, "mia", "delete_task")
+		require.True(t, agentAllowanceActive(t, api, "mia", "delete_task"), "positive running allowance before native reload")
 
 		applyConfigReload(t, api, func(cfg *config.Config) {
 			cfg.Sandbox.ToolPolicies["delete_task"] = "deny"
@@ -318,10 +374,10 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17 control: a level change is not a permission and ends nothing", func(t *testing.T) {
-		if patchPermissionSettings == nil || seedRunningAllowance == nil || agentAllowanceActive == nil {
+		if seedRunningAllowance == nil || agentAllowanceActive == nil {
 			t.Fatal("BLOCKED: the C-26 store and ending are not implemented — required by the level control")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "serve_web")
 
@@ -339,7 +395,7 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 			t.Fatal("BLOCKED: the config-reload writer and the C-26 store are not implemented — " +
 				"required by the Auto/God non-permission controls")
 		}
-		api := buildExecutorTestAPI(t)
+		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
