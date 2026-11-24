@@ -1486,6 +1486,25 @@ func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPo
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy}, nil
 }
 
+// turnMountRoots returns the realpath'd host roots of the operator-approved
+// mounts of the workspace this turn is rooted in, or nil when it has none.
+// ResolveTurnFSPolicy (write grants) and ExecTool.resolveCWD (bash cwd, ADR-063
+// addendum 2026-11-24) both use it, so the two never disagree about which
+// workspace's mounts apply: the turn-carried workspace_id when set, else the
+// workspace the work dir was re-rooted into (see ResolveTurnFSPolicy).
+func turnMountRoots(ctx context.Context, home string) []string {
+	workspaceID := ToolWorkspaceID(ctx)
+	if workspaceID == "" {
+		if wsID, found := workspace.FindForAgentPreferring(home, ToolAgentID(ctx), workspaceID); found {
+			workspaceID = wsID
+		}
+	}
+	if workspaceID == "" {
+		return nil
+	}
+	return workspace.AllowedMountRoots(home, workspaceID)
+}
+
 // ResolveTurnFSPolicy resolves the single, authoritative FSPolicy for a turn
 // (FR-036), using the exact parameter shape every generic path-taking tool's
 // Execute method previously assembled by hand (MEDIUM #7, ADR-046 P1
@@ -1570,15 +1589,7 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 	// set — FindForAgentPreferring is consulted only on the empty path — and
 	// it does not set tools.WithWorkspaceID or otherwise touch memory-room
 	// routing; it only decides which workspace's mounts apply here.
-	mountWorkspaceID := workspaceID
-	if mountWorkspaceID == "" {
-		if wsID, found := workspace.FindForAgentPreferring(home, ToolAgentID(ctx), workspaceID); found {
-			mountWorkspaceID = wsID
-		}
-	}
-	if mountWorkspaceID != "" {
-		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
-	}
+	policy.AllowedRoots = turnMountRoots(ctx, home)
 	if coreagent.HasCrossWorkspaceSetupAuthority(ToolAgentID(ctx)) {
 		var setupErr error
 		if policy, setupErr = withSetupAuthority(policy, home); setupErr != nil {

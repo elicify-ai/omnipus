@@ -934,10 +934,6 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 	rawCWD, _ := args["cwd"].(string)
 	rawCWD = strings.TrimSpace(rawCWD)
 
-	if filepath.IsAbs(rawCWD) {
-		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path)")
-	}
-
 	policyForCWD, err := fspolicy.EffectiveFSPolicy(
 		ctx, baseDir, "", true, config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
 	)
@@ -945,8 +941,30 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 		return "", fmt.Errorf("workspace dir not resolvable: %w", err)
 	}
 
+	if filepath.IsAbs(rawCWD) {
+		mountCWD, ok, mountErr := resolveMountCWD(ctx, policyForCWD, rawCWD)
+		if mountErr != nil {
+			return "", mountErr
+		}
+		if ok {
+			return mountCWD, nil
+		}
+		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path, or a folder inside a write mount)")
+	}
+
 	handle, err := ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)
 	if err != nil {
+		if errors.Is(err, ErrOutsideScope) {
+			// A relative cwd that resolves outside the work dir (in practice
+			// the work/<name> link of a mount) may still name a write mount.
+			mountCWD, ok, mountErr := resolveMountCWD(ctx, policyForCWD, rawCWD)
+			if mountErr != nil {
+				return "", mountErr
+			}
+			if ok {
+				return mountCWD, nil
+			}
+		}
 		return "", fmt.Errorf("path escapes workspace: %w", err)
 	}
 	defer handle.Close()
@@ -956,6 +974,61 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 		return "", fmt.Errorf("failed to resolve cwd: %w", err)
 	}
 	return realPath, nil
+}
+
+// resolveMountCWD is the one widening of bash's cwd (ADR-063 addendum
+// 2026-11-24, founder ruling on #1960 S-20): a cwd inside an operator-approved
+// WRITE mount of this turn's workspace is admitted. It reports ok=false (the
+// caller keeps its normal refusal) unless ResolvePath with FSOpWrite, given
+// only the workspace mounts as AllowedRoots, admits rawCWD, the resolved real
+// path lies inside one of those mount roots and outside the work dir, and it
+// is an existing directory. Nothing else is opened:
+//
+//   - AllowedRoots is ONLY the workspace mounts (turnMountRoots): never the
+//     operator/media allowlist, a D7 path grant or a setup root, so the
+//     SEC-05/FR-B2 rule in resolveCWD still holds for everything that is not
+//     a mount.
+//   - The work dir keeps exactly its earlier rules: an absolute path inside
+//     it is still refused, and a relative path into it still takes the
+//     FSOpExec route only.
+//   - ResolvePath checks the secret set (IsCarveOut) before any mount, so a
+//     mount never reopens a protected path; the evidence push guard
+//     (sandbox/gitguard.go) is unchanged and still judges every git command.
+//
+// A refused FSOpWrite resolve is not an error here: it means "not a mount",
+// and the caller reports its own refusal. Only a failure after a mount
+// matched (stat, not a directory) is returned as an error.
+func resolveMountCWD(ctx context.Context, policyForCWD fspolicy.FSPolicy, rawCWD string) (string, bool, error) {
+	mountRoots := turnMountRoots(ctx, config.OmnipusHomeDir())
+	if len(mountRoots) == 0 {
+		return "", false, nil
+	}
+	mountPolicy := policyForCWD
+	mountPolicy.AllowedRoots = mountRoots
+	handle, err := ResolvePath(ctx, mountPolicy, "bash", "", FSOpWrite, rawCWD)
+	if err != nil {
+		// A refused write resolve means "not inside a mount"; the caller refuses.
+		return "", false, nil
+	}
+	defer handle.Close()
+	realPath, err := handle.RealPath()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve cwd: %w", err)
+	}
+	if isWithinWorkspace(realPath, policyForCWD.WorkDir) {
+		return "", false, nil
+	}
+	if _, inMount := matchedAllowedRoot(realPath, mountRoots); !inMount {
+		return "", false, nil
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return "", false, fmt.Errorf("path escapes workspace: cwd inside write mount is not usable: %w", err)
+	}
+	if !info.IsDir() {
+		return "", false, fmt.Errorf("path escapes workspace: cwd inside write mount is not a directory: %q", rawCWD)
+	}
+	return realPath, true, nil
 }
 
 // --- audit helpers -----------------------------------------------------------
