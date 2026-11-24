@@ -19,15 +19,16 @@ package gateway
 // and the system tools set_agent_permissions / create_agent / get_agent,
 // driven through systools Deps wired to the gateway's own config (the same
 // constructors pkg/sysagent/tools' tests use). Project fixtures: W1 with
-// .claude/skills/notes, W2 with .claude/skills/todo; the agent's workspace
-// record points at W1 (config.AgentConfig.Home, json "workspace").
+// .claude/skills/notes, W2 with .claude/skills/todo; real workspace membership
+// and protected mount records grant W1 only to the test agent.
 //
 // RED today: no writer reads skill keys at this commit — updateAgentTools
 // drops the whole skills member (order 8's RED), set_agent_permissions and
 // create_agent refuse skill_policy_changes as an unknown field (order 15/42's
-// RED), the C-23 known-skill validation does not exist, and the D16#13
-// workspace reconcile has no entry point (seam). Every stored row therefore
-// fails on its missing write or its missing refusal.
+// RED), and the C-23 known-skill validation/reconciliation does not exist.
+// D16#13 directly deletes through HandleWorkspaces, drives GET /skills
+// reconciliation (FR-080), and refreshes the gateway's native config;
+// no action or deletion seam may stand in for those production paths.
 import (
 	"context"
 	"encoding/json"
@@ -40,37 +41,107 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 
 	"github.com/stretchr/testify/require"
 )
 
-// seedKeyValidationMounts writes the W1/W2 project-skill fixtures and points
-// the agent record's workspace at W1 (mounted on W1, not on W2). Each
-// SKILL.md carries its directory's slug as its name — a fixture whose
-// frontmatter name disagrees with the slug is not the skill the key names
-// (CHECK round 1 finding 13).
+// seedKeyValidationMounts establishes real workspace membership AND protected
+// mounts. AgentConfig.Home is not mount authority. Host folders stay outside
+// OMNIPUS_HOME, as required by CreateMount; deleting a workspace must never
+// delete the mounted host folder. Every skill's frontmatter matches its slug.
 func seedKeyValidationMounts(t *testing.T, api *restAPI, agentID string) (w1, w2 string) {
 	t.Helper()
-	w1 = filepath.Join(api.homePath, "workspaces", "w1")
-	w2 = filepath.Join(api.homePath, "workspaces", "w2")
-	for slug, dir := range map[string]string{
-		"notes": filepath.Join(w1, ".claude", "skills", "notes"),
-		"todo":  filepath.Join(w2, ".claude", "skills", "todo"),
-	} {
+	w1, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	w2, err = filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	for _, row := range []struct{ id, slug, root string }{{"w1", "notes", w1}, {"w2", "todo", w2}} {
+		dir := filepath.Join(row.root, ".claude", "skills", row.slug)
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
-			[]byte("---\nname: "+slug+"\ndescription: Project skill fixture "+slug+".\n---\n\nBody."), 0o644))
-	}
-	if _, err := agentstore.New(api.homePath).Update(agentID, func(ac *config.AgentConfig) error {
-		ac.Home = w1
-		return nil
-	}); err != nil {
-		t.Fatalf("setup: mount the agent on W1: %v", err)
+			[]byte("---\nname: "+row.slug+"\ndescription: Project skill fixture "+row.slug+".\n---\n\nBody."), 0o644))
+		members := []string{}
+		if row.id == "w1" {
+			members = []string{agentID}
+		}
+		require.NoError(t, workspace.SaveRecord(api.homePath, workspace.Workspace{ID: row.id, Name: row.id, Status: "active", CoreTeam: members}))
+		_, err := workspace.EnsureWorkDir(api.homePath, row.id)
+		require.NoError(t, err)
+		_, warning, err := workspace.CreateMount(api.homePath, row.id, "project", row.root)
+		require.NoError(t, err)
+		require.Empty(t, warning)
+		require.Equal(t, []string{row.root}, workspace.AllowedMountRoots(api.homePath, row.id))
 	}
 	return w1, w2
+}
+
+// deleteKeyValidationWorkspace is a direct native action, not a replaceable
+// reconciliation callback. Independent file/mount observers certify the action
+// occurred and that the host folder was not deleted along with the workspace.
+func deleteKeyValidationWorkspace(t *testing.T, api *restAPI, hostRoot string) {
+	t.Helper()
+	require.FileExists(t, filepath.Join(api.homePath, "workspaces", "w1.json"))
+	deleted := httptest.NewRecorder()
+	api.HandleWorkspaces(deleted, withAdminRole(httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "w1"), nil)))
+	require.Equal(t, http.StatusOK, deleted.Code, "native workspace delete: %s", deleted.Body.String())
+	require.NoFileExists(t, filepath.Join(api.homePath, "workspaces", "w1.json"))
+	require.NoDirExists(t, workspace.WorkspaceDir(api.homePath, "w1"))
+	require.Empty(t, workspace.AllowedMountRoots(api.homePath, "w1"), "protected mount record is removed too")
+	require.FileExists(t, filepath.Join(hostRoot, ".claude", "skills", "notes", "SKILL.md"), "deleting W1 preserves its mounted host folder")
+}
+
+// Keep the native deletion/reconcile scenario separate from the writer table;
+// each has one job and remains below the function-size budget.
+func testDeletedWorkspaceSkillKeys(t *testing.T, mountedKey string) {
+	t.Helper()
+	api := buildExecutorTestAPI(t)
+	installPlanSkillFixture(t, api.homePath)
+	w1, _ := seedKeyValidationMounts(t, api, "test-agent")
+	w := putAgentSkills(t, api, "test-agent", fmt.Sprintf(`{"policies":{%q:"deny","plan":"deny"}}`, mountedKey))
+	require.Equal(t, http.StatusOK, w.Code, "setup: %s", w.Body.String())
+	t.Setenv("OMNIPUS_BEARER_TOKEN", permissionsTestBearer)
+	routes := routeTable{}
+	api.registerAdditionalEndpoints(routes)
+	global := patchPermissions(t, api, routes, `{"skill_policies":{"project:w1/notes":"ask","plan":"ask"},"skill_visibility":{"project:w1/notes":"name_only","plan":"full"}}`)
+	require.Equal(t, http.StatusOK, global.Code, "seed ALL project-key maps: %s", global.Body.String())
+	readBackDurable(t, sysDepsFor(t, api), "test-agent", mountedKey, "deny")
+	deleteKeyValidationWorkspace(t, api, w1)
+	// FR-080 names GET /skills as a reconciliation entry. Drive it, then
+	// the real gateway refresh so the final PUT cannot use a stale loop.
+	inventory := httptest.NewRecorder()
+	api.HandleSkills(inventory, withAdminRole(httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)))
+	require.Equal(t, http.StatusOK, inventory.Code, "native skill-inventory reconcile: %s", inventory.Body.String())
+	require.NoError(t, api.refreshConfigAndRewireServices(filepath.Join(api.homePath, "config.json")), "native gateway config refresh after reconcile")
+	// Observe the durable file, not just a lossy typed config projection.
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
+	require.NoError(t, err)
+	var document map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &document))
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(document["sandbox"], &fields))
+	sandbox := map[string]map[string]string{}
+	for _, field := range []string{"skill_policies", "skill_visibility"} {
+		require.Contains(t, fields, field, "C-23 native map must exist, not be silently dropped")
+		var values map[string]string
+		require.NoError(t, json.Unmarshal(fields[field], &values))
+		sandbox[field] = values
+		require.NotContains(t, values, mountedKey, "deleted project key is removed from %s", field)
+	}
+	require.Equal(t, "ask", sandbox["skill_policies"]["plan"], "unrelated global skill permission remains")
+	require.Equal(t, "full", sandbox["skill_visibility"]["plan"], "unrelated global skill level remains")
+
+	stored := sysStoredSkillOverrides(t, api.homePath, "test-agent")
+	if _, present := stored[mountedKey]; present {
+		t.Fatalf("D16#13: the deleted workspace's key must be removed everywhere; stored: %v", stored)
+	}
+	require.Equal(t, map[string]any{"plan": "deny"}, stored, "only the deleted project's own override is removed")
+	w2 := putAgentSkills(t, api, "test-agent", fmt.Sprintf(`{"policies":{%q:"deny"}}`, mountedKey))
+	requireErrContains(t, w2, http.StatusBadRequest, "`project:w1/notes` is not a skill this agent can use.")
 }
 
 // sysDepsFor builds systools Deps wired to the gateway's own config, the same
@@ -91,30 +162,24 @@ func sysDepsFor(t *testing.T, api *restAPI) *systools.Deps {
 	}
 }
 
-// sysStoredSkillOverrides reads the agent entity record's stored overrides
-// from the FLAT durable AgentConfig — pkg/entity/store.go::Store.write
-// marshals the AgentConfig directly, and the per-agent override map (tool
-// keys and skill keys alike) is AgentConfig.Tools.Builtin.Policies
-// (pkg/sysagent/tools/agent_read.go::storedOverrides). CHECK round 1
-// finding 12: the earlier invented `agent.tools.skills` wrapper decoded
-// correct flat records into zero values.
+// sysStoredSkillOverrides reads C-4's tools_cfg.skills.policies from the
+// flat durable record, never the unrelated builtin policy map. This JSON
+// storage observation deliberately does not depend on the old AgentConfig
+// decoder, which has no skills member. No invented agent wrapper.
 func sysStoredSkillOverrides(t *testing.T, home, agentID string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(home, "entities", "agents", agentID+".json"))
 	require.NoError(t, err, "entity record must exist")
-	var ac config.AgentConfig
-	require.NoError(t, json.Unmarshal(raw, &ac), "flat AgentConfig entity JSON: %s", raw)
-	if ac.Tools == nil {
-		return nil
+	// not-wire-format: independent durable entity-file observation.
+	var stored struct {
+		ToolsCfg struct {
+			Skills struct {
+				Policies map[string]any `json:"policies"`
+			} `json:"skills"`
+		} `json:"tools_cfg"`
 	}
-	if ac.Tools.Builtin.Policies == nil {
-		return nil
-	}
-	out := make(map[string]any, len(ac.Tools.Builtin.Policies))
-	for k, v := range ac.Tools.Builtin.Policies {
-		out[k] = string(v)
-	}
-	return out
+	require.NoError(t, json.Unmarshal(raw, &stored), "flat entity JSON: %s", raw)
+	return stored.ToolsCfg.Skills.Policies
 }
 
 // sysSetAgentPermissions drives the real set_agent_permissions tool with the
@@ -132,30 +197,37 @@ func sysSetAgentPermissions(t *testing.T, deps *systools.Deps, agentID string, c
 	return res
 }
 
-// sysGetAgentSkillOverrides drives the real get_agent tool and returns the
-// stored overrides its FLAT body reports (agent_get.go::storedDetail puts
-// `stored_overrides` at the top level, next to id and skills). CHECK round 1
-// finding 12: the earlier invented nested wrapper parsed zero values.
+// sysGetAgentSkillOverrides selects C-9's generated skill_permissions, not
+// the existing builtin-only stored_overrides. C-23 lists only eligible skills.
 func sysGetAgentSkillOverrides(t *testing.T, deps *systools.Deps, agentID string) map[string]any {
 	t.Helper()
-	res := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agentID})
-	require.False(t, res.IsError, "get_agent must answer: %s", res.ForLLM)
-	var body struct {
-		StoredOverrides map[string]any `json:"stored_overrides"`
-	}
+	res := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{
+		"id": agentID, "fields": []any{"skill_permissions"},
+	})
+	require.False(t, res.IsError, "get_agent skill_permissions must answer: %s", res.ForLLM)
+	var body gen.AgentDetail
 	require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &body), "get_agent body: %s", res.ForLLM)
-	return body.StoredOverrides
+	require.NotNil(t, body.SkillPermissions, "C-9 skill_permissions was requested, never silently omitted")
+	out := map[string]any{}
+	for _, permission := range *body.SkillPermissions {
+		require.NotContains(t, out, permission.Skill, "C-23 lists each eligible key once")
+		out[permission.Skill] = nil
+		if permission.Override != nil {
+			out[permission.Skill] = string(*permission.Override)
+		}
+	}
+	return out
 }
 
-// readBackDurable asserts the DURABLE storage read-back through get_agent's
-// flat stored_overrides: exactly the wanted value, or the key absent.
+// readBackDurable asserts durable storage, including overrides on installed
+// but ungranted skills which C-23 deliberately excludes from UI/read lists.
 func readBackDurable(t *testing.T, deps *systools.Deps, agentID, key, want string) {
 	t.Helper()
-	sys := sysGetAgentSkillOverrides(t, deps, agentID)
+	stored := sysStoredSkillOverrides(t, deps.Home, agentID)
 	if want == "" {
-		require.Nil(t, sys[key], "get_agent durable read-back: %v must not carry %s", sys, key)
+		require.NotContains(t, stored, key, "durable skill override is absent after clearing")
 	} else {
-		require.Equal(t, want, sys[key], "get_agent durable read-back carries the override")
+		require.Equal(t, want, stored[key], "tools_cfg.skills.policies carries the override")
 	}
 }
 
@@ -190,6 +262,13 @@ func readBackEligibleRow(t *testing.T, api *restAPI, agentID, key, want string) 
 func readBackThroughBothReaders(t *testing.T, api *restAPI, deps *systools.Deps, agentID, key, want string) {
 	t.Helper()
 	readBackDurable(t, deps, agentID, key, want)
+	sys := sysGetAgentSkillOverrides(t, deps, agentID)
+	require.Contains(t, sys, key, "get_agent lists the eligible skill (C-23)")
+	if want == "" {
+		require.Nil(t, sys[key], "get_agent reports no own override")
+	} else {
+		require.Equal(t, want, sys[key], "get_agent reports the own override")
+	}
 	readBackEligibleRow(t, api, agentID, key, want)
 }
 
@@ -212,6 +291,20 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 	const foreignKey = "project:w2/todo"
 	const notMountedText = "`project:w2/todo` is not a skill this agent can use."
 
+	t.Run("instrument native workspace delete removes record workdir and mount but preserves host files", func(t *testing.T) {
+		api := buildExecutorTestAPI(t)
+		w1, _ := seedKeyValidationMounts(t, api, "test-agent")
+		deleteKeyValidationWorkspace(t, api, w1)
+	})
+	t.Run("instrument durable reader distinguishes skills from builtin and legacy wrappers", func(t *testing.T) {
+		home := t.TempDir()
+		dir := filepath.Join(home, "entities", "agents")
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		raw := `{"tools_cfg":{"skills":{"policies":{"plan":"ask"}},"builtin":{"policies":{"plan":"deny","bash":"allow"}}},"tools":{"builtin":{"policies":{"plan":"allow"}}},"agent":{"tools":{"skills":{"policies":{"plan":"deny"}}}}}`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "reader.json"), []byte(raw), 0o600))
+		require.Equal(t, map[string]any{"plan": "ask"}, sysStoredSkillOverrides(t, home, "reader"))
+	})
+
 	t.Run("D16#1 PUT stores a mounted project key; the read-back pair shows it", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		installPlanSkillFixture(t, api.homePath)
@@ -232,7 +325,7 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 			"D16#2: 400, got %d, body: %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), notMountedText,
 			"D16#2: the refusal carries the spec's text")
-		require.Nil(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
+		require.Empty(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
 			"D16#2: nothing stored after the refusal")
 	})
 
@@ -263,7 +356,7 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 	t.Run("D16#5 create_agent mounted on W1 stores the mounted project key", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		installPlanSkillFixture(t, api.homePath)
-		w1, _ := seedKeyValidationMounts(t, api, "test-agent")
+		seedKeyValidationMounts(t, api, "test-agent")
 		deps := sysDepsFor(t, api)
 		args := map[string]any{
 			"name":        "keyval-create",
@@ -271,9 +364,9 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 			"soul":        "You help.",
 			"model":       "test/model",
 			"color":       "#6E8BA8",
-			// The agent is created mounted on W1 (the row's Given); GREEN
-			// binds the mount through the create flow's workspace argument.
-			"workspace":            w1,
+			// The existing create_agent destination joins W1, whose real mount
+			// above supplies the project shelf. No invented workspace-path arg.
+			"workspace_id":         "w1",
 			"skill_policy_changes": map[string]any{"set": map[string]any{mountedKey: "ask"}},
 		}
 		res := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
@@ -306,9 +399,8 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		installPlanSkillFixture(t, api.homePath)
 		seedKeyValidationMounts(t, api, "test-agent")
 		w := putAgentSkills(t, api, "test-agent", `{"policies":{"nope":"deny"}}`)
-		require.Equal(t, http.StatusBadRequest, w.Code,
-			"D16#7: 400, got %d, body: %s", w.Code, w.Body.String())
-		require.Nil(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
+		requireErrContains(t, w, http.StatusBadRequest, "`nope` is not a skill this agent can use.")
+		require.Empty(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
 			"D16#7: nothing stored")
 	})
 
@@ -331,10 +423,20 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		// (CHECK finding 13: require a positive seeded override before testing
 		// its removal, and prove the tool override survives the skills-only
 		// clear).
-		w := putAgentSkills(t, api, "test-agent", `{"policies":{"plan":"deny","send_email":"deny"}}`)
-		require.Equal(t, http.StatusOK, w.Code, "setup: %s", w.Body.String())
-		readBackDurable(t, sysDepsFor(t, api), "test-agent", "plan", "deny")
-		readBackDurable(t, sysDepsFor(t, api), "test-agent", "send_email", "deny")
+		deps := sysDepsFor(t, api)
+		state, err := agentstore.New(api.homePath).ReadState("test-agent")
+		require.NoError(t, err)
+		toolWrite := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
+			"id": "test-agent", "revision": state.Revision,
+			"tool_policy_changes": map[string]any{"set": map[string]any{"send_email": "deny"}},
+		})
+		require.False(t, toolWrite.IsError, "setup TOOL override: %s", toolWrite.ForLLM)
+		state, err = agentstore.New(api.homePath).ReadState("test-agent")
+		require.NoError(t, err)
+		require.Equal(t, config.ToolPolicy("deny"), state.Agent.Tools.Builtin.Policies["send_email"])
+		w := putAgentSkills(t, api, "test-agent", `{"policies":{"plan":"deny"}}`)
+		require.Equal(t, http.StatusOK, w.Code, "setup SKILL override: %s", w.Body.String())
+		readBackDurable(t, deps, "test-agent", "plan", "deny")
 		// skills-only envelope: revision, override_names: [], skills.policies: {}
 		body := `{"override_names":[],"skills":{"policies":{}}}`
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
@@ -345,7 +447,10 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		require.Equal(t, http.StatusOK, w2.Code, "D16#9: 200, body: %s", w2.Body.String())
 		readBackThroughBothReaders(t, api, sysDepsFor(t, api), "test-agent", "plan", "")
 		// The unrelated tool override survives the skills-only clear.
-		readBackDurable(t, sysDepsFor(t, api), "test-agent", "send_email", "deny")
+		state, err = agentstore.New(api.homePath).ReadState("test-agent")
+		require.NoError(t, err)
+		require.Equal(t, config.ToolPolicy("deny"), state.Agent.Tools.Builtin.Policies["send_email"],
+			"the unrelated BUILTIN override survives the skills-only clear")
 	})
 
 	t.Run("D16#10 override_names without builtin is refused with the envelope text", func(t *testing.T) {
@@ -375,7 +480,7 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		require.False(t, res.IsError, "setup set: %s", res.ForLLM)
 		res = sysSetAgentPermissions(t, deps, "test-agent", map[string]any{"clear": true})
 		require.False(t, res.IsError, "D16#11: accepted; got: %s", res.ForLLM)
-		require.Nil(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
+		require.Empty(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
 			"D16#11: no skill overrides after the clear")
 	})
 
@@ -401,27 +506,7 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 	})
 
 	t.Run("D16#13 a deleted workspace reconciles its keys away everywhere", func(t *testing.T) {
-		api := buildExecutorTestAPI(t)
-		installPlanSkillFixture(t, api.homePath)
-		w1, _ := seedKeyValidationMounts(t, api, "test-agent")
-		w := putAgentSkills(t, api, "test-agent", fmt.Sprintf(`{"policies":{%q:"deny"}}`, mountedKey))
-		require.Equal(t, http.StatusOK, w.Code, "setup: %s", w.Body.String())
-
-		if reconcileSkillKeysForRemovedWorkspace == nil {
-			t.Fatal("BLOCKED: the C-23 reconcile that removes a deleted workspace's project keys " +
-				"(D16#13: keys removed everywhere; the writer then refuses the key) has no entry " +
-				"point — required by S-116 and Dataset D16 row 13")
-		}
-		require.NoError(t, os.RemoveAll(w1), "setup: delete W1")
-		reconcileSkillKeysForRemovedWorkspace(t, api, w1)
-
-		stored := sysStoredSkillOverrides(t, api.homePath, "test-agent")
-		if _, present := stored[mountedKey]; present {
-			t.Fatalf("D16#13: the deleted workspace's key must be removed everywhere; stored: %v", stored)
-		}
-		w2 := putAgentSkills(t, api, "test-agent", fmt.Sprintf(`{"policies":{%q:"deny"}}`, mountedKey))
-		require.Equal(t, http.StatusBadRequest, w2.Code,
-			"D16#13: the same write is now 400, got %d, body: %s", w2.Code, w2.Body.String())
+		testDeletedWorkspaceSkillKeys(t, mountedKey)
 	})
 
 	t.Run("D16#14 an unrelated tools_cfg.mcp write changes no skill override", func(t *testing.T) {
@@ -448,10 +533,3 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 			"D16#14: the skill override is unchanged")
 	})
 }
-
-// reconcileSkillKeysForRemovedWorkspace runs the C-23 reconcile that removes
-// every project key of a deleted workspace from every agent record and the
-// known-skill set. GREEN wires it to the workspace-deletion path's reconcile
-// (or its load-time equivalent); nil keeps the RED run loud (BLOCKED), never
-// a skip.
-var reconcileSkillKeysForRemovedWorkspace func(t testing.TB, api *restAPI, workspaceDir string)

@@ -35,6 +35,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,30 +61,25 @@ func grantPlanSkill(t *testing.T, api *restAPI, agentID string) {
 	require.Equal(t, http.StatusOK, w.Code, "setup: grant plan to %s: %s", agentID, w.Body.String())
 }
 
-// putAgentSkills PUTs the agent's tools with a skills member through the
-// revisioned mutation helper. The builtin scaffold mirrors the l1 write
-// fixture (l1_wu2_identity_rest_test.go): the complete catalog is built from
-// the LIVE ceiling, not from a GET echo — an echoed map can carry stale
-// inherited entries that trip the ceiling-changed guard (409) before the
-// skills handling is reached. The endpoint rejects a body carrying neither
-// builtin nor config.builtin, so the skills shape must still carry the
-// complete builtin catalog. An empty skillsJSON omits skills (the C-4
-// skills-omitted shape).
+// putAgentSkills sends the C-4 skills-only envelope, with the real revision
+// and auth gates intact. No unrelated builtin values are echoed. An empty
+// skillsJSON tests omission using a valid tool-only request instead; the
+// existing ceiling is reconciled before constructing that request scaffold.
 func putAgentSkills(t *testing.T, api *restAPI, agentID, skillsJSON string) *httptest.ResponseRecorder {
 	t.Helper()
-	full := map[string]string{}
-	for name := range buildKnownBuiltinToolNames() {
-		// Request scaffolding, not an oracle: inherited echoes must match
-		// this fixture's current ceiling (ADR-090).
-		full[name] = api.agentLoop.GetConfig().Sandbox.ToolPolicies[name]
+	body := `{"override_names":[],"skills":` + skillsJSON + `}`
+	if skillsJSON == "" {
+		// C-4 omitted-skills control: this is intentionally a TOOL write.
+		cfg := api.agentLoop.GetConfig()
+		config.ReconcileToolPolicyCeiling(cfg, buildKnownBuiltinToolNames())
+		full := map[string]string{}
+		for name := range buildKnownBuiltinToolNames() {
+			full[name] = cfg.Sandbox.ToolPolicies[name]
+		}
+		policies, err := json.Marshal(full)
+		require.NoError(t, err)
+		body = `{"override_names":[],"builtin":{"policies":` + string(policies) + `}}`
 	}
-	policies, err := json.Marshal(full)
-	require.NoError(t, err)
-	body := `{"override_names":[],"builtin":{"policies":` + string(policies) + `}`
-	if skillsJSON != "" {
-		body += `,"skills":` + skillsJSON
-	}
-	body += `}`
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withAdminRole(r)
@@ -137,8 +133,10 @@ func TestAgentToolsPut_SkillsPolicies(t *testing.T) {
 		w = putAgentSkills(t, api, "test-agent", `{"policies":{}}`)
 		require.Equal(t, http.StatusOK, w.Code, "clear: %s", w.Body.String())
 		skills := readAgentToolsSkills(t, api, "test-agent")
+		require.Len(t, skills, 1, "clearing overrides does not remove the granted plan skill (C-4)")
 		for _, s := range skills {
-			entry := s.(map[string]any)
+			entry, ok := s.(map[string]any)
+			require.True(t, ok, "C-4 skill entry is an object: %T", s)
 			require.Nil(t, entry["configured_policy"], "S-21: no override remains after the clear: %v", entry)
 		}
 	})
@@ -159,17 +157,8 @@ func TestAgentToolsPut_SkillsPolicies(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "Deny is accepted for Omnipus: %s", w.Body.String())
 		raw, err := os.ReadFile(filepath.Join(api.homePath, "entities", "agents", "omnipus.json"))
 		require.NoError(t, err, "the omnipus entity record must exist")
-		var stored struct {
-			Agent struct {
-				Tools struct {
-					Skills struct {
-						Policies map[string]string `json:"policies"`
-					} `json:"skills"`
-				} `json:"tools"`
-			} `json:"agent"`
-		}
-		require.NoError(t, json.Unmarshal(raw, &stored), "entity JSON: %s", string(raw))
-		require.Equal(t, "deny", stored.Agent.Tools.Skills.Policies["plan"],
+		stored := sysStoredSkillOverrides(t, api.homePath, "omnipus")
+		require.Equal(t, "deny", stored["plan"],
 			"the Deny override persists on the agent's tools (C-4); entity: %s", string(raw))
 	})
 
@@ -193,7 +182,8 @@ func TestAgentToolsPut_SkillsPolicies(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "skills-less PUT: %s", w.Body.String())
 		skills := readAgentToolsSkills(t, api, "test-agent")
 		require.Len(t, skills, 1, "the override survives a skills-less PUT (C-4)")
-		entry := skills[0].(map[string]any)
+		entry, ok := skills[0].(map[string]any)
+		require.True(t, ok, "C-4 skill entry is an object: %T", skills[0])
 		require.Equal(t, "deny", entry["configured_policy"], "the stored override is kept (C-4)")
 	})
 }
