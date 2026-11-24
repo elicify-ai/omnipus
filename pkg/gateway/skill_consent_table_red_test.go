@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,12 +107,15 @@ func nativeD10Cases() []d10Case {
 	}
 }
 
-// Only the as-yet-absent installed verification-fact input may be supplied.
-// It must seed native metadata, not override a resolver or supply a card/result.
-// No hook is used for local unverified folders, real trust writes or allowances.
-var bindNativeD10Verification func(*agent.AgentLoop, string, bool) func()
+// Installed verification is established only by the native REST review/install
+// and a separate inventory read. The registry is the external input; no callback
+// may override the loop's verification resolver or return a desired decision.
 
 func TestSkillConsent_Table(t *testing.T) {
+	t.Run("C-5 verified fixture uses native registry review install and independent inventory", func(t *testing.T) {
+		h, _ := newNativeD10Harness(t, "allow", "allow")
+		seedNativeD10VerifiedInstall(t, h, "notes-helper", nativeSkillR1)
+	})
 	t.Run("instrument actual unverified Allow load reaches the native model", func(t *testing.T) {
 		h, _ := newNativeD10Harness(t, "allow", "allow")
 		run := beginNativeD10(t, h, "load", "chat", "test-agent", "installed")
@@ -211,7 +215,9 @@ func newNativeD10Harness(t *testing.T, trust, permission string) (*nativeSkillHa
 	require.NoError(t, err)
 	var document map[string]any
 	require.NoError(t, json.Unmarshal(raw, &document))
-	document["sandbox"].(map[string]any)["skill_policies"] = map[string]string{"notes-helper": permission}
+	sandbox, ok := document["sandbox"].(map[string]any)
+	require.True(t, ok, "fixture config sandbox must be an object")
+	sandbox["skill_policies"] = map[string]string{"notes-helper": permission}
 	raw, err = json.Marshal(document)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), raw, 0o600))
@@ -259,15 +265,15 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		store := agentstore.New(h.api.homePath)
 		_, err := store.Update("test-agent", func(a *config.AgentConfig) error { a.Skills = append(a.Skills, key); return nil })
 		require.NoError(t, err)
-		if _, err := os.Stat(filepath.Join(h.api.homePath, "skills", key)); os.IsNotExist(err) {
+		if _, statErr := os.Stat(filepath.Join(h.api.homePath, "skills", key)); os.IsNotExist(statErr) {
 			require.NoError(t, skills.ExportEmbeddedPackage(key, filepath.Join(h.api.homePath, "skills", key)))
 		} else {
-			require.NoError(t, err)
+			require.NoError(t, statErr)
 		}
 		for i := range cfg.Agents.List {
 			if cfg.Agents.List[i].ID == "test-agent" {
-				record, err := store.Get("test-agent")
-				require.NoError(t, err)
+				record, readErr := store.Get("test-agent")
+				require.NoError(t, readErr)
 				cfg.Agents.List[i] = *record
 			}
 		}
@@ -275,7 +281,8 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		configuration, err := json.Marshal(cfg)
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(configuration, &document))
-		sandbox := document["sandbox"].(map[string]any)
+		sandbox, ok := document["sandbox"].(map[string]any)
+		require.True(t, ok, "fixture config sandbox must be an object")
 		sandbox["skill_policies"] = map[string]string{} // no stored value for this newly shipped built-in
 		sandbox["migrations"] = map[string]string{"skill_permissions": "done"}
 		body, err := json.Marshal(document)
@@ -311,8 +318,11 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		require.NoError(t, err)
 		var record map[string]any
 		require.NoError(t, json.Unmarshal(raw, &record))
-		ownTools, ok := record["tools"].(map[string]any)
-		require.True(t, ok)
+		ownTools, _ := record["tools_cfg"].(map[string]any)
+		if ownTools == nil {
+			ownTools = map[string]any{}
+			record["tools_cfg"] = ownTools
+		}
 		ownTools["skills"] = map[string]any{"policies": map[string]string{key: in.own}}
 		raw, err = json.Marshal(record)
 		require.NoError(t, err)
@@ -359,14 +369,9 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		prepareNativeD10Install(t, h, in)
 		key = "fresh-helper"
 	} else if in.verified && in.shelf != "builtin" {
-		// Built-ins are verified by their actual embedded origin (C-5); only an
-		// installed registry package needs the still-missing verification input.
-		if bindNativeD10Verification == nil {
-			t.Fatal("BLOCKED: native installed verified-fact metadata input is not implemented — required by C-11/C-12 and literal verified D10 rows; never substitute TrustOpen=false or a decision-returning adapter")
-		}
-		restore := bindNativeD10Verification(h.api.agentLoop, key, true)
-		require.NotNil(t, restore)
-		t.Cleanup(restore)
+		// C-5 verification must be durably established by an actual install.
+		// The only double is the external registry's matched-hash result.
+		seedNativeD10VerifiedInstall(t, h, key, in.currentBody)
 	}
 	var clock *scheduledAllowanceClock
 	if in.allowanceOwner != "" {
@@ -412,10 +417,14 @@ func assertNativeD10RawInputs(t *testing.T, cfg *config.Config, key string, in d
 		if record.ID != "test-agent" {
 			continue
 		}
-		raw, err := json.Marshal(record.Tools)
+		raw, err := json.Marshal(record)
 		require.NoError(t, err)
-		var own map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(raw, &own))
+		var entity map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &entity))
+		own := map[string]json.RawMessage{}
+		if len(entity["tools_cfg"]) != 0 {
+			require.NoError(t, json.Unmarshal(entity["tools_cfg"], &own))
+		}
 		var skillsInput struct {
 			Policies map[string]string `json:"policies"`
 		} // not-wire-format: native stored entity fixture
@@ -641,10 +650,9 @@ func applyNativeD10Before(t *testing.T, h *nativeSkillHarness, key string, clock
 			inst.ContextBuilder.WithSkillAllowlist(record.Skills).WithSkillBindings(record.SkillGrants)
 		}
 		if tc.in.verified {
-			require.NotNil(t, bindNativeD10Verification)
-			restore := bindNativeD10Verification(h.api.agentLoop, key, true)
-			require.NotNil(t, restore)
-			t.Cleanup(restore)
+			// No re-injection on restart: C-5 verification is stored by the
+			// earlier native install and must survive in the fresh inventory.
+			assertNativeD10VerifiedInventory(t, h.api, key, tc.in.currentBody)
 		}
 		h.reg = newApprovalRegistryV2(64, 30*time.Second)
 		h.handler = newWSHandler(msgBus, h.api.agentLoop, "")
@@ -787,6 +795,64 @@ func applyNativeD10Answer(t *testing.T, h *nativeSkillHarness, key string, run n
 	assert.Empty(t, h.reg.pendingApprovals())
 }
 
+// seedNativeD10VerifiedInstall drives HandleSkills -> registry staging ->
+// native review -> native publication. No resolver callback or hand-authored
+// verification store can satisfy it. Replacing the existing fixture uses its
+// real revision; review and independent inventory must agree on the literal
+// matched package. No native API name or private metadata format is invented.
+func seedNativeD10VerifiedInstall(t *testing.T, h *nativeSkillHarness, key, body string) {
+	t.Helper()
+	previous := h.api.skillRegistry
+	h.api.skillRegistry = &nativeD10Registry{body: body, verified: true}
+	defer func() { h.api.skillRegistry = previous }()
+	revision := nativeD10Current(t, h, key)
+	category := gen.SkillCategory("research")
+	replace := true
+	req := gen.SkillInstallRequest{Slug: &key, Revision: &revision, Category: &category, ReplaceLocalChanges: &replace}
+	post := func(path string, req gen.SkillInstallRequest) *httptest.ResponseRecorder {
+		raw, err := json.Marshal(req)
+		require.NoError(t, err)
+		r := withAdminRole(httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw))))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.api.HandleSkills(w, r)
+		return w
+	}
+	staged := post("/api/v1/skills/install/review", req)
+	require.Equal(t, http.StatusOK, staged.Code, "BLOCKED: C-5/C-13 native verified install review is required for the D10 raw verified input: %s", staged.Body.String())
+	var review gen.SkillInstallReview
+	require.NoError(t, json.Unmarshal(staged.Body.Bytes(), &review))
+	require.NotEmpty(t, review.ReviewId)
+	require.Equal(t, key, review.Name)
+	require.True(t, review.Verified, "external matched-hash result must reach actual staged review")
+	require.Equal(t, "matched", string(review.Verification))
+	require.Equal(t, nativeD10Revision(t, body), review.Revision)
+	req.ReviewId = &review.ReviewId
+	published := post("/api/v1/skills/install", req)
+	require.Equal(t, http.StatusOK, published.Code, "actual reviewed publication: %s", published.Body.String())
+	assertNativeD10VerifiedInventory(t, h.api, key, body)
+}
+
+func assertNativeD10VerifiedInventory(t *testing.T, api *restAPI, key, body string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(api.homePath, "skills", key, "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, body, string(raw), "native publication preserves the complete registry bytes")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, withAdminRole(httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)))
+	require.Equal(t, http.StatusOK, w.Code, "independent native inventory: %s", w.Body.String())
+	var listed []gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
+	for _, skill := range listed {
+		if skill.Id == key {
+			require.True(t, skill.Verified, "C-5 install-time verification must survive into the actual independent read; a true install reply alone is not evidence")
+			require.Equal(t, nativeD10Revision(t, body), skill.Revision)
+			return
+		}
+	}
+	t.Fatalf("BLOCKED: C-5 native inventory does not list reviewed verified fixture %s", key)
+}
+
 // Install setup controls only the external registry's package/result. The actual
 // installer stages, verifies its preparation contract and publishes/cleans pins.
 type nativeD10Registry struct {
@@ -798,8 +864,8 @@ func (*nativeD10Registry) Name() string { return "d10-local" }
 func (*nativeD10Registry) Search(context.Context, string, int) ([]skills.SearchResult, error) {
 	return nil, nil
 }
-func (*nativeD10Registry) GetSkillMeta(context.Context, string) (*skills.SkillMeta, error) {
-	return &skills.SkillMeta{Slug: "fresh-helper", RegistryName: "d10-local"}, nil
+func (*nativeD10Registry) GetSkillMeta(_ context.Context, slug string) (*skills.SkillMeta, error) {
+	return &skills.SkillMeta{Slug: slug, RegistryName: "d10-local"}, nil
 }
 func (r *nativeD10Registry) DownloadAndInstall(_ context.Context, _ string, _ string, target string) (*skills.InstallResult, error) {
 	if err := os.MkdirAll(target, 0o700); err != nil {
@@ -833,7 +899,8 @@ func assertNativeD10Stored(t *testing.T, h *nativeSkillHarness, key, value strin
 	t.Helper()
 	var configDocument map[string]any
 	require.NoError(t, json.Unmarshal(readNativeConfig(t, h.api.homePath), &configDocument))
-	sandbox := configDocument["sandbox"].(map[string]any)
+	sandbox, ok := configDocument["sandbox"].(map[string]any)
+	require.True(t, ok, "stored config sandbox must be an object")
 	policies, ok := sandbox["skill_policies"].(map[string]any)
 	require.True(t, ok, "BLOCKED: actual stored skill policy map required by C-2/D10#18")
 	assert.Equal(t, value, policies[key])
