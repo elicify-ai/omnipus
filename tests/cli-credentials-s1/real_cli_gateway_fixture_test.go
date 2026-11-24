@@ -112,17 +112,20 @@ type realGatewayFixture struct {
 	canary                  string
 }
 
-func isolatedCLIEnv(home, bin string) []string {
+func isolatedCLIEnv(home, bin, toolDir, scratch string) []string {
 	var env []string
-	for _, name := range []string{"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC", "TMP", "TEMP", "TMPDIR", "GOMAXPROCS", "GOMEMLIMIT"} {
+	for _, name := range []string{"PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC", "GOMAXPROCS", "GOMEMLIMIT"} {
 		if value, exists := os.LookupEnv(name); exists && name != "PATH" {
 			env = append(env, name+"="+value)
 		}
 	}
 	// No real provider key, one-shot master-key source, or real user home is
-	// inherited by the actual CLI/gateway process.
+	// inherited by the actual CLI/gateway process. Its temporary folder is the
+	// scratch folder inside the data folder, never the host's (see the fake gh
+	// note in newRealGatewayFixture).
 	return append(env, "HOME="+home, "USERPROFILE="+home, config.EnvHome+"="+home,
-		"PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+scratch, "TMP="+scratch, "TEMP="+scratch,
+		"PATH="+toolDir+string(os.PathListSeparator)+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		credentials.EnvMasterKey+"="+hex.EncodeToString(bytes.Repeat([]byte{0x52}, 32)), "OMNIPUS_BEARER_TOKEN=")
 }
 
@@ -148,13 +151,26 @@ func newRealGatewayFixture(t *testing.T, bin string) *realGatewayFixture {
 	require.NoError(t, os.MkdirAll(localBinDir, 0700))
 	bin = filepath.Join(localBinDir, filepath.Base(bin))
 	require.NoError(t, os.WriteFile(bin, body, 0700))
-	fake := filepath.Join(localBinDir, "gh")
+	// S-08 / FR-005: the account check does not run a program that lies in a
+	// folder agents can write to. That covers the Omnipus data folder (home) and
+	// the per-user temporary folder, which the product treats as agent-writable
+	// on every host where it is not the shared /tmp
+	// (pkg/thirdpartycli/executor_settings.go::runtimeTempRoots). The fake gh
+	// therefore lives in its own folder outside the data folder, made here, and
+	// the gateway's temporary folder is moved inside the data folder
+	// (isolatedCLIEnv): the fake is outside both on any host. The fake writes its
+	// gh-starts record next to itself (cligateway/main.go), so that record lives
+	// in the same folder.
+	toolDir := t.TempDir()
+	scratch := filepath.Join(home, "tmp")
+	require.NoError(t, os.MkdirAll(scratch, 0700))
+	fake := filepath.Join(toolDir, "gh")
 	if runtime.GOOS == "windows" {
 		fake += ".exe"
 	}
 	require.NoError(t, os.WriteFile(fake, body, 0700))
-	f := &realGatewayFixture{home: home, bin: bin, base: fmt.Sprintf("http://127.0.0.1:%d", port), starts: filepath.Join(filepath.Dir(bin), "gh-starts")}
-	f.env = isolatedCLIEnv(home, bin)
+	f := &realGatewayFixture{home: home, bin: bin, base: fmt.Sprintf("http://127.0.0.1:%d", port), starts: filepath.Join(toolDir, "gh-starts")}
+	f.env = isolatedCLIEnv(home, bin, toolDir, scratch)
 	f.observe = t.TempDir()
 	gatewayEnv := append(append([]string(nil), f.env...), "S1_CLI_OBSERVE_DIR="+f.observe)
 	gateway := startActualCLI(t, bin, gatewayEnv, "gateway", "--allow-empty", "--sandbox", "off")
