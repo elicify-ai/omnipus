@@ -25,6 +25,7 @@ package config
 // pins only the stored level.
 
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"reflect"
 	"testing"
 )
@@ -140,27 +141,34 @@ var d7Table = []conversionOldState{
 // visibilityConversionPlanOf is the test-local seam for the C-19 step 3
 // conversion plan. The GREEN step wires it to the production entry point;
 // it stays nil here so the RED run fails with BLOCKED instead of panicking.
-var visibilityConversionPlanOf func(old conversionOldState) map[string]string
+// Raw pre-upgrade inputs only: no case name or expected output reaches the
+// production conversion. These are provisional test bindings, not spec APIs.
+var visibilityConversionPlanOf func(compressed, previewAllLazy, discoveryEnabled, discoverySet bool, staticTool string, servers map[string]*bool, offline map[string]bool, skills []string) map[string]string
+
+func invokeVisibilityConversionPlan(old conversionOldState) map[string]string {
+	servers, offline := map[string]*bool{}, map[string]bool{}
+	for _, server := range old.servers {
+		servers[server.id], offline[server.id] = server.deferred, server.offline
+	}
+	return visibilityConversionPlanOf(old.compressed, old.previewAllLazy, old.discoveryEnabled, old.discoverySet, old.staticTool, servers, offline, old.skills)
+}
 
 // TestVisibilityStartingLevels_Upgrade drives Dataset D7 rows 1–16.
 // Traces to: BDD S-41; spec C-6 (starting levels), C-19 step 3; Dataset D7.
 func TestVisibilityStartingLevels_Upgrade(t *testing.T) {
-	if visibilityConversionPlanOf == nil {
-		t.Fatal("BLOCKED: the C-19 tool-loading conversion (starting levels of " +
-			"Dataset D7) is not implemented — required by skills-tools-redesign-spec " +
-			"C-6 and C-19 step 3; BDD S-41")
-	}
+	nativebinding.Require(t, "pkg/config", visibilityConversionPlanOf,
+		"C-6/C-19/S-41/D7: native starting-level conversion; post-GREEN boot-path re-audit required")
 	for _, tc := range d7Table {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			got := visibilityConversionPlanOf(tc)
+			got := invokeVisibilityConversionPlan(tc)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("conversion plan = %v, want %v (Dataset D7: %s)", got, tc.want, tc.name)
 			}
 			// D7#15: a second start recomputes the same plan and writes
 			// nothing new — the plan must be a pure function of the old
 			// state (replay-safe, C-19 step 2).
-			again := visibilityConversionPlanOf(tc)
+			again := invokeVisibilityConversionPlan(tc)
 			if !reflect.DeepEqual(got, again) {
 				t.Fatalf("second plan differs: %v vs %v (Dataset D7 row 15: nothing written)", again, got)
 			}

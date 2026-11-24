@@ -19,13 +19,13 @@ package config
 // key rule consuming the C-19 storage). Nil keeps the RED run loud
 // (BLOCKED), never a skip.
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"testing"
 )
 
 func TestProjectSkillKeys(t *testing.T) {
-	if projectSkillWinnerOf == nil {
-		t.Fatal("BLOCKED: the project-skill key scheme and its winner decision are not implemented — C-23 keys (project:<W>/<slug> beside installed ids) and C-19 storage with the S-102 precedence; required by S-102")
-	}
+	nativebinding.Require(t, "pkg/tools", projectSkillWinnerOf,
+		"C-19/C-23/S-102: actual skill load winner; post-GREEN consumer re-audit required")
 
 	// Literal winners (S-102's last line): the expected instruction source is
 	// spelled here, never derived from production code.

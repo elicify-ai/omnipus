@@ -23,6 +23,7 @@ package agent
 // seam the fix wires to.
 
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"strings"
 	"testing"
 )
@@ -38,7 +39,14 @@ type levelTurnPlan struct {
 
 // levelTurnPlanOf is the test-local seam for the C-15 authority. GREEN wires
 // it to the production entry point; nil keeps the RED run loud (BLOCKED).
-var levelTurnPlanOf func(level, name, description string) levelTurnPlan
+var levelTurnPlanOf func(level, name, description string) (inRequest bool, manifestLine string, searchable bool)
+
+// Test-owned representation only; the named native function returns raw facts,
+// not this private test type. Require checks that binding before invocation.
+func readNativeLevelTurnPlan(level, name, description string) levelTurnPlan {
+	inRequest, manifestLine, searchable := levelTurnPlanOf(level, name, description)
+	return levelTurnPlan{inRequest: inRequest, manifestLine: manifestLine, searchable: searchable}
+}
 
 // capOverflowMarker sits at character 141 of the row-2 description, where
 // nothing past the C-1 140-character cap may reach the rendered line.
@@ -51,23 +59,20 @@ var longDescription = strings.Repeat("x", 140) + capOverflowMarker + " trailing"
 // TestManifest_LevelsShapeTurn drives Dataset D2 rows 1–6.
 // Traces to: BDD S-38, S-40; spec C-1, C-15; Dataset D2.
 func TestManifest_LevelsShapeTurn(t *testing.T) {
-	if levelTurnPlanOf == nil {
-		t.Fatal("BLOCKED: the C-15 visibility authority (stored levels driving " +
-			"the manifest) is not implemented — required by skills-tools-redesign-spec " +
-			"C-1 and C-15; Dataset D2 rows 1-6; BDD S-38, S-40")
-	}
+	nativebinding.Require(t, "pkg/agent", levelTurnPlanOf,
+		"C-1/C-15/D2: native visibility authority; post-GREEN consumer re-audit required")
 	const name = "serve_web"
 	const shortDescription = "Serve the workspace."
 
 	t.Run("D2#1 full sends the definition every turn", func(t *testing.T) {
-		got := levelTurnPlanOf("full", name, shortDescription)
+		got := readNativeLevelTurnPlan("full", name, shortDescription)
 		if !got.inRequest {
 			t.Fatalf("full level must send the definition (S-38, C-1): %+v", got)
 		}
 	})
 
 	t.Run("D2#2 name_and_description lists one line, description cut to 140 characters", func(t *testing.T) {
-		got := levelTurnPlanOf("name_and_description", name, longDescription)
+		got := readNativeLevelTurnPlan("name_and_description", name, longDescription)
 		if got.inRequest {
 			t.Fatalf("name_and_description must not send the definition (C-1): %+v", got)
 		}
@@ -89,7 +94,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#3 empty description lists the name only", func(t *testing.T) {
-		got := levelTurnPlanOf("name_and_description", name, "")
+		got := readNativeLevelTurnPlan("name_and_description", name, "")
 		if got.inRequest {
 			t.Fatalf("name_and_description must not send the definition (C-1): %+v", got)
 		}
@@ -102,7 +107,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#4 name_only lists the name alone", func(t *testing.T) {
-		got := levelTurnPlanOf("name_only", name, shortDescription)
+		got := readNativeLevelTurnPlan("name_only", name, shortDescription)
 		if got.inRequest {
 			t.Fatalf("name_only must not send the definition (C-1): %+v", got)
 		}
@@ -115,7 +120,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#5 hidden is not listed but ToolSearch finds it", func(t *testing.T) {
-		got := levelTurnPlanOf("hidden", name, shortDescription)
+		got := readNativeLevelTurnPlan("hidden", name, shortDescription)
 		if got.inRequest || got.manifestLine != "" {
 			t.Fatalf("hidden must not be listed (S-38, C-1): %+v", got)
 		}
@@ -125,7 +130,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#6 effective deny removes the tool from request and search", func(t *testing.T) {
-		denied := levelTurnPlanOf("deny", name, shortDescription)
+		denied := readNativeLevelTurnPlan("deny", name, shortDescription)
 		if denied.inRequest || denied.manifestLine != "" || denied.searchable {
 			t.Fatalf("an effective deny overrides every level (S-40, C-1): %+v", denied)
 		}

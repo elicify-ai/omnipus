@@ -26,6 +26,7 @@ package skills
 // test-local seam the fix wires to.
 
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"strings"
 	"testing"
 )
@@ -39,11 +40,8 @@ var skillsMenuLineOf func(level, name, description string) string
 // TestSkillsSummary_Levels drives the menu per level (S-42, S-43).
 // Traces to: BDD S-42, S-43; spec C-1 (skill column), C-11 E2, C-15.
 func TestSkillsSummary_Levels(t *testing.T) {
-	if skillsMenuLineOf == nil {
-		t.Fatal("BLOCKED: the level-aware skill menu is not implemented — " +
-			"required by skills-tools-redesign-spec C-1 (skill column of the " +
-			"level table) and C-11 E2; BDD S-42, S-43")
-	}
+	nativebinding.Require(t, "pkg/skills", skillsMenuLineOf,
+		"C-1/C-11/C-15/S-42/S-43: native menu renderer; post-GREEN turn-cache re-audit required")
 	const name = "deep-research"
 	const description = "Multi-step web research with cited sources."
 

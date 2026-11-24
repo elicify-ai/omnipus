@@ -20,7 +20,11 @@ package config
 // RED rule the test fails LOUD with BLOCKED until it lands;
 // skillPermissionsUpgradePlanOf is the test-local seam the fix wires to.
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+)
 
 // upgradePlanInput is one pre-upgrade state: the old blanket `Skill` values
 // plus which skills exist and which the agent holds.
@@ -45,18 +49,15 @@ type upgradePlanInput struct {
 // upgrade plan (steps 2–4, computed in memory from the snapshot alone).
 // The GREEN step wires it to the production entry point; it stays nil here
 // so the RED run fails with BLOCKED instead of panicking.
-var skillPermissionsUpgradePlanOf func(in upgradePlanInput) (wantGlobal, agentOverrides map[string]string)
+// Expected maps and case names never enter the production planner.
+var skillPermissionsUpgradePlanOf func(oldGlobal, oldAgent string, installed, granted []string) (global, agentOverrides map[string]string)
 
 // TestSkillPolicyUpgrade_FromSkillTool drives S-16's four examples plus
 // Dataset D1 rows 15–16.
 // Traces to: BDD S-16; spec C-19 steps 3–4; Dataset D1 rows 15–16.
 func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
-	if skillPermissionsUpgradePlanOf == nil {
-		t.Fatal("BLOCKED: the C-19 skill-permissions upgrade plan is not implemented — " +
-			"required by skills-tools-redesign-spec C-19 steps 3-4 (translate the " +
-			"old blanket `Skill` values into per-skill stored values; translation, " +
-			"not backfill), S-16 and Dataset D1 rows 15-16")
-	}
+	nativebinding.Require(t, "pkg/config", skillPermissionsUpgradePlanOf,
+		"C-19/S-16/D1#15-16: native snapshot upgrade planner; post-GREEN boot-path re-audit required")
 	cases := []upgradePlanInput{
 		{
 			// S-16 example row 1 / D1#15 variant: allow, none
@@ -124,7 +125,7 @@ func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			gotGlobal, gotAgent := skillPermissionsUpgradePlanOf(tc)
+			gotGlobal, gotAgent := skillPermissionsUpgradePlanOf(tc.oldGlobalSkillValue, tc.oldAgentSkillValue, tc.installedSkills, tc.grantedSkills)
 			assertStringMap(t, "global skill_policies plan", gotGlobal, tc.wantGlobal)
 			assertStringMap(t, "agent skills.policies plan", gotAgent, tc.wantAgentOverrides)
 		})

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -217,9 +218,8 @@ func assertLiteralS110End(t *testing.T, home string, personEdit bool) {
 
 func TestSkillPermissionsUpgrade_StopAtEveryStep(t *testing.T) {
 	if slices.Contains(os.Args, "--skill-upgrade-child") {
-		if startSkillUpgradeAtBoot == nil {
-			t.Fatal("BLOCKED: C-19 startup upgrader and its stop/write-fault points are not implemented — required by S-110/D13; no replay or boot-order PASS follows")
-		}
+		nativebinding.Require(t, "pkg/config", startSkillUpgradeAtBoot,
+			"C-19/S-110/D13: actual startup upgrader with input-only stop/write faults; disk/process observers stay real")
 		home, point := os.Getenv("S110_HOME"), os.Getenv("S110_STOP")
 		require.DirExists(t, home)
 		t.Setenv(config.EnvHome, home)
@@ -257,9 +257,8 @@ func TestSkillPermissionsUpgrade_StopAtEveryStep(t *testing.T) {
 	for index, point := range rows {
 		t.Run(fmt.Sprintf("D13#%d/%s", index+1, point), func(t *testing.T) {
 			home := seedLiteralS110Home(t, point == "ray-record-malformed")
-			if startSkillUpgradeAtBoot == nil {
-				t.Fatal("BLOCKED: C-19 startup upgrader and stop/write-fault injection are not implemented — required by S-110/D13; literal legacy files and actual mount were created, but no migration is claimed")
-			}
+			nativebinding.Require(t, "pkg/config", startSkillUpgradeAtBoot,
+				"C-19/S-110/D13: actual startup upgrader with input-only stop/write faults; disk/process observers stay real")
 			start := func(stop string) []byte {
 				t.Helper()
 				logPath := filepath.Join(t.TempDir(), "startup.jsonl")

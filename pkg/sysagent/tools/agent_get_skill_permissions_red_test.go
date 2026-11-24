@@ -23,6 +23,7 @@ package systools_test
 
 import (
 	"context"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,11 +61,8 @@ func writePlanSkillFixture(t *testing.T, home, agentID string) {
 // TestGetAgent_SkillPermissions (order 16, S-74).
 // Traces to: BDD S-74; spec C-9; generated AgentDetail.skill_permissions.
 func TestGetAgent_SkillPermissions(t *testing.T) {
-	if seedSkillSettingsForAgent == nil {
-		t.Fatal("BLOCKED: the C-9 skill_permissions selection of get_agent and the " +
-			"C-2 storage it reads are not implemented — required by " +
-			"skills-tools-redesign-spec C-9 and S-74")
-	}
+	nativebinding.Require(t, "pkg/config", seedSkillSettingsForAgent,
+		"C-2/C-4/C-9/S-74: native persisted settings inputs; actual get_agent is the observer")
 	deps, _ := newTestDepsWithRealSave(t)
 	t.Setenv("OMNIPUS_HOME", deps.Home)
 	writePlanSkillFixture(t, deps.Home, "mia")

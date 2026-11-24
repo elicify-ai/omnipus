@@ -18,6 +18,7 @@ package tools
 // values below come from the spec's datasets, never from the implementation.
 
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"testing"
 )
 
@@ -135,22 +136,20 @@ var d1ResolutionTable = []skillOutcomeInput{
 // ("one function beside pkg/tools/compositor.go::resolveEffectivePolicyWith").
 // The GREEN step wires it to the production entry point; it stays nil here so
 // the RED run fails with BLOCKED instead of panicking.
-var skillOutcomeOf func(in skillOutcomeInput) (outcome string, refusal string)
+// Only raw inputs cross the native boundary. The spec's expected outcome and
+// refusal stay in the test table and are never handed to a resolver adapter.
+var skillOutcomeOf func(granted bool, global, agentValue, trust string, verified, godMode bool) (outcome string, refusal string)
 
 // TestSkillPolicyResolution_Table drives Dataset D1 rows 1–14 through the
 // C-11 per-skill decision.
 // Traces to: BDD S-09, S-13, S-14, S-19, S-29, S-30, S-31, S-35; Dataset D1.
 func TestSkillPolicyResolution_Table(t *testing.T) {
-	if skillOutcomeOf == nil {
-		t.Fatal("BLOCKED: the C-11 per-skill outcome resolver is not implemented — " +
-			"required by skills-tools-redesign-spec C-11 (one function beside " +
-			"pkg/tools/compositor.go::resolveEffectivePolicyWith), consuming C-0 " +
-			"and C-3; Dataset D1 rows 1-14")
-	}
+	nativebinding.Require(t, "pkg/tools", skillOutcomeOf,
+		"C-0/C-3/C-11/D1: actual per-skill resolver; post-GREEN every-consumer re-audit required")
 	for _, tc := range d1ResolutionTable {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			outcome, refusal := skillOutcomeOf(tc)
+			outcome, refusal := skillOutcomeOf(tc.granted, tc.global, tc.agentValue, tc.trust, tc.verified, tc.godMode)
 			if outcome != tc.wantOutcome {
 				t.Fatalf("outcome = %q, want %q (spec Dataset %s)", outcome, tc.wantOutcome, tc.name)
 			}

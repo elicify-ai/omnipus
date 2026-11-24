@@ -24,6 +24,7 @@ package tools
 // skill-outcome storage and makes resolveTurnSkillAuthority consult it, and
 // every assertion here runs against the real authority resolution.
 import (
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,9 +43,8 @@ var seedSkillOutcomeForAgent func(t testing.TB, home, agentID, skill, policy str
 
 func requireOutcomeSeam(t *testing.T) {
 	t.Helper()
-	if seedSkillOutcomeForAgent == nil {
-		t.Fatal("BLOCKED: skill outcome storage not implemented — C-4 agent.tools.skills.policies (config.AgentToolsCfg has no Skills member) and the C-2 global skills settings do not exist; required by S-85, S-86, S-87 (E6/E7) — resolveTurnSkillAuthority must consult the stored outcome")
-	}
+	nativebinding.Require(t, "pkg/tools", seedSkillOutcomeForAgent,
+		"C-2/C-4/C-12/C-26/S-85/S-86/S-87: actual stored consent input; actual folder authority is the observer")
 }
 
 // seedAuthorityHome writes a minimal readable config (the ceiling read
