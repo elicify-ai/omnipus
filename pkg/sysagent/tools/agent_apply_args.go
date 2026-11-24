@@ -34,7 +34,7 @@ var agentUpdateArgNames = map[string]struct{}{
 
 // permissionFieldNames are the capability fields only set_agent_permissions
 // may write on an existing agent (FR-024).
-var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers"}
+var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers", "skill_policy_changes"}
 
 // permissionFieldRefusal returns update_agent's refusal when args carries a
 // permission field — present at all, a clear or a null included — so the
@@ -57,6 +57,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"reasoning_effort":    {}, // primary-model effort (effort-levels spec FR-048)
 	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
+	"skill_policy_changes":    {}, // {set} only (Skills & Tools C-21)
 	"context_window_override": {}, "model_params": {},
 	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
 }

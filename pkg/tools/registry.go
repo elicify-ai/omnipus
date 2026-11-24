@@ -412,6 +412,13 @@ type HiddenToolDoc struct {
 //
 // Deduplication by name is guaranteed by the registry's map representation.
 func (r *ToolRegistry) SnapshotSearchableTools() HiddenToolSnapshot {
+	return r.SnapshotSearchableToolsOn(ToolSurface{})
+}
+
+// SnapshotSearchableToolsOn is SnapshotSearchableTools for one stored level
+// set (C-15): a core tool is searchable when its level is not full and it is
+// not ToolSearch.
+func (r *ToolRegistry) SnapshotSearchableToolsOn(surface ToolSurface) HiddenToolSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	docs := make([]HiddenToolDoc, 0, len(r.tools))
@@ -422,7 +429,7 @@ func (r *ToolRegistry) SnapshotSearchableTools() HiddenToolSnapshot {
 				Name:        name,
 				Description: entry.Tool.Description(),
 			})
-		} else if ToolManifestTier(name) == ManifestLazy {
+		} else if surface.Searchable(name) {
 			// Core (visible) tools that are lazy-tier: the model must load them
 			// explicitly, so they must be discoverable via BM25 search.
 			docs = append(docs, HiddenToolDoc{

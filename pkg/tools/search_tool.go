@@ -34,6 +34,9 @@ type bm25CachedEngine struct {
 	engine   *utils.BM25Engine[searchDoc]
 	version  uint64
 	docCount int
+	// levels is the stored-level fingerprint the corpus was built for
+	// (ToolSurface.Stamp; "" before the conversion).
+	levels string
 }
 
 // snapshotToSearchDocs converts a HiddenToolSnapshot to BM25 searchDoc slice.

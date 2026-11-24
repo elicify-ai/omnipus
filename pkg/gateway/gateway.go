@@ -61,6 +61,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skillperm"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -641,6 +642,15 @@ func (rc *runContextWithOptions) initializeLoggingAndDataModel() (error, bool) {
 
 // loadConfigAndProvider loads credentials and configuration, seeds agents, and installs the provider catalog.
 func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
+	// Skills & Tools C-19: the one-time skill-permissions upgrade rewrites
+	// config.json and the agent records, so it runs before config is loaded
+	// and therefore before the agent loop can start any turn. A failed agent
+	// write is logged by the upgrade naming the agent; that agent stays
+	// pending and the next boot retries it.
+	if err := skillperm.Run(rc.homePath, skillperm.Options{}); err != nil {
+		slog.Error("gateway: skill permissions upgrade did not finish", "error", err)
+	}
+
 	// Construct and unlock the credential store BEFORE loading config, per the
 	// documented credential boot contract (ADR-004).
 	// Implements BRD SEC-22/SEC-23 deny-by-default behavior.

@@ -79,6 +79,13 @@ func WithApprovalFacts(args, facts map[string]any) map[string]any {
 	return out
 }
 
+// ApprovalPinDiscarder is implemented by an ApprovalPreparer whose pin
+// holds something that must be removed when the card is denied, times out
+// or is refused (install_skill: the staged copy, C-12 rows 6 and 8).
+type ApprovalPinDiscarder interface {
+	DiscardApprovalPin(pin any) error
+}
+
 type approvalPinKey struct{}
 
 // WithApprovalPin carries the pin an ApprovalPreparer returned for the

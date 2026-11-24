@@ -32,7 +32,10 @@ func (l *SkillTrustLevel) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch SkillTrustLevel(s) {
-	case SkillTrustBlockUnverified, SkillTrustWarnUnverified, SkillTrustAllowAll:
+	case SkillTrustAllow, SkillTrustAsk, SkillTrustDeny,
+		SkillTrustBlockUnverified, SkillTrustWarnUnverified, SkillTrustAllowAll:
+		// The legacy values still decode so the C-3 one-time rewrite
+		// (MigrateLegacySkillTrust) can read and replace them.
 		*l = SkillTrustLevel(s)
 		return nil
 	case "":
@@ -40,7 +43,7 @@ func (l *SkillTrustLevel) UnmarshalJSON(data []byte) error {
 		*l = ""
 		return nil
 	default:
-		return fmt.Errorf("invalid skill_trust: %q (must be one of: block_unverified, warn_unverified, allow_all)", s)
+		return fmt.Errorf("invalid skill_trust: %q (use allow, ask or deny)", s)
 	}
 }
 
@@ -495,10 +498,29 @@ type OmnipusSandboxConfig struct {
 	// really is written in their file at that point.
 	AuditLogFromDefault bool `json:"-"`
 
-	// SkillTrust controls how skills without a verifiable SHA-256 hash are handled (SEC-09).
-	// Valid values: SkillTrustBlockUnverified, SkillTrustWarnUnverified (default), SkillTrustAllowAll.
-	// SkillTrustAllowAll disables hash verification and triggers an omnipus doctor warning.
+	// SkillTrust decides installs and loads of unverified skills (C-3):
+	// allow, ask (also the meaning of an empty value) or deny. A legacy
+	// value (block_unverified, warn_unverified, allow_all) is rewritten once
+	// on load (MigrateLegacySkillTrust). allow turns off the check for
+	// unverified skills and triggers an omnipus doctor warning.
 	SkillTrust SkillTrustLevel `json:"skill_trust,omitempty"`
+
+	// SkillPolicies is the global permission of every skill, keyed by the
+	// C-23 skill key (C-2). Complete over installed skills (self-healed by
+	// ReconcileSkillPolicyMaps); written only by PATCH /security/permissions.
+	SkillPolicies map[string]string `json:"skill_policies,omitempty"`
+
+	// ToolVisibility is what the model sees about each tool (C-1, C-6):
+	// tool name or mcp_<server>_* to hidden / name_only /
+	// name_and_description / full.
+	ToolVisibility map[string]string `json:"tool_visibility,omitempty"`
+
+	// SkillVisibility is what the model sees about each skill (C-1).
+	SkillVisibility map[string]string `json:"skill_visibility,omitempty"`
+
+	// Migrations records one-time upgrades by name (for example
+	// skill_permissions = done, C-19 step 5).
+	Migrations map[string]string `json:"migrations,omitempty"`
 
 	// PromptInjectionLevel controls how aggressively the prompt guard
 	// sanitizes untrusted tool results (SEC-25). Valid: "low", "medium"

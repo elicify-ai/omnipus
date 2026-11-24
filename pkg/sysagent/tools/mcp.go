@@ -247,9 +247,22 @@ func (mat *mcpAddToolExecute) persistConfig() error {
 		cfg.Tools.MCP.Servers[mat.name] = mat.entry
 		if !mat.attachment {
 			mat.enableNewServerIfFresh(cfg)
+			coverNewMCPService(cfg, mat.name)
 		}
 		return nil
 	})
+}
+
+// coverNewMCPService writes mcp_<server>_* = ask on the global map when no
+// global key covers the new service yet (Skills & Tools C-7, C-18). Under a
+// broader operator rule such as mcp_*: deny nothing is written.
+func coverNewMCPService(cfg *config.Config, server string) {
+	for key, policy := range config.PlanMCPServiceCoverage(cfg.Sandbox.ToolPolicies, []string{server}) {
+		if cfg.Sandbox.ToolPolicies == nil {
+			cfg.Sandbox.ToolPolicies = map[string]string{}
+		}
+		cfg.Sandbox.ToolPolicies[key] = policy
+	}
 }
 
 // Only creation retains the existing fresh-install enable behavior. Attachment

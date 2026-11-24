@@ -2340,6 +2340,7 @@ type Skill = {
   revision: ConfigurationRevision;
   category: SkillCategory;
   trust_approved: boolean;
+  load_error?: string | undefined;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
   changed_fields?: Array<string> | undefined;
@@ -6369,6 +6370,7 @@ export const Skill: z.ZodType<Skill> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   category: SkillCategory,
   trust_approved: z.boolean(),
+  load_error: z.string().optional(),
   persistence_status: ConfigurationPersistenceStatus.optional(),
   activation_status: ConfigurationActivationStatus.optional(),
   changed_fields: z.array(z.string()).optional(),

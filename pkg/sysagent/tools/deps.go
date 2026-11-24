@@ -709,16 +709,23 @@ func successJSON(v any) string {
 
 // errorJSON returns a consistent error response per D.10.1.
 func errorJSON(code, message, suggestion string) string {
-	b, err := json.MarshalIndent(map[string]any{
+	// The text is read by the model and shown to a person: keep "&", "<"
+	// and ">" as written (no HTML escaping), so a pinned refusal such as
+	// "Skills & Tools" arrives verbatim.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	err := enc.Encode(map[string]any{
 		"success": false,
 		"error": map[string]any{
 			"code":       code,
 			"message":    message,
 			"suggestion": suggestion,
 		},
-	}, "", "  ")
+	})
 	if err != nil {
 		return `{"success":false,"error":{"code":"` + code + `","message":"` + message + `"}}`
 	}
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }

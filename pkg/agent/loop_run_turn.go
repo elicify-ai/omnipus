@@ -758,6 +758,9 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 
 // selectTurnProvider trims the initial context, persists the user message, and selects provider candidates.
 func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConductorFlow {
+	if flow, refused := rp.refuseOversizedFullSkills(); refused {
+		return flow
+	}
 	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.budgetChecksExempt() {
 		// FR-028: the pre-turn check reads the one budget B — the same value
 		// windowTrim fits the suffix against — never the raw window — AND the
@@ -993,7 +996,7 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// narrowed request, including the compressed-mode ToolSearch
 		// force-through those helpers would otherwise apply.
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(rq.goalForce.narrowed)
-	case rq.ri.cfg.Tools.Manifest.Compressed:
+	case rq.ri.rf.rt.ts.manifestCompressed(rq.ri.cfg):
 		var err error
 		rq.ri.rf.providerToolDefs, err = rq.ri.rf.rt.al.buildCompressedToolDefs(rq.ri.rf.rt.ts, rq.policyFilteredTools)
 		if err != nil {
@@ -1101,7 +1104,7 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		// run 1 made exactly that un-offered ToolSearch call on the narrowed
 		// request. The dispatch loop also refuses any call to a tool the
 		// request did not offer (toolNotOfferedRefusal, tool_offer_gate.go).
-		if rq.ri.cfg.Tools.Manifest.Compressed && !rq.goalForce.layer1 {
+		if rq.ri.rf.rt.ts.manifestCompressed(rq.ri.cfg) && !rq.goalForce.layer1 {
 			rq.ri.rf.callMessages = injectManifestNote(rq.ri.rf.callMessages, rq.ri.rf.rt.al.buildToolManifestNote(rq.ri.rf.rt.ts, rq.policyFilteredTools))
 		}
 	}

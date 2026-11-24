@@ -139,7 +139,8 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	// Next: query present and non-empty → search+auto-load path.
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(query) != "" {
-		return t.execSearchAndLoad(ctx, query)
+		// C-17: the granted, not-denied skills of the agent are found too.
+		return withSkillHits(t.execSearchAndLoad(ctx, query), searchAgentSkills(ctx, query, t.maxSearchResults))
 	}
 
 	// Neither provided.
@@ -335,6 +336,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	// and (false, "denied…") for policy-denied ones. We interpret the reason to
 	// distinguish the two cases. (canLoad always returns false for full-tier since
 	// these tools are never truly "loaded" — they are always present.)
+	surface := t.searchSurface()
 	var fullTierHints []string
 	var fullTierRejections []string
 	var lazyNames []string
@@ -344,7 +346,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 			lazyNames = append(lazyNames, n) // will be rejected below as empty
 			continue
 		}
-		tier := ToolManifestTier(n)
+		tier := surface.TierOf(n)
 		if tier == ManifestFull || tier == ManifestInfra {
 			ok, reason := t.canLoad(ctx, n)
 			// The real agent-loop canLoad returns (false, CanLoadAlreadyAvailablePrefix+"…")
@@ -469,7 +471,9 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 // built-in tools (Register + ManifestLazy tier) so that a BM25 query can find
 // any tool the model needs to load — not just hidden/MCP tools.
 func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
-	if c := t.cached.Load(); c != nil && c.version == t.registry.Version() {
+	surface := t.searchSurface()
+	stamp := surface.Stamp()
+	if c := t.cached.Load(); c != nil && c.version == t.registry.Version() && c.levels == stamp {
 		return cachedEngineOrNil(c)
 	}
 
@@ -478,19 +482,19 @@ func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
 
 	// Snapshot + version under a single registry RLock (no TOCTOU).
 	// SnapshotSearchableTools includes hidden tools AND visible lazy-tier tools.
-	snap := t.registry.SnapshotSearchableTools()
+	snap := t.registry.SnapshotSearchableToolsOn(surface)
 
 	// Re-check after acquiring cacheMu (another goroutine may have rebuilt).
-	if c := t.cached.Load(); c != nil && c.version == snap.Version {
+	if c := t.cached.Load(); c != nil && c.version == snap.Version && c.levels == stamp {
 		return cachedEngineOrNil(c)
 	}
 
 	docs := snapshotToSearchDocs(snap)
 	var cached *bm25CachedEngine
 	if len(docs) == 0 {
-		cached = &bm25CachedEngine{engine: nil, version: snap.Version, docCount: 0}
+		cached = &bm25CachedEngine{engine: nil, version: snap.Version, docCount: 0, levels: stamp}
 	} else {
-		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version, docCount: len(docs)}
+		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version, docCount: len(docs), levels: stamp}
 		logger.DebugCF("discovery", "ToolSearch BM25 engine rebuilt",
 			map[string]any{"docs": len(docs), "version": snap.Version})
 	}
@@ -522,4 +526,17 @@ func parseNamesArg(args map[string]any) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("expected array of strings, got %T", raw)
 	}
+}
+
+// searchSurface is the stored tool levels ToolSearch reads (C-15). An
+// unreadable config keeps the pre-conversion tiers for this call and says
+// so in the log: the target tool's own permission still applies.
+func (t *ToolsTool) searchSurface() ToolSurface {
+	surface, err := registeredToolSurface()
+	if err != nil {
+		logger.ErrorCF("tools", "ToolSearch: stored tool levels unreadable; using the pre-conversion tiers for this call",
+			map[string]any{"error": err.Error()})
+		return ToolSurface{}
+	}
+	return surface
 }

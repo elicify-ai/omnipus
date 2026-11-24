@@ -1022,6 +1022,9 @@ func (rp *resolvePath) validateInputs() error {
 // protectedPathDenial classifies an already resolved protected path. The
 // predicate remains the authority; this helper only preserves the Skill redirect.
 func (rp *resolvePath) protectedPathDenial(realAbs string) error {
+	if gate, gated := fspolicy.ProjectSkillReadGate(realAbs, rp.policy); gated {
+		return &projectSkillGateError{gate: gate}
+	}
 	if !fspolicy.IsCarveOut(realAbs, rp.policy) {
 		return nil
 	}
@@ -1611,6 +1614,9 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 		auth := resolveTurnSkillAuthority(policy.HomeGuard.Home, ToolAgentID(ctx))
 		policy.HomeGuard.SkillFolders = auth.folders
 		policy.HomeGuard.SkillsReadAll = auth.readAll
+		// C-25: project skill folders under the reachable mounts.
+		policy.HomeGuard.ProjectSkillGates = projectSkillGates(policy.HomeGuard.Home, ToolAgentID(ctx), mountWorkspaceID, policy.AllowedRoots)
+		warnAppLevelOnlyGates(ToolTurnID(ctx), policy.HomeGuard.ProjectSkillGates)
 	}
 
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {

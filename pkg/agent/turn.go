@@ -108,6 +108,10 @@ type turnState struct {
 	// r15 FR-053: the next turn's menu reflects a committed change).
 	skillsMenuGeneration uint64
 
+	// toolSurface is the stored tool levels this turn reads once at start
+	// (Skills & Tools C-15); a zero value keeps the pre-conversion tiers.
+	toolSurface tools.ToolSurface
+
 	agent *AgentInstance
 	opts  processOptions
 	scope turnEventScope
@@ -955,6 +959,9 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// rest of this function treats agent's nilability.
 	if agent != nil {
 		ts.agentID = agent.ID
+	}
+	if scope.loop != nil {
+		ts.toolSurface = scope.loop.readTurnToolSurface()
 	}
 
 	// Capture the actual transaction state once, before any turn append/slide.

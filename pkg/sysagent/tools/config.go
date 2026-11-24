@@ -155,6 +155,12 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		// marker are Settings → Performance only. Key-level refusal first,
 		// in any case spelling, so the caller is told where the setting
 		// lives; the section-write case is caught after dotSet below.
+		// Skills & Tools C-22: the retired tool-loading keys are refused
+		// first, with the one text that says what replaced them.
+		if err := validateRetiredConfigKey(cfg, key); err != nil {
+			denyErr = err
+			return fmt.Errorf("INVALID_KEY: %w", err)
+		}
 		if err := validatePerformanceOnlyConfigKey(cfg, key); err != nil {
 			denyErr = err
 			return fmt.Errorf("INVALID_KEY: %w", err)
@@ -908,6 +914,30 @@ var performanceOnlyConfigKeys = []struct {
 	{string(config.AgentsDefaultsMaxToolIterations), performanceOnlyConfigReason},
 	{string(config.AgentsDefaultsMaxToolIterationsEnvImported), performanceOnlyConfigReason},
 	{manifestCompressedConfigKey, manifestCompressedConfigReason},
+}
+
+// retiredToolLoadingText is the C-22 refusal of the tool-loading keys the
+// levels replaced (ST-Q4 B).
+const retiredToolLoadingText = "This setting was replaced by levels in Skills & Tools."
+
+// retiredToolLoadingKeys are refused by set_config at or under the key
+// (C-22): the old tool-loading switches are no longer read after the
+// one-time conversion.
+var retiredToolLoadingKeys = []string{
+	"tools.manifest.compressed",
+	"tools.manifest.preview_all_lazy",
+	"tools.mcp.servers." + configWildcardSegment + ".deferred",
+}
+
+// validateRetiredConfigKey refuses a key at or under a retired
+// tool-loading key, in any case spelling.
+func validateRetiredConfigKey(cfg *config.Config, key string) error {
+	for _, retired := range retiredToolLoadingKeys {
+		if configKeyCovers(cfg, key, retired) {
+			return fmt.Errorf("config key %q is not writable via this tool: %s", key, retiredToolLoadingText)
+		}
+	}
+	return nil
 }
 
 // manifestCompressedConfigKey is the compressed tool list switch, a

@@ -19,6 +19,10 @@ type sessionPromptCache struct {
 	// skillsGeneration is the turn generation the frozen menu was taken at
 	// (turnState.skillsMenuGeneration); a newer one refreezes it (FR-053).
 	skillsGeneration uint64
+	// advertised holds the tool definitions this chat has been sent (C-15):
+	// once levels are stored, a definition stays in the chat after its
+	// level drops, until a Deny or session close removes it.
+	advertised map[string]bool
 }
 
 func (al *AgentLoop) promptCacheSession(ts *turnState) *sessionPromptCache {
@@ -94,6 +98,7 @@ func (rq *agentLoopRunTurnRequest) cacheToolSurface() {
 		rq.ri.rf.providerToolDefs = GoalNarrowedTools(state.tools, true, rq.ri.rf.providerToolDefs)
 		return
 	}
+	rq.ri.rf.rt.al.recordAdvertisedToolsLocked(state, rq.ri.rf.providerToolDefs)
 	current := make(map[string]bool, len(rq.ri.rf.providerToolDefs))
 	for _, def := range rq.ri.rf.providerToolDefs {
 		state.tools.Add(def)

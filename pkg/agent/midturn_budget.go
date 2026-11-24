@@ -12,7 +12,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // midTurnChecksTotal counts mid-turn window-check evaluations (B-33: N tool
@@ -83,12 +82,11 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 // pre-turn site already charges that cost; the final request checkpoint
 // charges the actual assembled note instead of this separate estimate.
 func (al *AgentLoop) manifestNoteTokens(ts *turnState, cfg *config.Config) int {
-	if ts == nil || ts.agent == nil || ts.agent.Tools == nil || cfg == nil || !cfg.Tools.Manifest.Compressed {
+	if ts == nil || ts.agent == nil || ts.agent.Tools == nil || cfg == nil || !ts.manifestCompressed(cfg) {
 		return 0
 	}
-	bucket := ts.manifestBucket()
-	loaded := al.sessionLoadedTools(bucket)
-	note := tools.BuildCompressedManifest(ts.agent.Tools.GetAll(), loaded)
+	loaded := al.manifestLoadedTools(ts)
+	note := ts.toolSurface.BuildManifest(ts.agent.Tools.GetAll(), loaded)
 	if note == "" {
 		return 0
 	}

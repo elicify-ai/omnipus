@@ -518,6 +518,11 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 				continue
 			}
 		}
+		if policyOK {
+			if refusal, gated := projectSkillOperandRefusal(p, classifier.classify(start), turnPolicy); gated {
+				return refusal, false
+			}
+		}
 		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
 			resolved := p
 			if canonical, resolveErr := resolvePathAgainstExistingAncestor(p); resolveErr == nil {

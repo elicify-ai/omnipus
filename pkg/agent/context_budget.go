@@ -156,7 +156,8 @@ func agentContextBudget(agent *AgentInstance) int {
 	if exempt || contextWindow <= 0 {
 		return 0
 	}
-	return contextBudget(contextWindow, agent.MaxTokens, pinnedCoreOverheadTokens(agent))
+	pinned := pinnedCoreOverheadTokens(agent) + int(agent.fullSkillTokens.Load())
+	return contextBudget(contextWindow, agent.MaxTokens, pinned)
 }
 
 // requestTokens is FR-029's `total`: the estimator cost of the assembled

@@ -680,7 +680,10 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 		// Re-push (idempotent) rather than assume a prior call already
 		// registered this session's hosts with the proxy — cheap, and
 		// correct even if the proxy process were ever replaced mid-session.
-		return hasGrant, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, true), nil
+		// A command whose named addresses all hold a running allowance runs
+		// with the network posture those addresses were approved with.
+		widened := hasGrant || (verdict.Flagged && len(verdict.Hosts) > 0)
+		return widened, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, true), nil
 	}
 	t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightNetwork,
 		verdict.PolicyRule, networkEscalationNote(verdict.Hosts))

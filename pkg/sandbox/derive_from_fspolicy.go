@@ -309,7 +309,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		denied = fspolicy.SecretPaths(in.HomePath)
 		writeDenied = nil
 	}
-	policy.DeniedPaths = denied
+	policy.DeniedPaths = append(denied, projectSkillKernelDenies(authored)...)
 	policy.WriteDeniedPaths = withSkillsWriteDeny(writeDenied, in.HomePath)
 
 	// The directory NODES on the chain down to each allowed branch, plus the
@@ -460,7 +460,7 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 		denied = fspolicy.SecretPaths(in.HomePath)
 		writeDenied = nil
 	}
-	policy.DeniedPaths = denied
+	policy.DeniedPaths = append(denied, projectSkillKernelDenies(authored)...)
 	// Read-only branches stay read-only under the floor: God Mode A opens
 	// everything except the PROTECTED set and the amendment's read-only
 	// runtime shapes — a published shared generation is rx for a God child
@@ -576,4 +576,22 @@ func withSkillsWriteDeny(writeDenied []string, home string) []string {
 		}
 	}
 	return append(writeDenied, root)
+}
+
+// projectSkillKernelDenies renders the C-25 project-skill gate into the
+// kernel deny set: every gated project skill folder under a mount, for an
+// agent that is not an editor. An editor reads gated folders for editing,
+// so its kernel view keeps them; its helper runs stay refused by the bash
+// operand check (app level).
+func projectSkillKernelDenies(authored fspolicy.FSPolicy) []string {
+	if authored.HomeGuard.SkillsReadAll {
+		return nil
+	}
+	var out []string
+	for _, g := range authored.HomeGuard.ProjectSkillGates {
+		if g.Folder != "" {
+			out = append(out, filepath.Clean(g.Folder))
+		}
+	}
+	return out
 }

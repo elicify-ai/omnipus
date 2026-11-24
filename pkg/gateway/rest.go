@@ -935,6 +935,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// single authenticated account (PUT authorization enforced inside
 	// HandleToolPolicies).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/tool-policies", rae.a.withAuth(rae.a.HandleToolPolicies))
+	// GET/PATCH /api/v1/security/permissions (Skills & Tools C-2): every
+	// global permission and level in one model, changed key by key; the
+	// PATCH needs a fresh re-auth (rest_permissions.go).
+	rae.cm.RegisterHTTPHandler("/api/v1/security/permissions", rae.a.withAuth(rae.a.HandlePermissionSettings))
 	// GET /api/v1/credentials — even though plaintext is not returned, the
 	// credential ref names reveal what integrations exist, so this is gated
 	// behind authentication.

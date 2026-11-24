@@ -289,6 +289,13 @@ func InfraManifestToolNames() []string {
 	return names
 }
 
+// manifestHeader is the two-line head of the "More tools" block. FR-044:
+// state plainly that more tools exist than are listed here (the unlisted
+// set is deliberate, ADR-071 D3 §4.3) and that ToolSearch's `query` finds
+// them by description. FR-033 keeps the header at exactly 2 lines.
+const manifestHeader = "# More tools (load before use)\n" +
+	"These tools are available but not loaded — call `ToolSearch` with its exact name in `names` to load one, then call it. Many more tools than are listed here exist; describe what you need in `query` to find and load them.\n"
+
 // maxManifestLineLen is the soft cap on each entry's description text
 // (not including the "  - <name> — " prefix). Keeps the manifest cheap.
 const maxManifestLineLen = 140
@@ -359,15 +366,7 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 	sort.Strings(cats)
 
 	var sb strings.Builder
-	sb.WriteString("# More tools (load before use)\n")
-	// FR-044: state plainly that more tools exist than are listed here (the
-	// search-only Tier 3 set is deliberately unlisted, ADR-071 D3 §4.3) and
-	// that ToolSearch's `query` finds them by description. Kept to exactly
-	// one line — FR-033 requires the header stay at 2 lines total, so this
-	// wording is a reword of the existing second line, never a third.
-	sb.WriteString(
-		"These tools are available but not loaded — call `ToolSearch` with its exact name in `names` to load one, then call it. Many more tools than are listed here exist; describe what you need in `query` to find and load them.\n",
-	)
+	sb.WriteString(manifestHeader)
 
 	for _, cat := range cats {
 		entries := grouped[ToolCategory(cat)]

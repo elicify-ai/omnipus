@@ -39,7 +39,7 @@ func (e *FieldError) Error() string {
 
 var knownFields = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
-	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
+	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {},
 	"reasoning_effort": {}, // the primary model's effort (effort-levels spec FR-048)
@@ -55,10 +55,10 @@ var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
 var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}, "agent_md": {}}
 var hiddenProtected = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
-	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
+	"tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
-	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
+	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "skill_policy_changes": {}, "memory_enabled": {},
 	"voice": {}, "context_window_override": {}, "model_params": {}, "fallback_models": {},
 	"agent_md": {},
 	// max_tool_iterations is supported (#904 D14): an external CLI worker
@@ -323,5 +323,13 @@ func ExcludedRows() []FieldExclusion {
 	for _, leaf := range []string{"mcp_servers[].id", "mcp_servers[].tools[]", "tool_policy_changes.remove[]", "tool_policy_changes.set{}"} {
 		rows = append(rows, FieldExclusion{Side: "REST", Path: leaf, Ops: OpUpdate, Reason: agentPermissionsReason})
 	}
+	// Skills & Tools C-21: REST carries the per-agent skill permissions as
+	// the complete map tools_cfg.skills.policies; the agent tools carry the
+	// sparse patch skill_policy_changes ({set} on create).
+	rows = append(rows,
+		FieldExclusion{Side: "REST", Path: "tools_cfg.skills.policies{}", Ops: OpCreate, Reason: "C-21: the tool's creation skill input is skill_policy_changes.set"},
+		FieldExclusion{Side: "REST", Path: "tools_cfg.skills.policies{}", Ops: OpUpdate, Reason: agentPermissionsReason},
+		FieldExclusion{Side: "tool", Path: "skill_policy_changes.set{}", Ops: OpCreate, Reason: "C-21: REST create sets the same values as the complete map tools_cfg.skills.policies"},
+	)
 	return rows
 }

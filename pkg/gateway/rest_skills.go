@@ -89,21 +89,23 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			Status:   gen.SkillStatusActive,
 			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
 		}
+		// FR-063 (#1570): one unreadable skill is listed as "Cannot load"
+		// with its reason; it never fails the whole list.
 		revision, revisionErr := readListedSkillRevision(filepath.Dir(filepath.Dir(s.Path)), id)
 		if revisionErr != nil {
 			logsafeWarn("rest: compute skill revision", "skill", id, "error", revisionErr)
-			jsonErr(w, http.StatusInternalServerError, "could not read installed skill state")
-			return
+			markSkillUnloadable(&skill, revisionErr)
+		} else {
+			skill.Revision = revision
 		}
-		skill.Revision = revision
-		if !isBuiltin {
+		if !isBuiltin && revisionErr == nil {
 			local, localErr := readListedSkillLocalChanges(filepath.Dir(filepath.Dir(s.Path)), id)
 			if localErr != nil {
 				logsafeWarn("rest: compute skill local changes", "skill", id, "error", localErr)
-				jsonErr(w, http.StatusInternalServerError, "could not read installed skill state")
-				return
+				markSkillUnloadable(&skill, localErr)
+			} else {
+				skill.HasLocalChanges = local
 			}
-			skill.HasLocalChanges = local
 		}
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
