@@ -15,13 +15,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sort"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -220,4 +223,46 @@ func refuseNullSkills(w http.ResponseWriter, body []byte) bool {
 		}
 	}
 	return false
+}
+
+// storedAgentPermissions is an agent's own stored tool and skill values.
+func storedAgentPermissions(tc *config.AgentToolsCfg) (toolValues, skillValues map[string]string) {
+	toolValues, skillValues = map[string]string{}, map[string]string{}
+	if tc == nil {
+		return toolValues, skillValues
+	}
+	for name, v := range tc.Builtin.Policies {
+		toolValues[name] = string(v)
+	}
+	if tc.Skills != nil {
+		for key, v := range tc.Skills.Policies {
+			skillValues[key] = string(v)
+		}
+	}
+	return toolValues, skillValues
+}
+
+// changedAgentPermissions lists the stored values of one agent that a write
+// changed, clearing one (Inherit) included (C-26 point 7). before is the
+// state ahead of the write.
+func changedAgentPermissions(agentID string, beforeTools, beforeSkills map[string]string, after *config.AgentToolsCfg) []agent.PermissionChange {
+	afterTools, afterSkills := storedAgentPermissions(after)
+	ids := []string{agentID}
+	return append(agent.DiffPermissions(ids, beforeTools, afterTools, ""),
+		agent.DiffPermissions(ids, beforeSkills, afterSkills, security.AllowanceSubjectSkillPrefix)...)
+}
+
+// endChangedAllowances ends the running allowances the durable changes
+// answered, before the response (C-26 point 7). A failed audit write is
+// logged at error level; the allowances are ended either way.
+func (a *restAPI) endChangedAllowances(r *http.Request, changes []agent.PermissionChange) {
+	if a.agentLoop == nil {
+		return
+	}
+	logger := a.packageAuditLogger()
+	for _, c := range changes {
+		if err := a.agentLoop.EndAllowancesFor(r.Context(), logger, c); err != nil {
+			slog.Error("rest: audit ended allowances", "key", c.Key, "error", err)
+		}
+	}
 }

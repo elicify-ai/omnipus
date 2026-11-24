@@ -1453,6 +1453,9 @@ func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
 		}
 		return ad.partlyDeletedResult("record_delete"), true
 	}
+	if ad.t.deps.EndAgentAllowances != nil {
+		ad.t.deps.EndAgentAllowances(ad.id)
+	}
 	return nil, false
 }
 

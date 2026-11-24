@@ -1577,6 +1577,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 			return nil
 		},
 		StopSessionForDelete: rc.runningServices.stopSessionForDelete,
+		EndAgentAllowances:   rc.agentLoop.EndAgentAllowances,
 		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
 		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
 		// list_agents ghost-listing race this closes). Built on the same

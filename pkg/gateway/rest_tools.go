@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -102,6 +103,9 @@ type restAPIUpdateAgentTools struct {
 	skillsOnly      bool
 	skillsSpecified bool
 	skillPolicies   map[string]config.ToolPolicy
+	// permissionChanges is what persistState changed of the agent's own
+	// stored values (C-26 point 7).
+	permissionChanges []agent.PermissionChange
 }
 
 // updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
@@ -415,6 +419,10 @@ func (rau *restAPIUpdateAgentTools) persistState(overrides map[string]config.Too
 		if agentRec.Tools == nil {
 			agentRec.Tools = &config.AgentToolsCfg{}
 		}
+		beforeTools, beforeSkills := storedAgentPermissions(agentRec.Tools)
+		defer func() {
+			rau.permissionChanges = changedAgentPermissions(rau.agentID, beforeTools, beforeSkills, agentRec.Tools)
+		}()
 		if !rau.skillsOnly {
 			retainReservedBuiltinToolPolicies(overrides, agentRec.Tools.Builtin.Policies, rau.builtinPolicies)
 			agentRec.Tools.Builtin.Policies = overrides
@@ -445,6 +453,7 @@ func (rau *restAPIUpdateAgentTools) persistState(overrides map[string]config.Too
 		}
 		return true
 	}
+	rau.a.endChangedAllowances(rau.r, rau.permissionChanges)
 	return false
 }
 

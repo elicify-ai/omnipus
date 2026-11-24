@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -147,21 +148,26 @@ func (a *restAPI) patchPermissionSettings(w http.ResponseWriter, r *http.Request
 // the running timed allowances a changed permission answers (C-26 point 7).
 func (a *restAPI) afterPermissionChanges(r *http.Request, changes []permissionChange) {
 	auditLogger := a.packageAuditLogger() // the gateway's, else the loop's
-	var grants *security.ApprovalGrantStore
-	if a.agentLoop != nil {
-		grants = a.agentLoop.ApprovalGrants()
-	}
 	for _, c := range changes {
 		if auditLogger != nil {
 			if err := audit.EmitSecuritySettingChangeChecked(r.Context(), auditLogger, c.resource(), c.old, c.new); err != nil {
 				slog.Error("rest: audit permission settings change", "resource", c.resource(), "error", err)
 			}
 		}
+		key := ""
 		switch c.field {
 		case "tool_policies":
-			grants.EndFor(nil, c.key)
+			key = c.key
 		case "skill_policies":
-			grants.EndFor(nil, security.AllowanceSubjectSkillPrefix+c.key)
+			key = security.AllowanceSubjectSkillPrefix + c.key
+		}
+		if key == "" || a.agentLoop == nil {
+			continue
+		}
+		if err := a.agentLoop.EndAllowancesFor(r.Context(), auditLogger, agent.PermissionChange{
+			Key: key, Old: c.old, New: c.new,
+		}); err != nil {
+			slog.Error("rest: audit ended allowances", "key", key, "error", err)
 		}
 	}
 }
