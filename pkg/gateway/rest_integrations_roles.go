@@ -404,11 +404,17 @@ func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http
 				return
 			}
 		}
+		// U1-1: carry the activation into the write. Without it
+		// applyVoiceIntegration ran with makeActive=false and a 200 Save
+		// stored nothing (US-3 AS5: the new transcriber is stored).
+		write.setActive = body.Active != nil && *body.Active
 	}
 
-	// Keyless search providers with prerequisites must have them set
-	// before activation.
-	if def.kind == "search" && !def.requiresKey && body.Active != nil && *body.Active {
+	// Keyless providers with prerequisites (audio-model needs
+	// voice.model_name) must have them set before activation; a voice
+	// activation clears the keyed transcriber refs, so an unready one would
+	// leave no transcriber at all.
+	if !def.requiresKey && body.Active != nil && *body.Active {
 		if ok, reason := a.integrationActivationReady(a.agentLoop.GetConfig(), def); !ok {
 			jsonErr(w, http.StatusBadRequest, reason)
 			return
@@ -455,11 +461,11 @@ func (a *restAPI) finishIntegrationProviderUpdate(w http.ResponseWriter, r *http
 		return
 	}
 
-	// FR-033 round-2 rule: a keyed default whose key still does not resolve
+	// FR-033 round-2 rule: a keyed search default whose key still does not resolve
 	// AFTER the reload is rejected — judged from post-reload state. The
 	// persisted write stays; the response names the step that failed.
 	postReloadCfg := a.agentLoop.GetConfig()
-	if write.setActive && def.requiresKey {
+	if write.setActive && def.requiresKey && def.kind == "search" {
 		if !postReloadCfg.Tools.Web.UsableSearchProvider(id) {
 			jsonErr(w, http.StatusBadRequest,
 				fmt.Sprintf("%s was saved as the default but its API key does not resolve — store an API key for it, then save the default again", def.displayName))
