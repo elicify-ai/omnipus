@@ -102,6 +102,7 @@ var gitMutatingVerbs = map[string]struct{}{
 	"tag":           {}, // `-d`/`-f` mutate refs
 	"branch":        {}, // `-D`/`-f` mutate refs
 	"push":          {}, // can push --force to rewrite a remote mirror of the evidence
+	"send-pack":     {}, // push's plumbing form (H55)
 	"fetch":         {},
 	"pull":          {},
 	"init":          {}, // re-init would clobber the engine's repo
@@ -498,6 +499,12 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 			i++
 		default:
 			verb = a
+			// H55 Rules A and B read the global options (the -c values) and
+			// the push remote, which decideGit never looks at. This only adds
+			// refusals.
+			if d, denied := g.inspectGitArgsPush(args[:i], verb, args[i+1:], effCwd); denied {
+				return d
+			}
 			// Remaining args after the verb (args[i+1:]) are the subcommand's
 			// own arguments; we look at them below for `commit --amend` detail.
 			return g.decideGit(verb, args[i+1:], effCwd, gitDirOverride, cwd)
@@ -621,7 +628,14 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	// Runs of spaces or tabs collapse to one space first, so "git  commit" or
 	// "git<TAB>commit" cannot hide the verb from the "git <verb>" patterns
 	// (#1960 S1 security round 2, F1-a). This only adds refusals.
-	lower := stripGitGlobalOptions(collapseBlanks(strings.ToLower(script)))
+	collapsed := collapseBlanks(strings.ToLower(script))
+	// H55 Rules A and B run on the text BEFORE the global options are stripped:
+	// Rule A reads the -c values the stripping removes (#1960 S1, ruling H55).
+	// This only adds refusals.
+	if d, denied := g.inspectShellPush(script, collapsed, cwd); denied {
+		return d
+	}
+	lower := stripGitGlobalOptions(collapsed)
 
 	resolvedCwd := resolvePathBestEffort(cwd, "")
 	_, cwdProtected := g.enclosingProtectedWorkdir(resolvedCwd)
@@ -769,7 +783,7 @@ func gitMutatingScriptPatterns() []string {
 		"git commit", "git rebase", "git rm", "git reset", "git checkout",
 		"git merge", "git cherry-pick", "git revert", "git apply", "git am",
 		"git clean", "git gc", "git prune", "git reflog", "git update-ref",
-		"git filter-branch", "git replace", "git push", "git init", "git config",
+		"git filter-branch", "git replace", "git push", "git send-pack", "git init", "git config",
 		"git update-index", "git symbolic-ref", "git worktree", "git stash",
 		"git branch -d", "git branch -f", "git tag -d", "git tag -f",
 		"--amend",
