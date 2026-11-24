@@ -2,21 +2,27 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// This file implements the session-scoped "Always Allow" tool-approval grant
-// store — the fix for the tool-consent-boundary bug where a user's "Always
-// Allow" decision on the exec/tool approval dialog was recorded on a
-// per-WebSocket-CONNECTION map (wsApprovalHook.alwaysAllowed) instead of a
-// per-SESSION store. Because the SPA reconnects on any drop (network blip,
-// idle, gateway restart, refresh), every reconnect created a fresh hook with
-// an empty map, silently discarding the grant and re-prompting the user.
+// This file implements the timed allowance store of Skills & Tools C-26: a
+// person's answer "Allow for 1 hour / 3 hours / 1 day" on an approval card.
+// An allowance belongs to the AGENT named on the card, not to the chat: it
+// covers every session of that agent (its chats in every workspace, its
+// channel conversations, its task, plan and scheduled runs, and the helpers
+// it starts for itself) and no other agent. It lives in memory only and ends
+// at its end time, at a gateway restart, when the agent is deleted
+// (ClearAgent) or when the permission it answers changes (EndFor).
 //
-// ApprovalGrantStore keys grants on (session_id, agent_id, tool_name, args
-// fingerprint) rather than the connection, so the grant survives reconnects
-// for the lifetime of the SESSION. A grant recorded for one argument object
-// never auto-approves a later call of the same tool with different arguments
-// ("Always Allow" on `request_mount` of folder A is "this folder, this
-// session", not "any folder"). A DIFFERENT agent in the same session, or a
-// DIFFERENT session calling the same tool, still requires a fresh prompt.
+// Subjects: an ordinary tool card covers the whole tool, any arguments
+// (founder Q4 B); the bash exact scope keeps the argument fingerprint; the
+// narrow shell cards cover one command family, one path with its access, the
+// named network addresses, or the usual web ports; a skill card covers that
+// skill's permission part.
+//
+// Lengths are measured on a monotonic clock from the moment the allowance is
+// recorded; the reported end is wall-clock. A second answer for the same
+// subject never shortens a running allowance: the later end wins.
+//
+// The per-(session, agent) egress-proxy token stays per session: a shell
+// command's proxy token is seeded from the agent's allowed addresses.
 
 package security
 
@@ -30,44 +36,84 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
-// bashToolName is the tool name ExecTool.Name() returns (pkg/tools/shell.go)
-// — duplicated here as a literal rather than imported, since pkg/tools
-// already imports pkg/security and the reverse would cycle. Used to gate
-// EventShellGrantRecorded emission on the "exact" scope (Record) to bash
-// calls only: ApprovalGrantStore is shared by every ask-policy tool, but
-// FR-032(c)'s "exact" grant kind is specifically ADR-092's shell/bash
-// taxonomy (it is enumerated alongside prefix/path-widening/network-
-// widening, which are all bash-only concepts) — emitting shell.grant_recorded
-// for, say, a write_file "Always Allow" would misattribute it to this ADR.
+// bashToolName is the tool name ExecTool.Name() returns (pkg/tools/shell.go),
+// duplicated as a literal because pkg/tools imports pkg/security. Only bash
+// keeps an argument fingerprint (its exact scope), and only bash grants emit
+// shell.grant_recorded.
 const bashToolName = "bash"
 
-// grantKey scopes a set of always-allowed (tool → argument fingerprints) to
-// one (session, agent) pair. Both fields participate in the key so a grant
-// recorded for one agent never applies to a different agent running in the
-// same session, and a grant recorded in one session never applies to another
-// session.
+// grantKey scopes an egress-proxy token to one (session, agent) pair.
 type grantKey struct {
 	sessionID string
 	agentID   string
 }
 
-// ApprovalGrantStore is a thread-safe, session-scoped store of "Always
-// Allow" tool-approval grants. Each (session, agent, tool) holds a SET of
-// argument fingerprints: one Always Allow on `bash {command:ls}` does not
-// approve `bash {command:rm -rf /}`; a later Always Allow on a different
-// argv for the same tool is a second fingerprint (union).
-//
-// The zero value is not usable — construct with NewApprovalGrantStore. Every
-// method is nil-receiver-safe: calling a method on a nil *ApprovalGrantStore
-// never panics and always resolves to the fail-safe outcome (IsAllowed =>
-// false, i.e. "ask"; Record/InheritFrom/ClearSession => no-op). This lets
-// callers hold a possibly-unwired store (e.g. in a test fixture) without an
-// extra nil check at every call site.
+// Allowance lengths offered on cards (C-26).
+const (
+	AllowFor1Hour  = time.Hour
+	AllowFor3Hours = 3 * time.Hour
+	AllowFor1Day   = 24 * time.Hour
+)
+
+// ParseAllowDuration maps the wire ApprovalAllowDuration (1h, 3h, 1d).
+func ParseAllowDuration(s string) (time.Duration, bool) {
+	switch s {
+	case "1h":
+		return AllowFor1Hour, true
+	case "3h":
+		return AllowFor3Hours, true
+	case "1d":
+		return AllowFor1Day, true
+	}
+	return 0, false
+}
+
+// noEnd marks an entry recorded through a legacy (duration-less) Record*
+// call: it lasts until the store is discarded (a restart).
+const noEnd = time.Duration(-1)
+
+// agentAllowances is everything one agent may do without a card.
+type agentAllowances struct {
+	// tools: tool name -> end (whole tool, any arguments).
+	tools map[string]time.Duration
+	// exact: tool + NUL + argument fingerprint -> end (bash exact scope and
+	// the exact-action tools).
+	exact    map[string]time.Duration
+	prefixes []timedPrefix
+	paths    []timedPath
+	// networkAny: the usual web and lookup ports to any address.
+	networkAny time.Duration
+	hasNetwork bool
+	hosts      map[string]time.Duration
+	// skills: skill key -> end (the permission part only).
+	skills map[string]time.Duration
+}
+
+type timedPrefix struct {
+	tool  string
+	grant ShellPrefixGrant
+	end   time.Duration
+}
+
+type timedPath struct {
+	grant fspolicy.PathGrant
+	end   time.Duration
+}
+
+// EndedAllowance describes one allowance EndFor or ClearAgent removed, for
+// the approval.allowance_ended audit entry.
+type EndedAllowance struct {
+	AgentID string
+	Kind    string // tool, bash_exact, shell_family, path, network, skill
+	Subject string
+}
+
 // ShellPrefixGrant is the ADR-092 D4 "prefix" scope Allow grant: `{binary,
 // arg_prefix}`, ignoring cwd, token-boundary matched against a segment's
 // argument words following the resolved binary — "npm run test" does not
@@ -109,90 +155,49 @@ func (g ShellPrefixGrant) prefixMatches(resolvedBinary string, args []string, ru
 	return true
 }
 
+// ApprovalGrantStore is the thread-safe, agent-keyed, in-memory store of
+// timed allowances. The zero value is not usable — construct with
+// NewApprovalGrantStore. Every method is nil-receiver-safe and resolves to
+// the fail-safe outcome (no allowance, i.e. "ask").
 type ApprovalGrantStore struct {
 	mu     sync.Mutex
-	grants map[grantKey]map[string]map[string]struct{}
-
-	// prefixGrants holds the ADR-092 D4 "prefix" scope grants, keyed the same
-	// way exact grants are (session, agent), then by tool name — a session may
-	// hold several prefix grants for the same tool (e.g. `npm run test` and
-	// `npm run build`, recorded on two separate Allow clicks).
-	prefixGrants map[grantKey]map[string][]ShellPrefixGrant
-
-	// pathGrants holds the ADR-092 D7 filesystem-widening grants (FR-016/
-	// FR-036): bash-scoped, single-path, single-access-class widenings
-	// approved through the Auto pre-flight escalation. Keyed by (session,
-	// agent) only — not by tool — because ResolveTurnFSPolicy's grant-overlay
-	// parameter (FR-036) is bash's own per-turn FSPolicy input, not a
-	// per-call fingerprint.
-	pathGrants map[grantKey][]fspolicy.PathGrant
-
-	// networkGrants holds the ADR-092 D8 network-widening grant (FR-044): a
-	// session either holds it or does not — there is no finer scope (D8 is
-	// port-level, not domain-level, and applies uniformly to the session's
-	// bash child once granted).
-	networkGrants map[grantKey]struct{}
-
-	// networkHosts holds the D-13 fix's (2026-09-24 security review)
-	// per-session set of HOST names a D8 network escalation's "Always
-	// Allow" approved — session-scoped, "for this chat session only,
-	// never written to the global config" (founder decision B, point 2).
-	// This is layered ON TOP of networkGrants (the existing port-level
-	// kernel widening): networkGrants alone used to leave the SEPARATE
-	// egress proxy still 403'ing every request ("host not in allow-list"),
-	// since the proxy's own static cfg.Sandbox.EgressAllowList never
-	// changes at runtime. networkHosts is what
-	// sandbox.EgressProxy.GrantRunHosts actually receives (via
-	// networkTokens' token, below).
-	networkHosts map[grantKey]map[string]struct{}
-
-	// networkTokens holds one opaque, unguessable credential per (session,
-	// agent) pair once it has been minted (SessionEgressToken) — reused for
-	// every subsequent D8 "Always Allow" in that session rather than
-	// re-minted, so a session's egress-proxy grant (sandbox.EgressProxy.
-	// runHosts, keyed by this SAME token) accumulates hosts under one
-	// stable key instead of orphaning earlier grants under a discarded one.
+	agents map[string]*agentAllowances
+	// networkTokens is the per-(session, agent) egress-proxy run token.
 	networkTokens map[grantKey]string
 
-	// inheritSourceMiss counts InheritFrom calls whose four key components
-	// were all non-empty but whose SOURCE key held no grants, so nothing was
-	// copied (ADR-057 FR-079). Read via InheritSourceMissCount.
-	//
-	// This counter — not the log level — is the FR-079 tripwire. A "no grants
-	// under the source key" outcome is ROUTINE (most agents never record an
-	// "Always Allow"), so logging it at Warn on every delegation would train
-	// operators to ignore Warns; the log record is therefore Debug and the
-	// counter is always on and assertable. Its purpose is to make ADR-057
-	// grill finding C-1 impossible to reproduce silently: a re-key that makes
-	// the source lookup miss when it should have hit shows up here as a
-	// climbing count with zero inherited grants, instead of as a delegation
-	// that hangs for 300 s with no signal anywhere.
-	inheritSourceMiss atomic.Int64
+	wall func() time.Time
+	mono func() time.Duration
 
-	// inheritInvalidKey counts InheritFrom calls rejected before any lookup
-	// because at least one of the four key components was empty (ADR-057
-	// FR-079, dataset row 6). Read via InheritInvalidKeyCount.
-	//
-	// Unlike a source miss this is never routine: at spawn time every one of
-	// the four components is a resolved id, so an empty one means the CALLER
-	// is broken and the child will silently fall through to a fresh approval
-	// prompt. It is therefore logged at Warn as well as counted.
+	inheritSourceMiss atomic.Int64
 	inheritInvalidKey atomic.Int64
 
-	// auditLogger is the ADR-092 FR-032(c)/FR-046 grant-recorded audit sink.
-	// Nil by default (pure store, no audit — matches the zero-value contract
-	// every other field on this struct follows). Wired via SetAuditLogger.
-	// Guarded by mu like every other field.
 	auditLogger *audit.Logger
 }
 
-// SetAuditLogger wires this store's FR-032(c) grant-recorded audit emitter
-// (EventShellGrantRecorded). Nil-safe on the receiver; passing a nil logger
-// is also valid (explicitly disables audit for this store, matching
-// audit.EmitEntry's own nil-logger no-op contract). Idempotent — callers may
-// call it more than once (pkg/tools/shell_permission_mode.go's
-// enforceShellPermissionMode calls it once per bash invocation) without
-// side effects beyond replacing the stored pointer.
+// NewApprovalGrantStore returns an empty store on the process clock.
+func NewApprovalGrantStore() *ApprovalGrantStore {
+	start := time.Now()
+	return &ApprovalGrantStore{
+		agents:        make(map[string]*agentAllowances),
+		networkTokens: make(map[grantKey]string),
+		wall:          time.Now,
+		mono:          func() time.Duration { return time.Since(start) },
+	}
+}
+
+// SetApprovalGrantStoreClock replaces the store's wall and monotonic clocks.
+// Lengths are measured on mono; reported ends use wall. Production never
+// calls it; it is the clock input of the store.
+func SetApprovalGrantStoreClock(s *ApprovalGrantStore, wall func() time.Time, mono func() time.Duration) {
+	if s == nil || wall == nil || mono == nil {
+		return
+	}
+	s.mu.Lock()
+	s.wall, s.mono = wall, mono
+	s.mu.Unlock()
+}
+
+// SetAuditLogger wires the audit logger used for shell.grant_recorded.
 func (s *ApprovalGrantStore) SetAuditLogger(logger *audit.Logger) {
 	if s == nil {
 		return
@@ -202,11 +207,6 @@ func (s *ApprovalGrantStore) SetAuditLogger(logger *audit.Logger) {
 	s.mu.Unlock()
 }
 
-// emitGrantRecorded writes the FR-032(c) shell.grant_recorded event for a
-// NEWLY recorded grant (callers must not call this for a no-op/duplicate
-// record — see each Record* method's own "already granted" short-circuit).
-// Reads s.auditLogger under s.mu then emits OUTSIDE the lock, so a slow
-// audit write never blocks a concurrent grant lookup/record.
 func (s *ApprovalGrantStore) emitGrantRecorded(scope audit.ShellGrantScope, resolvedBinary, agentID, sessionID, tool string, extra map[string]any) {
 	s.mu.Lock()
 	logger := s.auditLogger
@@ -217,22 +217,6 @@ func (s *ApprovalGrantStore) emitGrantRecorded(scope audit.ShellGrantScope, reso
 	audit.EmitShellGrantRecorded(context.Background(), logger, scope, resolvedBinary, agentID, sessionID, tool, extra)
 }
 
-// NewApprovalGrantStore creates an empty grant store.
-func NewApprovalGrantStore() *ApprovalGrantStore {
-	return &ApprovalGrantStore{
-		grants:        make(map[grantKey]map[string]map[string]struct{}),
-		prefixGrants:  make(map[grantKey]map[string][]ShellPrefixGrant),
-		pathGrants:    make(map[grantKey][]fspolicy.PathGrant),
-		networkGrants: make(map[grantKey]struct{}),
-		networkHosts:  make(map[grantKey]map[string]struct{}),
-		networkTokens: make(map[grantKey]string),
-	}
-}
-
-// fingerprintArgs returns the canonical JSON of args. encoding/json sorts
-// object keys at every nesting level, so key order does not matter. A nil
-// map and an empty map both encode as "{}" and therefore match. A Marshal
-// failure returns ("", false) so the caller can fail closed.
 func fingerprintArgs(args map[string]any) (string, bool) {
 	if args == nil {
 		args = map[string]any{}
@@ -244,197 +228,254 @@ func fingerprintArgs(args map[string]any) (string, bool) {
 	return string(b), true
 }
 
-// IsAllowed reports whether (sessionID, agentID) has previously been granted
-// "Always Allow" for tool with this exact argument object.
-//
-// Fail-safe (consent boundary — SEC audit): a nil store, or an empty
-// sessionID / agentID / tool, ALWAYS returns false. This is deliberate and
-// load-bearing: an empty string must never be treated as a valid scoping key,
-// or two unrelated callers that both happen to have an empty session_id (or
-// empty agent_id) would silently share the same grant. An args map that
-// cannot be marshaled also returns false. An empty (or nil) args map is NOT
-// fail-closed — it is a real grant for a no-arg tool, fingerprinted as "{}".
-// Callers MUST keep prompting ("ask") whenever this returns false.
-func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string, args map[string]any) bool {
-	if s == nil || sessionID == "" || agentID == "" || tool == "" {
-		return false
-	}
-	fp, ok := fingerprintArgs(args)
-	if !ok {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tools, ok := s.grants[grantKey{sessionID: sessionID, agentID: agentID}]
-	if !ok {
-		return false
-	}
-	fps, ok := tools[tool]
-	if !ok {
-		return false
-	}
-	_, granted := fps[fp]
-	return granted
+// live reports whether an entry with end time end is still running. Caller
+// holds s.mu.
+func (s *ApprovalGrantStore) live(end time.Duration) bool {
+	return end == noEnd || s.mono() < end
 }
 
-// Record grants "Always Allow" for tool with this exact argument object,
-// scoped to (sessionID, agentID). A later Record of the same tool with a
-// different argv adds a second fingerprint; it does not replace the first.
-//
-// Returns true when the grant was actually recorded, false when this call was
-// a no-op — a nil store, an empty sessionID / agentID / tool, or an args map
-// that cannot be marshaled. Recording under an empty-string key would risk
-// exactly the cross-caller collision IsAllowed's fail-safe check exists to
-// prevent. Callers that report success back to a human (e.g. the "always"
-// tool-approval action) MUST check this return value rather than assuming the
-// grant took effect — see rest_tool_registry.go's HandleToolApprovals, which
-// logs a Warn instead of Info when Record no-ops so the operator knows the
-// tool will keep prompting on the next matching call.
-func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[string]any) bool {
-	if s == nil || sessionID == "" || agentID == "" || tool == "" {
-		return false
+// extend returns the later of the current end and now+d (noEnd for a legacy
+// record). Caller holds s.mu.
+func (s *ApprovalGrantStore) extend(cur time.Duration, had bool, d time.Duration) time.Duration {
+	if d == noEnd || (had && cur == noEnd) {
+		return noEnd
 	}
-	fp, ok := fingerprintArgs(args)
-	if !ok {
-		return false
+	next := s.mono() + d
+	if had && s.live(cur) && cur > next {
+		return cur
 	}
-	s.mu.Lock()
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	tools, ok := s.grants[key]
-	if !ok {
-		tools = make(map[string]map[string]struct{})
-		s.grants[key] = tools
-	}
-	fps, ok := tools[tool]
-	if !ok {
-		fps = make(map[string]struct{})
-		tools[tool] = fps
-	}
-	_, dup := fps[fp]
-	fps[fp] = struct{}{}
-	s.mu.Unlock()
-
-	// FR-032(c): only the "bash" tool's exact grants are ADR-092's own
-	// taxonomy (see bashToolName's doc comment) — and only NEW fingerprints,
-	// never a re-Record of one already on file.
-	if !dup && tool == bashToolName {
-		s.emitGrantRecorded(audit.ShellGrantScopeExact, "", agentID, sessionID, tool, map[string]any{
-			"args_fingerprint": fp,
-		})
-	}
-	return true
+	return next
 }
 
-// RecordPrefixGrant grants ADR-092 D4 "prefix" scope for tool, scoped to
-// (sessionID, agentID). A later RecordPrefixGrant of the same tool with a
-// different {binary, arg_prefix, run_in_background} adds a second entry; it
-// does not replace the first. Returns false (no-op) for a nil store, an
-// empty sessionID/agentID/tool, or an empty grant.Binary — the same
-// never-key-on-empty-string discipline Record enforces.
-func (s *ApprovalGrantStore) RecordPrefixGrant(sessionID, agentID, tool string, grant ShellPrefixGrant) bool {
-	if s == nil || sessionID == "" || agentID == "" || tool == "" || grant.Binary == "" {
-		return false
+// wallEnd reports an end in wall-clock time. Caller holds s.mu.
+func (s *ApprovalGrantStore) wallEnd(end time.Duration) time.Time {
+	if end == noEnd {
+		return time.Time{}
 	}
-	s.mu.Lock()
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	if s.prefixGrants == nil {
-		s.prefixGrants = make(map[grantKey]map[string][]ShellPrefixGrant)
-	}
-	tools, ok := s.prefixGrants[key]
-	if !ok {
-		tools = make(map[string][]ShellPrefixGrant)
-		s.prefixGrants[key] = tools
-	}
-	for _, existing := range tools[tool] {
-		if existing == grant {
-			s.mu.Unlock()
-			return true // already granted, not a duplicate entry
+	return s.wall().Add(end - s.mono())
+}
+
+// allowancesFor returns the agent's entry, creating it. Caller holds s.mu.
+func (s *ApprovalGrantStore) allowancesFor(agentID string) *agentAllowances {
+	a := s.agents[agentID]
+	if a == nil {
+		a = &agentAllowances{
+			tools: map[string]time.Duration{}, exact: map[string]time.Duration{},
+			hosts: map[string]time.Duration{}, skills: map[string]time.Duration{},
 		}
+		s.agents[agentID] = a
 	}
-	tools[tool] = append(tools[tool], grant)
-	s.mu.Unlock()
-
-	s.emitGrantRecorded(audit.ShellGrantScopePrefix, grant.Binary, agentID, sessionID, tool, map[string]any{
-		"arg_prefix":        grant.ArgPrefix,
-		"run_in_background": grant.RunInBackground,
-	})
-	return true
+	return a
 }
 
-// IsPrefixAllowed reports whether (sessionID, agentID) holds a D4 prefix
-// grant for tool covering a call whose resolved binary is resolvedBinary,
-// whose argument words are args, and whose run_in_background flag is
-// runInBackground. Fail-safe: a nil store or an empty sessionID/agentID/
-// tool/resolvedBinary always returns false — callers MUST keep prompting
-// ("ask") whenever this returns false.
-func (s *ApprovalGrantStore) IsPrefixAllowed(sessionID, agentID, tool, resolvedBinary string, args []string, runInBackground bool) bool {
-	if s == nil || sessionID == "" || agentID == "" || tool == "" || resolvedBinary == "" {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tools, ok := s.prefixGrants[grantKey{sessionID: sessionID, agentID: agentID}]
-	if !ok {
-		return false
-	}
-	for _, g := range tools[tool] {
-		if g.prefixMatches(resolvedBinary, args, runInBackground) {
+// exactActionTools are the five tools whose answer covers one exact action
+// only (C-26 point 9, founder Q5 A): they are never covered whole, never get
+// a timed allowance, and a legacy record keeps their argument fingerprint.
+var exactActionTools = []string{"browser_evaluate", "environment_setup", "request_mount", "send_email", "set_config"}
+
+// ExactActionToolNames returns a copy of the exact-action tool list.
+func ExactActionToolNames() []string {
+	return append([]string(nil), exactActionTools...)
+}
+
+// IsExactActionTool reports whether tool is one of the exact-action tools.
+func IsExactActionTool(tool string) bool {
+	for _, t := range exactActionTools {
+		if t == tool {
 			return true
 		}
 	}
 	return false
 }
 
-// RecordPathGrant adds one ADR-092 D7 filesystem-widening grant (FR-016) to
-// (sessionID, agentID)'s session-scoped set. A later RecordPathGrant for the
-// same Path unions its Access bits into the existing entry rather than
-// appending a duplicate — a session that first widens {P, read} and later
-// {P, write} ends up with one entry covering both, which is what
-// ResolveTurnFSPolicy's grant-overlay parameter (FR-036) expects to render
-// as a single PathRule. Returns false (no-op) for a nil store, an empty
-// sessionID/agentID, an empty grant.Path, or a zero grant.Access.
-func (s *ApprovalGrantStore) RecordPathGrant(sessionID, agentID string, grant fspolicy.PathGrant) bool {
-	if s == nil || sessionID == "" || agentID == "" || grant.Path == "" || grant.Access == 0 {
+// toolKey returns the map and key of a tool allowance subject: the whole
+// tool, or for bash and the exact-action tools the exact arguments.
+func toolKey(a *agentAllowances, tool string, args map[string]any) (map[string]time.Duration, string, string, bool) {
+	if tool != bashToolName && !IsExactActionTool(tool) {
+		return a.tools, tool, "", true
+	}
+	fp, ok := fingerprintArgs(args)
+	if !ok {
+		return nil, "", "", false
+	}
+	return a.exact, tool + "\x00" + fp, fp, true
+}
+
+// recordTool stores a tool allowance and returns its end, the fingerprint
+// and whether a new entry was added.
+func (s *ApprovalGrantStore) recordTool(agentID, tool string, args map[string]any, d time.Duration) (time.Time, string, bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.allowancesFor(agentID)
+	m, key, fp, ok := toolKey(a, tool, args)
+	if !ok {
+		return time.Time{}, "", false, false
+	}
+	cur, had := m[key]
+	m[key] = s.extend(cur, had, d)
+	return s.wallEnd(m[key]), fp, !had, true
+}
+
+// IsAllowed reports whether agentID holds a running allowance covering a
+// call of tool with args, in any of its sessions (the session is not part of
+// the key; an empty one fails closed). Ordinary tools are covered whole;
+// bash and the exact-action tools need the exact arguments.
+func (s *ApprovalGrantStore) IsAllowed(sessionID, agentID, tool string, args map[string]any) bool {
+	if s == nil || sessionID == "" {
+		return false
+	}
+	return s.IsAllowedForAgent(agentID, tool, args)
+}
+
+// IsAllowedForAgent is IsAllowed without a session.
+func (s *ApprovalGrantStore) IsAllowedForAgent(agentID, tool string, args map[string]any) bool {
+	if s == nil || agentID == "" || tool == "" {
 		return false
 	}
 	s.mu.Lock()
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	if s.pathGrants == nil {
-		s.pathGrants = make(map[grantKey][]fspolicy.PathGrant)
+	defer s.mu.Unlock()
+	a := s.agents[agentID]
+	if a == nil {
+		return false
 	}
-	existing := s.pathGrants[key]
-	merged := false
-	for i := range existing {
-		if existing[i].Path == grant.Path {
-			existing[i].Access |= grant.Access
-			merged = true
-			break
+	m, key, _, ok := toolKey(a, tool, args)
+	if !ok {
+		return false
+	}
+	end, had := m[key]
+	return had && s.live(end)
+}
+
+// Record stores an allowance with no end (until restart). Kept for callers
+// that predate timed answers; card answers use RecordFor.
+func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[string]any) bool {
+	if s == nil || sessionID == "" || agentID == "" || tool == "" {
+		return false
+	}
+	_, fp, added, ok := s.recordTool(agentID, tool, args, noEnd)
+	if ok && added && tool == bashToolName {
+		s.emitGrantRecorded(audit.ShellGrantScopeExact, "", agentID, sessionID, tool, map[string]any{"args_fingerprint": fp})
+	}
+	return ok
+}
+
+// RecordFor stores a timed allowance for the agent and returns its
+// wall-clock end (the later one when an allowance was already running). The
+// exact-action tools never get a timed allowance.
+func (s *ApprovalGrantStore) RecordFor(agentID, tool string, args map[string]any, d time.Duration) (time.Time, bool) {
+	if s == nil || agentID == "" || tool == "" || d <= 0 || IsExactActionTool(tool) {
+		return time.Time{}, false
+	}
+	end, fp, _, ok := s.recordTool(agentID, tool, args, d)
+	if ok && tool == bashToolName {
+		s.emitGrantRecorded(audit.ShellGrantScopeExact, "", agentID, "", tool, map[string]any{
+			"args_fingerprint": fp, "duration": d.String(), "expires_at": end.UTC().Format(time.RFC3339),
+		})
+	}
+	return end, ok
+}
+
+func (s *ApprovalGrantStore) recordPrefix(agentID, tool string, grant ShellPrefixGrant, d time.Duration) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.allowancesFor(agentID)
+	for i := range a.prefixes {
+		if a.prefixes[i].tool == tool && a.prefixes[i].grant == grant {
+			a.prefixes[i].end = s.extend(a.prefixes[i].end, true, d)
+			return s.wallEnd(a.prefixes[i].end), false
 		}
 	}
-	if !merged {
-		s.pathGrants[key] = append(existing, grant)
-	}
-	s.mu.Unlock()
+	a.prefixes = append(a.prefixes, timedPrefix{tool: tool, grant: grant, end: s.extend(0, false, d)})
+	return s.wallEnd(a.prefixes[len(a.prefixes)-1].end), true
+}
 
-	// bashToolName: RecordPathGrant is exclusively the ADR-092 D7 filesystem-
-	// widening path, always bash-scoped (see the field's own doc comment —
-	// "bash's own per-turn FSPolicy input"). Emitted on every call, merged
-	// or new: even a widened-access-bits merge into an existing path entry
-	// is a fresh grant decision an operator needs to see (e.g. a session
-	// that first widened {P, read} just widened the SAME path to {P, write}).
-	s.emitGrantRecorded(audit.ShellGrantScopePathWidening, "", agentID, sessionID, bashToolName, map[string]any{
-		"path":   grant.Path,
-		"access": pathAccessLabel(grant.Access),
+// RecordPrefixGrant stores a command-family allowance with no end.
+func (s *ApprovalGrantStore) RecordPrefixGrant(sessionID, agentID, tool string, grant ShellPrefixGrant) bool {
+	if s == nil || sessionID == "" || agentID == "" || tool == "" || grant.Binary == "" {
+		return false
+	}
+	if _, added := s.recordPrefix(agentID, tool, grant, noEnd); !added {
+		return true
+	}
+	s.emitGrantRecorded(audit.ShellGrantScopePrefix, grant.Binary, agentID, sessionID, tool, map[string]any{
+		"arg_prefix": grant.ArgPrefix, "run_in_background": grant.RunInBackground,
 	})
 	return true
 }
 
-// pathAccessLabel renders a fspolicy.PathGrantAccess* bitmask as an
-// operator-readable word for the FR-032(c) grant-recorded audit event.
-// Package-local duplicate of shell_permission_mode.go's accessLabel
-// (pkg/tools) — pkg/tools already imports pkg/security, so the reverse
-// import would cycle; same "duplicated as an independent type" precedent
-// that file's own package comment documents for ShellMode.
+// RecordPrefixGrantFor stores a timed command-family allowance.
+func (s *ApprovalGrantStore) RecordPrefixGrantFor(agentID, tool string, grant ShellPrefixGrant, d time.Duration) (time.Time, bool) {
+	if s == nil || agentID == "" || tool == "" || grant.Binary == "" || d <= 0 {
+		return time.Time{}, false
+	}
+	end, _ := s.recordPrefix(agentID, tool, grant, d)
+	s.emitGrantRecorded(audit.ShellGrantScopePrefix, grant.Binary, agentID, "", tool, map[string]any{
+		"arg_prefix": grant.ArgPrefix, "run_in_background": grant.RunInBackground,
+		"duration": d.String(), "expires_at": end.UTC().Format(time.RFC3339),
+	})
+	return end, true
+}
+
+// IsPrefixAllowed reports whether a running command-family allowance of the
+// agent covers the call.
+func (s *ApprovalGrantStore) IsPrefixAllowed(sessionID, agentID, tool, resolvedBinary string, args []string, runInBackground bool) bool {
+	if s == nil || sessionID == "" || agentID == "" || tool == "" || resolvedBinary == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.agents[agentID]
+	if a == nil {
+		return false
+	}
+	for _, p := range a.prefixes {
+		if p.tool == tool && s.live(p.end) && p.grant.prefixMatches(resolvedBinary, args, runInBackground) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ApprovalGrantStore) recordPath(agentID string, grant fspolicy.PathGrant, d time.Duration) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.allowancesFor(agentID)
+	for i := range a.paths {
+		if a.paths[i].grant.Path == grant.Path && a.paths[i].grant.Access == grant.Access {
+			a.paths[i].end = s.extend(a.paths[i].end, true, d)
+			return s.wallEnd(a.paths[i].end)
+		}
+	}
+	a.paths = append(a.paths, timedPath{grant: grant, end: s.extend(0, false, d)})
+	return s.wallEnd(a.paths[len(a.paths)-1].end)
+}
+
+// RecordPathGrant stores a path allowance (one path with its access) with no
+// end.
+func (s *ApprovalGrantStore) RecordPathGrant(sessionID, agentID string, grant fspolicy.PathGrant) bool {
+	if s == nil || sessionID == "" || agentID == "" || grant.Path == "" || grant.Access == 0 {
+		return false
+	}
+	s.recordPath(agentID, grant, noEnd)
+	s.emitGrantRecorded(audit.ShellGrantScopePathWidening, "", agentID, sessionID, bashToolName, map[string]any{
+		"path": grant.Path, "access": pathAccessLabel(grant.Access),
+	})
+	return true
+}
+
+// RecordPathGrantFor stores a timed path allowance.
+func (s *ApprovalGrantStore) RecordPathGrantFor(agentID string, grant fspolicy.PathGrant, d time.Duration) (time.Time, bool) {
+	if s == nil || agentID == "" || grant.Path == "" || grant.Access == 0 || d <= 0 {
+		return time.Time{}, false
+	}
+	end := s.recordPath(agentID, grant, d)
+	s.emitGrantRecorded(audit.ShellGrantScopePathWidening, "", agentID, "", bashToolName, map[string]any{
+		"path": grant.Path, "access": pathAccessLabel(grant.Access),
+		"duration": d.String(), "expires_at": end.UTC().Format(time.RFC3339),
+	})
+	return end, true
+}
+
 func pathAccessLabel(access uint64) string {
 	switch {
 	case access&fspolicy.PathGrantAccessWrite != 0 && access&fspolicy.PathGrantAccessRead != 0:
@@ -446,101 +487,76 @@ func pathAccessLabel(access uint64) string {
 	}
 }
 
-// PathGrantsFor returns a defensive copy of every ADR-092 D7 filesystem
-// widening recorded for (sessionID, agentID) this session — the value
-// ResolveTurnFSPolicy's grant-overlay parameter (FR-036) is populated from
-// at every bash pre-flight/exec call site. Nil-safe; returns nil for a nil
-// store or an empty sessionID/agentID (never a stored grant leaks under an
-// empty key, matching every other method's fail-safe discipline).
+// PathGrantsFor returns the agent's running path allowances, access merged
+// per path.
 func (s *ApprovalGrantStore) PathGrantsFor(sessionID, agentID string) []fspolicy.PathGrant {
 	if s == nil || sessionID == "" || agentID == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing := s.pathGrants[grantKey{sessionID: sessionID, agentID: agentID}]
-	if len(existing) == 0 {
+	a := s.agents[agentID]
+	if a == nil {
 		return nil
 	}
-	out := make([]fspolicy.PathGrant, len(existing))
-	copy(out, existing)
+	var out []fspolicy.PathGrant
+	for _, p := range a.paths {
+		if !s.live(p.end) {
+			continue
+		}
+		merged := false
+		for i := range out {
+			if out[i].Path == p.grant.Path {
+				out[i].Access |= p.grant.Access
+				merged = true
+			}
+		}
+		if !merged {
+			out = append(out, p.grant)
+		}
+	}
 	return out
 }
 
-// RecordNetworkGrant grants the ADR-092 D8 network-widening scope (FR-044)
-// for (sessionID, agentID) — the whole session's bash child, port-level
-// (DefaultConnectPorts), not domain-level. Idempotent: recording it twice
-// leaves the same single grant. Returns false (no-op) for a nil store or an
-// empty sessionID/agentID.
-func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool {
-	if s == nil || sessionID == "" || agentID == "" {
-		return false
-	}
+func (s *ApprovalGrantStore) recordNetwork(agentID string, hosts []string, d time.Duration) (time.Time, bool) {
 	s.mu.Lock()
-	if s.networkGrants == nil {
-		s.networkGrants = make(map[grantKey]struct{})
+	defer s.mu.Unlock()
+	a := s.allowancesFor(agentID)
+	added := false
+	var end time.Duration
+	named := false
+	for _, h := range hosts {
+		if h == "" {
+			continue
+		}
+		named = true
+		cur, had := a.hosts[h]
+		a.hosts[h] = s.extend(cur, had, d)
+		added = added || !had
+		end = a.hosts[h]
 	}
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	_, dup := s.networkGrants[key]
-	s.networkGrants[key] = struct{}{}
-	s.mu.Unlock()
-
-	// bashToolName: RecordNetworkGrant is exclusively the ADR-092 D8
-	// network-widening grant, always bash-scoped (see the field's own doc
-	// comment). Idempotent state mutation — only emit on the FIRST record,
-	// not on a redundant re-grant of an already-held session grant.
-	if !dup {
-		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName, nil)
+	if !named {
+		a.networkAny = s.extend(a.networkAny, a.hasNetwork, d)
+		added = added || !a.hasNetwork
+		a.hasNetwork = true
+		end = a.networkAny
 	}
-	return true
+	return s.wallEnd(end), added
 }
 
-// RecordNetworkGrantWithHosts atomically records the ADR-092 D8 network-
-// widening grant AND any D-13 "Always Allow" hosts for ONE human approval,
-// emitting exactly ONE shell.grant_recorded row for that approval — never
-// the two separate rows calling RecordNetworkGrant and RecordNetworkHosts
-// back to back for the same decision would each emit on their own (D-13
-// security-review fix, 2026-09-24: one approval must produce one truthful
-// grant row, carrying the hosts when there are any). Idempotent per the
-// same rule as each half individually: a reuse where the grant is already
-// held and every host in hosts is already recorded emits nothing. Returns
-// false (no-op) for a nil store or an empty sessionID/agentID — matching
-// RecordNetworkGrant/RecordNetworkHosts's own fail-safe contract.
+// RecordNetworkGrant stores an allowance for the usual web and lookup ports
+// to any address, with no end.
+func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool {
+	return s.RecordNetworkGrantWithHosts(sessionID, agentID, nil)
+}
+
+// RecordNetworkGrantWithHosts stores a network allowance with no end: the
+// named addresses, or (none named) the usual ports to any address.
 func (s *ApprovalGrantStore) RecordNetworkGrantWithHosts(sessionID, agentID string, hosts []string) bool {
 	if s == nil || sessionID == "" || agentID == "" {
 		return false
 	}
-	s.mu.Lock()
-	if s.networkGrants == nil {
-		s.networkGrants = make(map[grantKey]struct{})
-	}
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	_, dupGrant := s.networkGrants[key]
-	s.networkGrants[key] = struct{}{}
-
-	hostsAdded := false
-	if len(hosts) > 0 {
-		if s.networkHosts == nil {
-			s.networkHosts = make(map[grantKey]map[string]struct{})
-		}
-		set := s.networkHosts[key]
-		if set == nil {
-			set = make(map[string]struct{}, len(hosts))
-			s.networkHosts[key] = set
-		}
-		for _, h := range hosts {
-			if h == "" {
-				continue
-			}
-			if _, dupHost := set[h]; !dupHost {
-				set[h] = struct{}{}
-				hostsAdded = true
-			}
-		}
-	}
-	s.mu.Unlock()
-
-	if !dupGrant || hostsAdded {
+	if _, added := s.recordNetwork(agentID, hosts, noEnd); added {
 		var extra map[string]any
 		if len(hosts) > 0 {
 			extra = map[string]any{"hosts": hosts}
@@ -550,27 +566,95 @@ func (s *ApprovalGrantStore) RecordNetworkGrantWithHosts(sessionID, agentID stri
 	return true
 }
 
-// HasNetworkGrant reports whether (sessionID, agentID) already holds the
-// ADR-092 D8 network-widening grant this session. Fail-safe: a nil store or
-// an empty sessionID/agentID always returns false.
+// RecordNetworkGrantFor stores a timed network allowance.
+func (s *ApprovalGrantStore) RecordNetworkGrantFor(agentID string, hosts []string, d time.Duration) (time.Time, bool) {
+	if s == nil || agentID == "" || d <= 0 {
+		return time.Time{}, false
+	}
+	end, _ := s.recordNetwork(agentID, hosts, d)
+	extra := map[string]any{"duration": d.String(), "expires_at": end.UTC().Format(time.RFC3339)}
+	if len(hosts) > 0 {
+		extra["hosts"] = hosts
+	}
+	s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, "", bashToolName, extra)
+	return end, true
+}
+
+// RecordNetworkHosts adds named addresses with no end (the idempotent
+// re-push of an approved host set).
+func (s *ApprovalGrantStore) RecordNetworkHosts(sessionID, agentID string, hosts []string) bool {
+	if s == nil || sessionID == "" || agentID == "" || len(hosts) == 0 {
+		return false
+	}
+	if _, added := s.recordNetwork(agentID, hosts, noEnd); added {
+		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName, map[string]any{"hosts": hosts})
+	}
+	return true
+}
+
+// HasNetworkGrant reports a running "usual ports to any address" allowance.
 func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
 	if s == nil || sessionID == "" || agentID == "" {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.networkGrants[grantKey{sessionID: sessionID, agentID: agentID}]
-	return ok
+	a := s.agents[agentID]
+	return a != nil && a.hasNetwork && s.live(a.networkAny)
 }
 
-// SessionEgressToken returns the opaque, unguessable D-13 credential for
-// (sessionID, agentID) — minting a fresh one (32 random hex bytes,
-// crypto/rand) the first time it is needed for this key, and returning the
-// SAME value on every later call for the same key so a session's egress
-// grants accumulate under one stable sandbox.EgressProxy.runHosts entry
-// rather than a fresh, orphaned one per call. Returns "" for a nil store or
-// an empty sessionID/agentID (fail-closed: no token means the caller mints
-// nothing and the egress proxy grants nothing for that call).
+// NetworkHostsFor returns the agent's running named-address allowances.
+func (s *ApprovalGrantStore) NetworkHostsFor(sessionID, agentID string) []string {
+	if s == nil || sessionID == "" || agentID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.agents[agentID]
+	if a == nil {
+		return nil
+	}
+	var out []string
+	for h, end := range a.hosts {
+		if s.live(end) {
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RecordSkillAllowance stores a timed allowance of a skill's permission part
+// (C-24, C-26). It never counts as a trust approval.
+func (s *ApprovalGrantStore) RecordSkillAllowance(agentID, skillKey string, d time.Duration) (time.Time, bool) {
+	if s == nil || agentID == "" || skillKey == "" || d <= 0 {
+		return time.Time{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.allowancesFor(agentID)
+	cur, had := a.skills[skillKey]
+	a.skills[skillKey] = s.extend(cur, had, d)
+	return s.wallEnd(a.skills[skillKey]), true
+}
+
+// IsSkillAllowed reports a running skill allowance for the agent.
+func (s *ApprovalGrantStore) IsSkillAllowed(agentID, skillKey string) bool {
+	if s == nil || agentID == "" || skillKey == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.agents[agentID]
+	if a == nil {
+		return false
+	}
+	end, ok := a.skills[skillKey]
+	return ok && s.live(end)
+}
+
+// SessionEgressToken returns (minting once) the (session, agent) egress
+// token.
 func (s *ApprovalGrantStore) SessionEgressToken(sessionID, agentID string) string {
 	if s == nil || sessionID == "" || agentID == "" {
 		return ""
@@ -582,18 +666,10 @@ func (s *ApprovalGrantStore) SessionEgressToken(sessionID, agentID string) strin
 		return tok
 	}
 	tok := newEgressToken()
-	if s.networkTokens == nil {
-		s.networkTokens = make(map[grantKey]string)
-	}
 	s.networkTokens[key] = tok
 	return tok
 }
 
-// newEgressToken mints a fresh 32-hex-character (16-byte) random token.
-// crypto/rand failure is treated the same as every other fail-closed path
-// in this file: an empty result, which SessionEgressToken's callers (and
-// EgressProxy.GrantRunHosts) treat as "grant nothing" rather than a panic
-// or a predictable fallback value.
 func newEgressToken() string {
 	buf := make([]byte, 16)
 	if _, err := cryptorand.Read(buf); err != nil {
@@ -602,73 +678,8 @@ func newEgressToken() string {
 	return hex.EncodeToString(buf)
 }
 
-// RecordNetworkHosts is the D-13 fix's "Always Allow" write path: adds
-// hosts to the SESSION-scoped set already recorded for (sessionID,
-// agentID) — union, not replace, so approving a second, different host
-// later in the same session does not drop the first. Returns false (no-op)
-// for a nil store, an empty sessionID/agentID, or an empty hosts slice.
-func (s *ApprovalGrantStore) RecordNetworkHosts(sessionID, agentID string, hosts []string) bool {
-	if s == nil || sessionID == "" || agentID == "" || len(hosts) == 0 {
-		return false
-	}
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	s.mu.Lock()
-	if s.networkHosts == nil {
-		s.networkHosts = make(map[grantKey]map[string]struct{})
-	}
-	set := s.networkHosts[key]
-	if set == nil {
-		set = make(map[string]struct{}, len(hosts))
-		s.networkHosts[key] = set
-	}
-	added := false
-	for _, h := range hosts {
-		if h == "" {
-			continue
-		}
-		if _, dup := set[h]; !dup {
-			set[h] = struct{}{}
-			added = true
-		}
-	}
-	s.mu.Unlock()
-
-	if added {
-		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName,
-			map[string]any{"hosts": hosts})
-	}
-	return true
-}
-
-// NetworkHostsFor returns the session-scoped set of hosts (D-13's "Always
-// Allow") already recorded for (sessionID, agentID), sorted for a
-// deterministic result. Fail-safe: a nil store or an empty sessionID/
-// agentID always returns nil.
-func (s *ApprovalGrantStore) NetworkHostsFor(sessionID, agentID string) []string {
-	if s == nil || sessionID == "" || agentID == "" {
-		return nil
-	}
-	key := grantKey{sessionID: sessionID, agentID: agentID}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	set := s.networkHosts[key]
-	if len(set) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(set))
-	for h := range set {
-		out = append(out, h)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// NetworkTokensForSession returns every D-13 egress token minted for
-// sessionID, across every agent that used it — called by AgentLoop.
-// CloseSession BEFORE ClearSession wipes this store's own copy, so the
-// caller can also revoke each token on the (separate-package)
-// sandbox.EgressProxy it lives on. Fail-safe: a nil store or an empty
-// sessionID always returns nil.
+// NetworkTokensForSession lists the session's egress tokens (for revocation
+// at session end).
 func (s *ApprovalGrantStore) NetworkTokensForSession(sessionID string) []string {
 	if s == nil || sessionID == "" {
 		return nil
@@ -684,189 +695,42 @@ func (s *ApprovalGrantStore) NetworkTokensForSession(sessionID string) []string 
 	return out
 }
 
-// InheritFrom copies the grant set currently recorded under the SOURCE key
-// {srcSessionID, srcAgentID} into the DESTINATION key {dstSessionID,
-// dstAgentID} — a union, not a replace, so any grant the destination already
-// holds in its own right is preserved, and a copy, not a move, so the source
-// still resolves afterwards. Every tool → every argument fingerprint is
-// copied.
-//
-// This is copy-at-spawn semantics: it snapshots the source's grants at the
-// moment of the call. Grants recorded on the source AFTER a child has already
-// been spawned are NOT retroactively visible to that already-running child —
-// this matches "copy-at-spawn" as specified for delegation inheritance
-// (spawn / run_subagent), not a live/shared reference.
-//
-// # Why the operation takes TWO keys (ADR-057 FR-031, grill finding C-1)
-//
-// The predecessor of this method, Inherit(sessionID, parentAgentID,
-// childAgentID), used ONE session id for both the source lookup and the
-// destination write. That is correct only while parent and child share a
-// session id. ADR-057 gives every delegated child its OWN store-backed
-// session, so the parent's grants live under the parent's session id while
-// the child reads under its own — and "re-key Inherit's first argument to the
-// child" (the obvious one-line fix) makes the SOURCE lookup miss, returns
-// having done nothing, and reports success. The child then blocks on a fresh
-// approval prompt nobody is watching until the 300 s approval timeout fires.
-//
-// Source and destination are therefore separate parameters and MUST be passed
-// separately: at spawn, the SOURCE is the parent's session id + the parent's
-// agent id, and the DESTINATION is the child's OWN session id + the child's
-// agent id. Self-delegation is the same-agent, different-session case
-// (srcAgentID == dstAgentID, srcSessionID != dstSessionID) and is handled by
-// the same union.
-//
-// Both no-op branches are counted and logged rather than returning silently
-// (FR-079) — see inheritSourceMiss / inheritInvalidKey for why each has the
-// log level it has:
-//
-//   - a nil store: no state exists to count into, so it returns immediately;
-//   - any empty key component: counted in inheritInvalidKey, logged at Warn
-//     (a caller defect — every component is a resolved id at spawn);
-//   - a source key holding no grants: counted in inheritSourceMiss, logged at
-//     Debug (routine — most agents never record an "Always Allow").
-//
-// An identity call (source key == destination key) copies nothing because the
-// destination already holds exactly the source's set; it is neither an error
-// nor a miss and is not counted.
+// NetworkTokensForAgent lists the agent's live egress tokens in every
+// session, for revocation when a bash allowance ends (C-26).
+func (s *ApprovalGrantStore) NetworkTokensForAgent(agentID string) []string {
+	if s == nil || agentID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for key, tok := range s.networkTokens {
+		if key.agentID == agentID && tok != "" {
+			out = append(out, tok)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// InheritFrom copies no allowances any more: a helper the agent starts for
+// itself shares the agent's key, and another agent gets nothing (C-26). The
+// call is kept so the spawn path's argument checks and counters stay.
 func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID, dstAgentID string) {
 	if s == nil {
 		return
 	}
 	if srcSessionID == "" || srcAgentID == "" || dstSessionID == "" || dstAgentID == "" {
 		total := s.inheritInvalidKey.Add(1)
-		slog.Warn("approvalgrants: InheritFrom skipped — empty key component, no grants inherited",
-			"src_session_id", srcSessionID,
-			"src_agent_id", srcAgentID,
-			"dst_session_id", dstSessionID,
-			"dst_agent_id", dstAgentID,
+		slog.Warn("approvalgrants: InheritFrom skipped — empty key component",
+			"src_session_id", srcSessionID, "src_agent_id", srcAgentID,
+			"dst_session_id", dstSessionID, "dst_agent_id", dstAgentID,
 			"invalid_key_total", total)
-		return
-	}
-
-	srcKey := grantKey{sessionID: srcSessionID, agentID: srcAgentID}
-	dstKey := grantKey{sessionID: dstSessionID, agentID: dstAgentID}
-
-	s.mu.Lock()
-	srcSet := s.grants[srcKey]
-	_, srcHasNetwork := s.networkGrants[srcKey]
-	// ADR-092: the source-miss short-circuit must consider all FOUR grant
-	// kinds, not only the exact-fingerprint map — a session holding nothing
-	// but a D7 path widening (no exact "Always Allow" ever recorded) must
-	// still inherit it on delegation, not be treated as an empty source and
-	// skipped before the D7/D8/D4 copy blocks below ever run.
-	if len(srcSet) == 0 && len(s.prefixGrants[srcKey]) == 0 && len(s.pathGrants[srcKey]) == 0 && !srcHasNetwork {
-		s.mu.Unlock()
-		total := s.inheritSourceMiss.Add(1)
-		slog.Debug("approvalgrants: InheritFrom found no grants to inherit under the source key",
-			"src_session_id", srcSessionID,
-			"src_agent_id", srcAgentID,
-			"dst_session_id", dstSessionID,
-			"dst_agent_id", dstAgentID,
-			"source_miss_total", total)
-		return
-	}
-	s.inheritExactGrantFingerprints(srcKey, dstKey, srcSet)
-	// ADR-092: the three new grant kinds inherit on delegation exactly like
-	// the exact-fingerprint grant above — "a delegate inherits it via the
-	// same InheritFrom mechanism as command grants" (D7), "same session/
-	// delegate/clear-on-close lifetime as PathGrants" (D8's own text about
-	// the network grant, and D4 about prefix grants). Same union-not-replace,
-	// copy-not-move semantics; same identity short-circuit.
-	if srcKey != dstKey {
-		if srcPrefix := s.prefixGrants[srcKey]; len(srcPrefix) > 0 {
-			dstPrefix := s.prefixGrants[dstKey]
-			if dstPrefix == nil {
-				dstPrefix = make(map[string][]ShellPrefixGrant, len(srcPrefix))
-				s.prefixGrants[dstKey] = dstPrefix
-			}
-			for tool, grants := range srcPrefix {
-				existing := dstPrefix[tool]
-				for _, g := range grants {
-					dup := false
-					for _, e := range existing {
-						if e == g {
-							dup = true
-							break
-						}
-					}
-					if !dup {
-						existing = append(existing, g)
-					}
-				}
-				dstPrefix[tool] = existing
-			}
-		}
-		if srcPaths := s.pathGrants[srcKey]; len(srcPaths) > 0 {
-			dstPaths := s.pathGrants[dstKey]
-			for _, g := range srcPaths {
-				merged := false
-				for i := range dstPaths {
-					if dstPaths[i].Path == g.Path {
-						dstPaths[i].Access |= g.Access
-						merged = true
-						break
-					}
-				}
-				if !merged {
-					dstPaths = append(dstPaths, g)
-				}
-			}
-			s.pathGrants[dstKey] = dstPaths
-		}
-		if _, ok := s.networkGrants[srcKey]; ok {
-			if s.networkGrants == nil {
-				s.networkGrants = make(map[grantKey]struct{})
-			}
-			s.networkGrants[dstKey] = struct{}{}
-		}
-		// D-13 fix: networkHosts/networkTokens are DELIBERATELY NOT
-		// inherited here, unlike every other grant kind above. Both this
-		// store's HasNetworkGrant/PathGrantsFor-style "already granted"
-		// signal AND the sandbox.EgressProxy's own runHosts map (keyed by
-		// TOKEN, not session id) would have to agree for a delegate to
-		// actually pass traffic — copying only the host SET into the
-		// store without also pushing it to the proxy under the delegate's
-		// own token would leave enforceNetworkPreflight reporting
-		// "already granted" (skipping its own escalation, which is the
-		// ONLY call site that pushes to the proxy) while the proxy itself
-		// still 403s the delegate's first request. A delegate therefore
-		// re-asks and re-grants its own hosts on its own first need,
-		// exactly like a brand-new session — a clean fail-closed gap
-		// rather than a "shows granted, silently 403s anyway" one.
-	}
-	s.mu.Unlock()
-}
-
-// inheritExactGrantFingerprints unions exact grants under the caller-held lock.
-func (s *ApprovalGrantStore) inheritExactGrantFingerprints(srcKey, dstKey grantKey, srcSet map[string]map[string]struct{}) {
-	// Identity: the destination set IS the source set. Ranging a map while
-	// writing the keys it already contains is safe, but short-circuiting says
-	// so explicitly instead of relying on that subtlety.
-	if srcKey != dstKey {
-		dstSet := s.grants[dstKey]
-		if dstSet == nil {
-			dstSet = make(map[string]map[string]struct{}, len(srcSet))
-			s.grants[dstKey] = dstSet
-		}
-		for tool, srcFPs := range srcSet {
-			dstFPs := dstSet[tool]
-			if dstFPs == nil {
-				dstFPs = make(map[string]struct{}, len(srcFPs))
-				dstSet[tool] = dstFPs
-			}
-			for fp := range srcFPs {
-				dstFPs[fp] = struct{}{}
-			}
-		}
 	}
 }
 
-// InheritSourceMissCount returns the number of InheritFrom calls that resolved
-// a well-formed source key holding no grants (ADR-057 FR-079). Nil-safe.
-//
-// This is real store state, not instrumentation: a test asserts on it directly
-// to prove the empty-source branch is observable rather than silent.
+// InheritSourceMissCount is kept for metrics callers; always 0 now that
+// nothing is inherited.
 func (s *ApprovalGrantStore) InheritSourceMissCount() int64 {
 	if s == nil {
 		return 0
@@ -874,9 +738,7 @@ func (s *ApprovalGrantStore) InheritSourceMissCount() int64 {
 	return s.inheritSourceMiss.Load()
 }
 
-// InheritInvalidKeyCount returns the number of InheritFrom calls rejected
-// because at least one of the four key components was empty (ADR-057 FR-079,
-// dataset row 6). Nil-safe.
+// InheritInvalidKeyCount counts InheritFrom calls with an empty key part.
 func (s *ApprovalGrantStore) InheritInvalidKeyCount() int64 {
 	if s == nil {
 		return 0
@@ -884,55 +746,134 @@ func (s *ApprovalGrantStore) InheritInvalidKeyCount() int64 {
 	return s.inheritInvalidKey.Load()
 }
 
-// ClearSession removes every grant recorded for sessionID, across all
-// agents. Called when a session ends (AgentLoop.CloseSession) so the store
-// does not grow without bound and a finished session's grants can never leak
-// into an unrelated future session.
-//
-// No-op on a nil store or an empty sessionID.
+// ClearSession forgets the session's egress tokens. Allowances belong to the
+// agent and are not cleared (C-26).
 func (s *ApprovalGrantStore) ClearSession(sessionID string) {
 	if s == nil || sessionID == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key := range s.grants {
-		if key.sessionID == sessionID {
-			delete(s.grants, key)
-		}
-	}
-	// ADR-092: the three new grant kinds die with the session exactly like
-	// the exact-fingerprint grant above (D4's "session grants ... end with
-	// the chat"; D7/D8 explicitly cite the same clear-on-close lifetime).
-	for key := range s.prefixGrants {
-		if key.sessionID == sessionID {
-			delete(s.prefixGrants, key)
-		}
-	}
-	for key := range s.pathGrants {
-		if key.sessionID == sessionID {
-			delete(s.pathGrants, key)
-		}
-	}
-	for key := range s.networkGrants {
-		if key.sessionID == sessionID {
-			delete(s.networkGrants, key)
-		}
-	}
-	// D-13 fix: the two new maps die with the session the same way — this
-	// only clears THIS store's own bookkeeping; the caller (AgentLoop.
-	// CloseSession) is responsible for calling NetworkTokensForSession
-	// BEFORE ClearSession and revoking each token on the sandbox.
-	// EgressProxy separately, since this package cannot reach that one
-	// (pkg/sandbox already imports pkg/security; the reverse would cycle).
-	for key := range s.networkHosts {
-		if key.sessionID == sessionID {
-			delete(s.networkHosts, key)
-		}
-	}
 	for key := range s.networkTokens {
 		if key.sessionID == sessionID {
 			delete(s.networkTokens, key)
 		}
 	}
+}
+
+// ClearAgent drops every allowance and egress token of a deleted agent and
+// returns the tokens so the caller can revoke them at the proxy.
+func (s *ApprovalGrantStore) ClearAgent(agentID string) []string {
+	if s == nil || agentID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	delete(s.agents, agentID)
+	var tokens []string
+	for key, tok := range s.networkTokens {
+		if key.agentID == agentID {
+			tokens = append(tokens, tok)
+			delete(s.networkTokens, key)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(tokens)
+	return tokens
+}
+
+// AllowanceSubjectSkillPrefix marks a skill key in EndFor's key argument.
+const AllowanceSubjectSkillPrefix = "skill:"
+
+// EndFor ends the running allowances that answer the permission of key for
+// each agent in agentIDs (nil = every agent) and returns them for the audit
+// (C-26 point 7). key is a tool name, an MCP server wildcard mcp_<S>_*
+// (every tool of that server), or "skill:<skill key>". Ending a bash
+// permission ends every bash allowance kind; the caller revokes the agent's
+// egress tokens.
+func (s *ApprovalGrantStore) EndFor(agentIDs []string, key string) []EndedAllowance {
+	if s == nil || key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	targets := agentIDs
+	if targets == nil {
+		for id := range s.agents {
+			targets = append(targets, id)
+		}
+		sort.Strings(targets)
+	}
+	var ended []EndedAllowance
+	for _, id := range targets {
+		a := s.agents[id]
+		if a == nil {
+			continue
+		}
+		ended = append(ended, s.endForAgent(id, a, key)...)
+	}
+	return ended
+}
+
+func (s *ApprovalGrantStore) endForAgent(id string, a *agentAllowances, key string) []EndedAllowance {
+	var ended []EndedAllowance
+	if skill, ok := strings.CutPrefix(key, AllowanceSubjectSkillPrefix); ok {
+		if end, had := a.skills[skill]; had && s.live(end) {
+			ended = append(ended, EndedAllowance{AgentID: id, Kind: "skill", Subject: skill})
+		}
+		delete(a.skills, skill)
+		return ended
+	}
+	matches := func(tool string) bool { return tool == key }
+	if prefix, ok := strings.CutSuffix(key, "_*"); ok && prefix != "" {
+		matches = func(tool string) bool { return tool == prefix || strings.HasPrefix(tool, prefix+"_") }
+	}
+	for tool, end := range a.tools {
+		if matches(tool) {
+			if s.live(end) {
+				ended = append(ended, EndedAllowance{AgentID: id, Kind: "tool", Subject: tool})
+			}
+			delete(a.tools, tool)
+		}
+	}
+	for k, end := range a.exact {
+		if tool, fp, _ := strings.Cut(k, "\x00"); tool != bashToolName && matches(tool) {
+			if s.live(end) {
+				ended = append(ended, EndedAllowance{AgentID: id, Kind: "tool", Subject: tool + " " + fp})
+			}
+			delete(a.exact, k)
+		}
+	}
+	if key != bashToolName {
+		return ended
+	}
+	for k, end := range a.exact {
+		if tool, fp, _ := strings.Cut(k, "\x00"); tool == bashToolName {
+			if s.live(end) {
+				ended = append(ended, EndedAllowance{AgentID: id, Kind: "bash_exact", Subject: fp})
+			}
+			delete(a.exact, k)
+		}
+	}
+	for _, p := range a.prefixes {
+		if s.live(p.end) {
+			ended = append(ended, EndedAllowance{AgentID: id, Kind: "shell_family", Subject: p.grant.Binary + " " + p.grant.ArgPrefix})
+		}
+	}
+	for _, p := range a.paths {
+		if s.live(p.end) {
+			ended = append(ended, EndedAllowance{AgentID: id, Kind: "path", Subject: p.grant.Path})
+		}
+	}
+	for h, end := range a.hosts {
+		if s.live(end) {
+			ended = append(ended, EndedAllowance{AgentID: id, Kind: "network", Subject: h})
+		}
+	}
+	if a.hasNetwork && s.live(a.networkAny) {
+		ended = append(ended, EndedAllowance{AgentID: id, Kind: "network", Subject: "*"})
+	}
+	a.prefixes, a.paths = nil, nil
+	a.hosts = map[string]time.Duration{}
+	a.hasNetwork, a.networkAny = false, 0
+	return ended
 }
