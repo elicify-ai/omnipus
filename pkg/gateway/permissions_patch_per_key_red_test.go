@@ -32,9 +32,11 @@ package gateway
 // (CHECK round 1 finding 6: the bad-key leg read the shared API's earlier
 // leg and mistook a preserved value for a leak).
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 
 	"github.com/stretchr/testify/require"
@@ -57,25 +59,35 @@ func TestPermissionsPatch_PerKey(t *testing.T) {
 	t.Run("S-99: one audit entry per changed key with key, old, new and actor; none for equal-value writes", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
 		auditDir := attachTestAuditor(t, api)
+		// Explicit old values, not assumptions about shipped defaults. A
+		// two-key write also detects crossed or aggregated audit records.
+		seed := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"ask"},"policies":{"send_email":"deny"}}`)
+		require.Equal(t, http.StatusOK, seed.Code, "setup: %s", seed.Body.String())
 		before := len(readAuditEntries(t, auditDir, audit.EventSecuritySettingChange))
 
-		w := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"deny"}}`)
+		w := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"deny"},"policies":{"send_email":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		entries := readAuditEntries(t, auditDir, audit.EventSecuritySettingChange)
-		require.Len(t, entries, before+1,
-			"exactly one change entry for one changed key")
-		if len(entries) == before+1 {
-			e := entries[before]
-			require.Contains(t, e["key"], "plan", "S-99: the entry names the changed key")
-			require.Contains(t, e, "old", "S-99: the entry names the old value")
-			require.Equal(t, "deny", e["new"], "S-99: the entry names the new value")
-			require.NotEmpty(t, e["actor"], "S-99: the entry names the actor")
+		require.Len(t, entries, before+2, "C-2/S-99: exactly one canonical audit record per changed key")
+		observed := make([]map[string]any, 0, 2)
+		for _, e := range entries[before:] {
+			// These are EmitSecuritySettingChange's published field names.
+			for _, field := range []string{"resource", "old_value", "new_value", "actor"} {
+				require.Contains(t, e, field, "S-99: each individual record carries all four fields")
+			}
+			observed = append(observed, map[string]any{
+				"resource": e["resource"], "old_value": e["old_value"], "new_value": e["new_value"], "actor": e["actor"],
+			})
 		}
+		require.ElementsMatch(t, []map[string]any{
+			{"resource": "sandbox.skill_policies.plan", "old_value": "ask", "new_value": "deny", "actor": envTokenName},
+			{"resource": "sandbox.tool_policies.send_email", "old_value": "deny", "new_value": "ask", "actor": envTokenName},
+		}, observed, "S-99 binds each key, old, new and authenticated actor together")
 
-		w = patchPermissions(t, api, routes, `{"skill_policies":{"plan":"deny"}}`)
+		w = patchPermissions(t, api, routes, `{"skill_policies":{"plan":"deny"},"policies":{"send_email":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "equal-value write is a valid no-op (body: %s)", w.Body.String())
-		require.Len(t, readAuditEntries(t, auditDir, audit.EventSecuritySettingChange), before+1,
-			"the equal-value write adds no entry")
+		require.Equal(t, entries, readAuditEntries(t, auditDir, audit.EventSecuritySettingChange),
+			"equal-value writes add or alter no change entry")
 	})
 
 	t.Run("D6: an empty request is 400 Nothing to change.", func(t *testing.T) {
@@ -109,12 +121,22 @@ func TestPermissionsPatch_PerKey(t *testing.T) {
 
 	t.Run("D6 row 9: the same skill twice in one map, differing by letter case, is refused", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
+		auditDir := attachTestAuditor(t, api)
+		seed := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"allow"},"policies":{"send_email":"deny"}}`)
+		require.Equal(t, http.StatusOK, seed.Code, "setup: preserve an EXISTING plan value: %s", seed.Body.String())
+		before := getPermissions(t, api, routes)
+		require.Equal(t, http.StatusOK, before.Code, "setup read model: %s", before.Body.String())
+		entries := readAuditEntries(t, auditDir, audit.EventSecuritySettingChange)
 		w := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"ask","PLAN":"deny"}}`)
-		requireErrContains(t, w, http.StatusBadRequest, "`plan` is listed twice.")
+		require.Equal(t, http.StatusBadRequest, w.Code, "C-23 duplicate request: %s", w.Body.String())
+		var failure gen.ErrorResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &failure))
+		require.Equal(t, "`plan` is listed twice.", failure.Error, "D6#9 exact refusal, not an unrelated error")
 
 		after := getPermissions(t, api, routes)
-		require.NotContains(t, after.Body.String(), `"plan"`,
-			"D6 row 9: nothing saved for the duplicate request")
+		require.Equal(t, http.StatusOK, after.Code, "after read model: %s", after.Body.String())
+		require.JSONEq(t, before.Body.String(), after.Body.String(), "D6#9: complete stored state, including pre-existing plan, is unchanged")
+		require.Equal(t, entries, readAuditEntries(t, auditDir, audit.EventSecuritySettingChange), "a refused request writes no change audit")
 	})
 
 	t.Run("D6: permission and visibility for one skill together are accepted (independent maps)", func(t *testing.T) {

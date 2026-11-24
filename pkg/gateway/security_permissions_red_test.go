@@ -25,7 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 
 	"github.com/stretchr/testify/require"
 )
@@ -58,8 +60,10 @@ const permissionsTestBearer = "skills-tools-permissions-test"
 // full route table, and returns both.
 func newPermissionsAPI(t *testing.T) (*restAPI, routeTable) {
 	t.Helper()
-	api := newTestRestAPIWithHome(t)
-	// newTestRestAPIWithHome clears the token; restore it so through-the-mux
+	api := buildExecutorTestAPI(t) // Its native OMNIPUS_HOME is the same home the routes serve.
+	t.Setenv(config.EnvConfig, filepath.Join(api.homePath, "config.json"))
+	installPlanSkillFixture(t, api.homePath) // C-23 known installed key used by the permission rows.
+	// The fixture clears the token; restore it so through-the-mux
 	// requests authenticate via the env bearer path.
 	t.Setenv("OMNIPUS_BEARER_TOKEN", permissionsTestBearer)
 	routes := routeTable{}
@@ -126,13 +130,13 @@ func TestPermissionsPatch_RefusesLegacyTrustValues(t *testing.T) {
 
 	// The legacy endpoint is retired: PUT /security/skill-trust answers 404
 	// and stores nothing (Dataset D3 row 9, C-22 row 6).
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", strings.NewReader(`{"skill_trust":"warn_unverified"}`))
+	r := httptest.NewRequest(http.MethodPut, legacySkillTrustPath, strings.NewReader(`{"skill_trust":"warn_unverified"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+permissionsTestBearer)
 	r = withAdminRole(r)
 	w = httptest.NewRecorder()
 	routes.ServeHTTP(w, r)
-	require.Equal(t, http.StatusNotFound, w.Code, "PUT /security/skill-trust is retired by this package (C-22 row 6); got %d body: %s", w.Code, w.Body.String())
+	require.Equal(t, http.StatusNotFound, w.Code, "PUT %s is retired by this package (C-22 row 6); got %d body: %s", legacySkillTrustPath, w.Code, w.Body.String())
 }
 
 // TestPermissionsPatch_SkillAndVisibilityMembers (order 8, Dataset D6).
@@ -151,9 +155,12 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		skillPolicies := resp["skill_policies"].(map[string]any)
+		skillPolicies, ok := resp["skill_policies"].(map[string]any)
+		require.True(t, ok, "C-2 skill_policies must be an object")
 		require.Equal(t, "deny", skillPolicies["plan"], "S-09: the named skill is stored")
-		require.Equal(t, "ask", resp["policies"].(map[string]any)["bash"], "only the named key changed (C-2)")
+		policies, ok := resp["policies"].(map[string]any)
+		require.True(t, ok, "C-2 policies must be an object")
+		require.Equal(t, "ask", policies["bash"], "only the named key changed (C-2)")
 		entries := readAuditEntries(t, auditDir, audit.EventSecuritySettingChange)
 		require.Len(t, entries, before+1, "one EmitSecuritySettingChange per changed key (C-2)")
 	})
@@ -168,12 +175,19 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 
 	t.Run("D6#3 empty skill_policies member changes nothing of the skills", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
+		before := getPermissions(t, api, routes)
+		require.Equal(t, http.StatusOK, before.Code, "setup read model: %s", before.Body.String())
+		var stored map[string]any
+		require.NoError(t, json.Unmarshal(before.Body.Bytes(), &stored))
+		require.Contains(t, stored, "skill_policies", "C-2 returns a complete installed-skill map")
 		w := patchPermissions(t, api, routes, `{"skill_policies":{},"policies":{"bash":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		require.Empty(t, resp["skill_policies"].(map[string]any), "empty member changes nothing (C-2)")
-		require.Equal(t, "ask", resp["policies"].(map[string]any)["bash"])
+		require.Equal(t, stored["skill_policies"], resp["skill_policies"], "empty member preserves the complete stored map, not an invented empty map (C-2)")
+		policies, ok := resp["policies"].(map[string]any)
+		require.True(t, ok, "C-2 policies must be an object")
+		require.Equal(t, "ask", policies["bash"])
 	})
 
 	t.Run("D6#4+18 request naming no key at all is Nothing to change", func(t *testing.T) {
@@ -212,14 +226,29 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		require.Equal(t, "ask", resp["skill_policies"].(map[string]any)["plan"], "stored lower case (C-23)")
-		require.NotContains(t, resp["skill_policies"], "PLAN", "no duplicate upper-case key stored (C-23)")
+		skillPolicies, ok := resp["skill_policies"].(map[string]any)
+		require.True(t, ok, "C-2 skill_policies must be an object")
+		require.Equal(t, "ask", skillPolicies["plan"], "stored lower case (C-23)")
+		require.NotContains(t, skillPolicies, "PLAN", "no duplicate upper-case key stored (C-23)")
 	})
 
 	t.Run("D6#9 same skill twice in one request is listed twice", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
+		auditDir := attachTestAuditor(t, api)
+		seed := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"allow"},"policies":{"send_email":"deny"}}`)
+		require.Equal(t, http.StatusOK, seed.Code, "setup existing values: %s", seed.Body.String())
+		before := getPermissions(t, api, routes)
+		require.Equal(t, http.StatusOK, before.Code, "setup read model: %s", before.Body.String())
+		entries := readAuditEntries(t, auditDir, audit.EventSecuritySettingChange)
 		w := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"ask","PLAN":"deny"}}`)
-		requireErrContains(t, w, http.StatusBadRequest, "plan` is listed twice.")
+		require.Equal(t, http.StatusBadRequest, w.Code, "C-23 duplicate refusal: %s", w.Body.String())
+		var failure gen.ErrorResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &failure))
+		require.Equal(t, "`plan` is listed twice.", failure.Error, "D6#9 requires the duplicate error, not an unrelated refusal")
+		after := getPermissions(t, api, routes)
+		require.Equal(t, http.StatusOK, after.Code, "after read model: %s", after.Body.String())
+		require.JSONEq(t, before.Body.String(), after.Body.String(), "duplicate refusal preserves complete pre-existing state")
+		require.Equal(t, entries, readAuditEntries(t, auditDir, audit.EventSecuritySettingChange), "duplicate refusal writes no change audit")
 	})
 
 	t.Run("D6#10 null value is refused naming the key", func(t *testing.T) {
@@ -231,10 +260,13 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 
 	t.Run("D6#11 one bad key refuses the whole request (atomic)", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
+		before := getPermissions(t, api, routes)
+		require.Equal(t, http.StatusOK, before.Code, "setup read model: %s", before.Body.String())
 		w := patchPermissions(t, api, routes, `{"skill_policies":{"plan":"deny","nope":"deny"}}`)
-		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		requireErrContains(t, w, http.StatusBadRequest, "`nope` is not a known skill.")
 		w = getPermissions(t, api, routes)
-		require.NotContains(t, w.Body.String(), `"plan"`, "plan unchanged: nothing saved (C-2)")
+		require.Equal(t, http.StatusOK, w.Code, "after read model: %s", w.Body.String())
+		require.JSONEq(t, before.Body.String(), w.Body.String(), "C-2 complete pre-existing map is preserved, including installed plan")
 	})
 
 	t.Run("D6#12 always-ask tool cannot take allow", func(t *testing.T) {
@@ -262,7 +294,9 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "tab B, body: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		require.Equal(t, "allow", resp["policies"].(map[string]any)["bash"], "stored allow (later wins, C-2)")
+		policies, ok := resp["policies"].(map[string]any)
+		require.True(t, ok, "C-2 policies must be an object")
+		require.Equal(t, "allow", policies["bash"], "stored allow (later wins, C-2)")
 	})
 
 	t.Run("D6#15 same-value retry saves nothing and writes no audit entry", func(t *testing.T) {
@@ -285,17 +319,16 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 
 	t.Run("D6#16 project key of an existing workspace project shelf is valid", func(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
-		// Seed workspace W1 with a project skill folder: C-23 accepts
-		// project:<W>/<slug> when W exists and the slug is on its shelf.
-		wsRoot := filepath.Join(api.homePath, "workspaces", "w1")
-		require.NoError(t, os.MkdirAll(filepath.Join(wsRoot, ".claude", "skills", "notes"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(wsRoot, ".claude", "skills", "notes", "SKILL.md"),
-			[]byte("---\nname: notes\ndescription: project notes helper\n---\nbody"), 0o644))
+		// A real W1 record and protected external mount establish its project
+		// shelf. A directory called workspaces/w1 alone is not a workspace.
+		seedKeyValidationMounts(t, api, "mia")
 		w := patchPermissions(t, api, routes, `{"skill_policies":{"project:w1/notes":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		require.Equal(t, "ask", resp["skill_policies"].(map[string]any)["project:w1/notes"], "C-19 project key stored")
+		skillPolicies, ok := resp["skill_policies"].(map[string]any)
+		require.True(t, ok, "C-2 skill_policies must be an object")
+		require.Equal(t, "ask", skillPolicies["project:w1/notes"], "C-19 project key stored")
 	})
 
 	t.Run("D6#20 atomic-write failure stores nothing and says the file could not be written", func(t *testing.T) {

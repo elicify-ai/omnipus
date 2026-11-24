@@ -146,19 +146,25 @@ func TestLegacySecurityEndpoints_Retired(t *testing.T) {
 		}
 		write("src/legacy-caller.ts", `await fetch("/api/v1/security/skill-trust", { method: "PUT" });`)
 		write("pkg/note.go", "// legacy /api/v1/security/skill-trust was retired (comment only)")
+		// Negative retirement probes use this file's constants. The guard is
+		// not disabled for their file, so a second, real legacy caller in the
+		// same file MUST still be found.
+		write("pkg/gateway/security_permissions_red_test.go", `r := httptest.NewRequest(http.MethodPut, legacySkillTrustPath, nil)`)
+		write("tests/z-real-caller.test.ts", `fetch("/api/v1/security/tool-policies");`)
 		write("node_modules/leftover.js", `fetch("/api/v1/security/tool-policies");`)
 		write("pkg/gateway/spa/assets/app.js", `fetch("/api/v1/security/tool-policies");`)
 		write("pkg/api/generated/types.gen.go", `const legacy = "/api/v1/security/skill-trust";`)
 
 		found := scanLegacySecurityPathCallers(t, root)
 		sort.Strings(found)
-		require.Len(t, found, 1,
-			"guard instrument: exactly the planted caller is caught — comment-only, "+
-				"generated and build-output copies must not be")
-		if len(found) == 1 {
-			require.Contains(t, found[0], filepath.Join("src", "legacy-caller.ts"),
-				"guard instrument: the planted caller is the one caught")
-		}
+		require.Len(t, found, 2,
+			"both real callers (including a .test.ts) are caught; the intentional constant-based probe is not")
+		require.Contains(t, found[0], "src/legacy-caller.ts")
+		require.Contains(t, found[1], "tests/z-real-caller.test.ts")
+		write("pkg/gateway/security_permissions_red_test.go", `r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", nil)`)
+		found = scanLegacySecurityPathCallers(t, root)
+		require.Len(t, found, 3, "the probe file is NOT blanket-exempt: an unintended direct caller is caught too")
+		require.Contains(t, found[0], "pkg/gateway/security_permissions_red_test.go")
 
 		clean := scanLegacySecurityPathCallers(t, t.TempDir())
 		require.Empty(t, clean, "guard instrument: a clean tree passes")
