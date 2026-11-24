@@ -31,8 +31,8 @@ var legacyPreviewedToolNames = map[string]struct{}{"serve_web": {}}
 
 // VisibilityConversionServer is one MCP server's old state.
 type VisibilityConversionServer struct {
-	ID       string
-	Deferred *bool
+	ID       string `json:"id"`
+	Deferred *bool  `json:"deferred"`
 }
 
 // VisibilityConversionInput is the pre-upgrade state the conversion reads:

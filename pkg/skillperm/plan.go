@@ -27,8 +27,8 @@ func loadOrTakeSnapshot(home, entities string) (Snapshot, error) {
 	path := filepath.Join(entities, snapshotName)
 	raw, err := os.ReadFile(path)
 	if err == nil {
-		if err := json.Unmarshal(raw, &snap); err != nil {
-			return snap, fmt.Errorf("skillperm: parse snapshot: %w", err)
+		if perr := json.Unmarshal(raw, &snap); perr != nil {
+			return snap, fmt.Errorf("skillperm: parse snapshot: %w", perr)
 		}
 		return snap, nil
 	}
