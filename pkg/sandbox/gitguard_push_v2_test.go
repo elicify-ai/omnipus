@@ -1,0 +1,145 @@
+package sandbox
+
+// Developer unit rows for H55 v2 (ruling-H55-v2.md, review h55-review.md):
+// F2 abbreviations and quote splitting, F3 operand parsing, F4 scope, plus the
+// controls that must stay allowed.
+
+import (
+	"strings"
+	"testing"
+)
+
+const h55v2Override = "receive-side override (H55)"
+
+func TestGitGuardPushRulesV2_ShellRuleAAbbreviationsAndQuoteSplitting(t *testing.T) {
+	l := newPushRuleLayout(t)
+	for _, script := range []string{
+		`git push --rece='x' ev master`,
+		`git push --recei=x ev master`,
+		`git push --ex=x ev master`,
+		`git push --exe x ev master`,
+		`git send-pack --ex=x ev master`,
+		`git push --rece='git -c rec""eive.denyCurrentBranch=ignore receive-pa""ck' ev HEAD:master`,
+		`git push --rec\eive-pack=x ev master`,
+		`git -c alias.p='push --rece=x' p`,
+		`git -c alias.p='push --ex=x' p ev master`,
+		`git -c "rece"ive.denyCurrentBranch=ignore push ev master`,
+		`if true; then git push --rece=x ev master; fi`,
+		`sudo git push --exe x ev master`,
+		`/usr/bin/git push --rece=x ev master`,
+		`git log --grep=receive-pack`, // accepted refusal: a git command naming the marker
+	} {
+		d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount)
+		if d.Allowed || !strings.Contains(d.PolicyRule, h55v2Override) {
+			t.Errorf("%q must be refused by Rule A, got allowed=%t rule=%q", script, d.Allowed, d.PolicyRule)
+		}
+	}
+}
+
+func TestGitGuardPushRulesV2_RefusalNamesTheMarker(t *testing.T) {
+	l := newPushRuleLayout(t)
+	d := l.g.InspectExec([]string{"bash", "-c", `git log --grep=receive-pack`}, l.mount)
+	if d.Allowed || !strings.Contains(d.Reason, "'receive-pack'") {
+		t.Fatalf("the refusal must name the marker, got allowed=%t reason=%q", d.Allowed, d.Reason)
+	}
+	d = l.g.InspectExec([]string{"bash", "-c", `git push --exe x ev`}, l.mount)
+	if d.Allowed || !strings.Contains(d.Reason, "'--exe'") {
+		t.Fatalf("the refusal must name the --ex abbreviation, got allowed=%t reason=%q", d.Allowed, d.Reason)
+	}
+}
+
+func TestGitGuardPushRulesV2_DirectArgvRuleA(t *testing.T) {
+	l := newPushRuleLayout(t)
+	for _, argv := range [][]string{
+		{"git", "push", "--rece=x", "ev", "m"},
+		{"git", "push", "--exe", "x", "ev"},
+		{"git", "push", "--ex=x", "ev"},
+		{"git", "-c", "alias.p=push --rece=x", "p"},
+		{"git", "push", "--rece=git -c rec\"\"eive.denyCurrentBranch=ignore receive-pa\"\"ck", "ev", "m"},
+	} {
+		d := l.g.InspectExec(argv, l.mount)
+		if d.Allowed || !strings.Contains(d.PolicyRule, h55v2Override) {
+			t.Errorf("%q must be refused by Rule A, got allowed=%t rule=%q", argv, d.Allowed, d.PolicyRule)
+		}
+	}
+}
+
+func TestGitGuardPushRulesV2_RuleBOperandParsing(t *testing.T) {
+	l := newPushRuleLayout(t)
+	for _, script := range []string{
+		`git push $(dirname $(pwd))/work HEAD:refs/heads/yy`,
+		`git push $(dirname "$(pwd)")/work HEAD:refs/heads/yy`,
+		"git push `dirname \\`pwd\\``/work HEAD:refs/heads/yy",
+		`git push --rep="$(dirname $PWD)/work" HEAD:refs/heads/x`,
+		`git push --rep "$(dirname $PWD)/work" HEAD:refs/heads/x`,
+		`git push --repo=$(dirname $(pwd))/work HEAD:refs/heads/x`,
+		`git send-pack $(dirname $(pwd))/work HEAD:x`,
+	} {
+		d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount)
+		if d.Allowed || !strings.Contains(d.PolicyRule, "push target") {
+			t.Errorf("%q must be refused by Rule B, got allowed=%t rule=%q", script, d.Allowed, d.PolicyRule)
+		}
+	}
+	if d := l.g.InspectExec([]string{"git", "push", "--rep=" + l.work, "HEAD:x"}, l.mount); d.Allowed {
+		t.Errorf("direct argv --rep=<work> must be refused")
+	}
+}
+
+func TestGitGuardPushRulesV2_AllowedControls(t *testing.T) {
+	l := newPushRuleLayout(t)
+	for _, script := range []string{
+		// F4: non-git commands that mention a marker.
+		`grep -rn receive-pack docs`,
+		`echo receivepack >> notes.txt`,
+		`wc -c receive.txt`,
+		`cat GIT_CONFIG_KEY_notes.md`,
+		`grep -c receive.go f`,
+		`ls | grep -c receive.x`,
+		// H54 idioms and S-20.
+		`git push origin "$BRANCH"`,
+		`git push origin 'feat/*'`,
+		`REMOTE=origin; git push "$REMOTE" main`,
+		`git push "${REMOTE:-origin}" main`,
+		`git push "$(git remote get-url origin)" main`,
+		`git commit -m "why?"`,
+		`git push -u origin HEAD`,
+		`git push origin :refs/heads/old`,
+		`git push --follow-tags origin main`,
+		`git push origin HEAD:refs/heads/s20`,
+		`git -C ` + l.mount + ` push origin HEAD`,
+		`git push https://github.com/org/repo.git HEAD:refs/heads/s20`,
+		`git log --oneline -n 3 && git diff --stat`,
+		// --ex outside a push segment is not an override.
+		`git log --exit-code; git status`,
+	} {
+		if d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount); !d.Allowed {
+			t.Errorf("%q must stay allowed, got %s (%s)", script, d.Reason, d.PolicyRule)
+		}
+	}
+	for _, argv := range [][]string{
+		{"git", "push", "origin", "HEAD:refs/heads/s20"},
+		{"git", "push", "-u", "origin", "HEAD"},
+		{"grep", "-rn", "receive-pack", "docs"},
+	} {
+		if d := l.g.InspectExec(argv, l.mount); !d.Allowed {
+			t.Errorf("%q must stay allowed, got %s (%s)", argv, d.Reason, d.PolicyRule)
+		}
+	}
+}
+
+func TestScanShellWord_BalancesSubstitutions(t *testing.T) {
+	rows := []struct{ in, want string }{
+		{`$(dirname $(pwd))/work HEAD:x`, `$(dirname $(pwd))/work`},
+		{`"$(dirname "$PWD")/work" HEAD`, `"$(dirname "$PWD")/work"`},
+		{"`a \\`b\\``/w rest", "`a \\`b\\``/w"},
+		{`'a b'c d`, `'a b'c`},
+		{`origin;git`, `origin`},
+		{`x)`, `x`},
+		{`$(unclosed /w`, `$(unclosed /w`},
+	}
+	for _, r := range rows {
+		if got := r.in[:scanShellWord(r.in)]; got != r.want {
+			t.Errorf("scanShellWord(%q) = %q, want %q", r.in, got, r.want)
+		}
+	}
+}

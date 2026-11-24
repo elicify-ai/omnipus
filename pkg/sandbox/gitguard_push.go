@@ -1,20 +1,29 @@
 package sandbox
 
-// H55 (#1960 S1, architect ruling 2026-11-24): a push from an approved write
-// mount must not write into a protected evidence repository. Two rules, both
-// active only while a work folder is registered (InspectExec returns early
-// otherwise), on the shell path and on the direct git path:
+// H55 (#1960 S1, architect rulings ruling-H55.md and ruling-H55-v2.md): a push
+// from an approved write mount must not write into a protected evidence
+// repository. The main control is structural: the evidence repository pins
+// receive.denyCurrentBranch, denyNonFastForwards, denyDeletes and core.bare in
+// its own local config (pkg/gitevidence/receivepins.go), which outranks global
+// and system config. These two text rules are the second line, for what local
+// config cannot outrank (command-line and environment config). Both are active
+// only while a work folder is registered (InspectExec returns early otherwise),
+// on the shell path and on the direct git path:
 //
-//   - Rule A, the receive-side override. A push or send-pack can name the
-//     program that runs on the RECEIVING side (--receive-pack, --exec,
-//     remote.<n>.receivepack) and pass it receive.* settings, which switches
-//     off git's own refusal to move a checked-out branch. The ordinary product
-//     never needs any of these, so they are refused outright.
-//   - Rule B, the push target. A push or send-pack whose remote operand is a
-//     path inside a protected work folder (absolute, relative to the starting
-//     working directory, or file://), or a path built at run time (an
-//     expansion, glob, "~" or backslash together with a "/" or a leading "."),
-//     is refused. Plain remote names and network URLs pass.
+//   - Rule A, the receive-side override. Only for a command line that holds a
+//     git word (F4). The text is lower-cased, blank runs collapsed and every
+//     ' " and \ deleted (quote splitting, F2), then refused when it holds
+//     receive-pack or receivepack, a word starting with --rece (git's
+//     abbreviations of --receive-pack), a word starting with --ex in a segment
+//     with push or send-pack (abbreviations of --exec), a receive.* setting via
+//     -c or --config-env, or the GIT_CONFIG_PARAMETERS/COUNT/KEY_ markers.
+//   - Rule B, the push target. A push or send-pack whose remote operand (or a
+//     --repo value, any abbreviation from --rep) is a path inside a protected
+//     work folder (absolute, relative to the starting working directory, or
+//     file://), or a path built at run time (an expansion, glob, "~" or
+//     backslash together with a "/" or a leading "."), is refused. The operand
+//     is read with $( ) and backticks balanced, nested included (F3). Plain
+//     remote names and network URLs pass.
 //
 // Like every check in this package this is not a shell parser (LIM-02): a
 // disguised command (a script file, eval, base64) still reaches git unseen.
@@ -31,11 +40,11 @@ const h55OverridePolicy = "git.sandbox.deny: receive-side override (H55)"
 // h55PushTargetPolicy is the rule id of a Rule B refusal.
 const h55PushTargetPolicy = "git.sandbox.deny: push target is the protected evidence repo or a run-time path (H55)"
 
-func h55OverrideDeny(what string) ExecDecision {
+func h55OverrideDeny(marker string) ExecDecision {
 	return ExecDecision{
 		Allowed:    false,
 		Verb:       "push",
-		Reason:     "a receive-side override (" + what + ") is denied while a protected evidence repository is registered",
+		Reason:     "a git command holding the receive-side override marker '" + marker + "' is denied while a protected evidence repository is registered",
 		PolicyRule: h55OverridePolicy,
 	}
 }
@@ -49,29 +58,94 @@ func h55PushTargetDeny(verb, remote string) ExecDecision {
 	}
 }
 
+// ---- Rule A ---------------------------------------------------------------
+
+// h55Normalise lower-cases text, collapses blank runs and deletes every ', "
+// and \ (F2: quote splitting such as rec""eive-pa""ck).
+func h55Normalise(text string) string {
+	return collapseBlanks(strings.NewReplacer(`'`, "", `"`, "", `\`, "").Replace(strings.ToLower(text)))
+}
+
+// h55SegmentSeparators split a normalised script into command segments.
+const h55SegmentSeparators = ";&|()`\n\r"
+
+// h55Words splits a segment into words on blanks and "=", so
+// "alias.p=push" yields "push" and "--rece=x" yields "--rece".
+func h55Words(segment string) []string {
+	return strings.FieldsFunc(segment, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '='
+	})
+}
+
+// h55HasGitWord reports whether the normalised text holds git as a word ("git"
+// or a path ending in "/git"). It is deliberately wider than "git in command
+// position": shell keywords (then, do, if), prefixes (sudo, xargs, env) and
+// assignments can all stand before a command word, and a wider scope only
+// refuses scripts that mention git together with an override marker.
+func h55HasGitWord(norm string) bool {
+	for _, w := range strings.FieldsFunc(norm, func(r rune) bool {
+		return r == ' ' || r == '\t' || strings.ContainsRune(h55SegmentSeparators, r)
+	}) {
+		if w == "git" || strings.HasSuffix(w, "/git") {
+			return true
+		}
+	}
+	return false
+}
+
 // h55ReceiveSettingFlag matches a receive.* setting passed on a command line:
 // "-c receive.x", "-creceive.x", "-c=receive.x", "--config-env receive.x=V"
-// and "--config-env=receive.x=V", with an optional opening quote. Input is
-// lower-cased with blank runs collapsed.
-var h55ReceiveSettingFlag = regexp.MustCompile(`(?:^|[\s;&|(])(?:-c|--config-env)[ =]?['"]?receive\.`)
+// and "--config-env=receive.x=V". Input is normalised.
+var h55ReceiveSettingFlag = regexp.MustCompile(`(?:^|[\s;&|(])(?:-c|--config-env)[ =]?receive\.`)
 
-// h55ScriptOverride applies Rule A to a shell script. lower is the script
-// lower-cased with blank runs collapsed and BEFORE stripGitGlobalOptions, which
-// would remove the -c values this rule reads. It reports the trigger found.
-func h55ScriptOverride(lower string) (string, bool) {
+// h55OverrideMarker applies Rule A's markers to normalised text that holds a
+// git word, and reports the first marker found.
+func h55OverrideMarker(norm string) (string, bool) {
 	for _, marker := range []string{
 		"receive-pack", "receivepack",
 		"git_config_parameters", "git_config_count", "git_config_key_",
 	} {
-		if strings.Contains(lower, marker) {
+		if strings.Contains(norm, marker) {
 			return marker, true
 		}
 	}
-	if h55ReceiveSettingFlag.MatchString(lower) {
+	if h55ReceiveSettingFlag.MatchString(norm) {
 		return "-c receive.*", true
+	}
+	for _, segment := range strings.FieldsFunc(norm, func(r rune) bool { return strings.ContainsRune(h55SegmentSeparators, r) }) {
+		words := h55Words(segment)
+		pushing := false
+		for _, w := range words {
+			if w == "push" || w == "send-pack" {
+				pushing = true
+			}
+		}
+		for _, w := range words {
+			if strings.HasPrefix(w, "--rece") {
+				return w, true
+			}
+			if pushing && strings.HasPrefix(w, "--ex") {
+				return w, true
+			}
+		}
 	}
 	return "", false
 }
+
+// h55RuleA applies Rule A to a command text (a script, or a direct argv
+// joined with spaces).
+func h55RuleA(text string) (ExecDecision, bool) {
+	norm := h55Normalise(text)
+	if !h55HasGitWord(norm) {
+		return ExecDecision{}, false
+	}
+	if marker, ok := h55OverrideMarker(norm); ok {
+		return h55OverrideDeny(marker), true
+	}
+	return ExecDecision{}, false
+}
+
+// ---- Rule B ---------------------------------------------------------------
 
 // gitGlobalOptionRunCased is gitGlobalOptionRun for text whose case is kept
 // (paths are case-sensitive), so the value-taking "-C <dir>" is read as one
@@ -87,56 +161,96 @@ var gitGlobalOptionRunCased = regexp.MustCompile(
 // in a script whose global options are already stripped.
 var gitPushVerbAt = regexp.MustCompile(`\bgit[ \t]+(push|send-pack)(?:[ \t]|$)`)
 
-// leadingPathWord matches one shell word at the start of the input.
-var leadingPathWord = regexp.MustCompile(`^` + pathWord)
-
-// h55PushValueOptions are the push/send-pack options whose value may sit in the
-// next word; that word is not the remote operand.
-var h55PushValueOptions = map[string]struct{}{
-	"--receive-pack": {}, "--exec": {}, "--repo": {}, "-o": {}, "--push-option": {},
+// scanShellWord returns the length of the shell word at the start of s: it
+// ends at an unquoted blank or one of ; & | ) at the top level, and it keeps
+// single and double quotes, backslash escapes, $( ) and backticks balanced,
+// nested included (F3: $(dirname $(pwd))/work is one word). An unbalanced
+// construct runs to the end of s.
+func scanShellWord(s string) int {
+	var stack []byte // '(' for $( or a nested (, '`' for a backtick, '"' for a double quote
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		top := byte(0)
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		switch {
+		case c == '\\':
+			i += 2
+			continue
+		case top == '"':
+			switch {
+			case c == '"':
+				stack = stack[:len(stack)-1]
+			case c == '`':
+				stack = append(stack, '`')
+			case c == '$' && i+1 < len(s) && s[i+1] == '(':
+				stack = append(stack, '(')
+				i++
+			}
+		case top == '`' && c == '`':
+			stack = stack[:len(stack)-1]
+		case top == '(' && c == ')':
+			stack = stack[:len(stack)-1]
+		case top == 0 && strings.ContainsRune(" \t\n\r;&|)", rune(c)):
+			return i
+		case c == '\'':
+			if end := strings.IndexByte(s[i+1:], '\''); end >= 0 {
+				i += end + 2
+				continue
+			}
+			return len(s)
+		case c == '"':
+			stack = append(stack, '"')
+		case c == '`':
+			stack = append(stack, '`')
+		case c == '$' && i+1 < len(s) && s[i+1] == '(':
+			stack = append(stack, '(')
+			i++
+		case c == '(' && top == '(':
+			stack = append(stack, '(')
+		}
+		i++
+	}
+	if i > len(s) {
+		return len(s)
+	}
+	return i
 }
 
-// pushOperands splits the words after a push or send-pack verb into the remote
-// candidates (the first non-option word, plus any --repo value) and reports
-// whether an --exec option is present. words keep their shell quoting.
-func pushOperands(words []string) (remotes []string, hasExec bool) {
+// h55PushValueOptions are the push/send-pack options whose value may sit in
+// the next word; that word is not the remote operand.
+var h55PushValueOptions = map[string]struct{}{
+	"--receive-pack": {}, "--exec": {}, "-o": {}, "--push-option": {},
+}
+
+// pushOperands returns the remote candidates among the words after a push or
+// send-pack verb: the first non-option word, plus any --repo value (git
+// accepts any abbreviation from --rep). words keep their shell quoting.
+func pushOperands(words []string) (remotes []string) {
 	unq := func(w string) string { return strings.NewReplacer(`"`, "", `'`, "").Replace(w) }
 	for i := 0; i < len(words); i++ {
 		w := unq(words[i])
-		if w == "--exec" || strings.HasPrefix(w, "--exec=") {
-			hasExec = true
-		}
-		if strings.HasPrefix(w, "--repo=") {
-			remotes = append(remotes, w[len("--repo="):])
-			continue
-		}
-		if strings.HasPrefix(w, "-") {
-			if _, takesValue := h55PushValueOptions[w]; takesValue && i+1 < len(words) {
-				if w == "--repo" {
-					remotes = append(remotes, words[i+1])
-				}
+		if strings.HasPrefix(w, "--rep") {
+			if eq := strings.IndexByte(words[i], '='); eq >= 0 {
+				remotes = append(remotes, words[i][eq+1:])
+			} else if i+1 < len(words) {
+				remotes = append(remotes, words[i+1])
 				i++
 			}
 			continue
 		}
-		// The first non-option word is the remote; refspecs follow, and git
-		// still reads options among them.
-		remotes = append(remotes, words[i])
-		return remotes, hasExec || h55RestHasExec(words[i+1:])
-	}
-	return remotes, hasExec
-}
-
-// h55RestHasExec reports an --exec option among the words after the remote
-// (git accepts options after the operands).
-func h55RestHasExec(words []string) bool {
-	for _, w := range words {
-		w = strings.NewReplacer(`"`, "", `'`, "").Replace(w)
-		if w == "--exec" || strings.HasPrefix(w, "--exec=") {
-			return true
+		if strings.HasPrefix(w, "-") {
+			if _, takesValue := h55PushValueOptions[w]; takesValue && i+1 < len(words) {
+				i++
+			}
+			continue
 		}
+		// The first non-option word is the remote; refspecs follow.
+		return append(remotes, words[i])
 	}
-	return false
+	return remotes
 }
 
 // scriptPushWords returns, for each push or send-pack in script (case kept,
@@ -149,17 +263,15 @@ func scriptPushWords(script string) (verbs []string, args [][]string) {
 		var words []string
 		for {
 			rest = strings.TrimLeft(rest, " \t")
-			if rest == "" || strings.ContainsRune(";&|\n\r)", rune(rest[0])) {
+			if rest == "" || strings.ContainsRune(";&|\n\r)<>", rune(rest[0])) {
 				break
 			}
-			loc := leadingPathWord.FindStringIndex(rest)
-			if loc == nil {
-				// A character no word can start with (a redirection or similar):
-				// the command's operands are over.
+			n := scanShellWord(rest)
+			if n == 0 {
 				break
 			}
-			words = append(words, rest[:loc[1]])
-			rest = rest[loc[1]:]
+			words = append(words, rest[:n])
+			rest = rest[n:]
 		}
 		verbs = append(verbs, stripped[m[2]:m[3]])
 		args = append(args, words)
@@ -178,12 +290,10 @@ func (g *GitGuard) remoteIsProtectedTarget(remote, base string) bool {
 	if u == "" || networkRemote.MatchString(u) {
 		return false
 	}
-	// (ii) a path built at run time.
-	if unresolvablePathWord(remote) && (strings.Contains(u, "/") || strings.HasPrefix(u, ".")) {
-		return true
-	}
 	if unresolvablePathWord(remote) {
-		return false // a bare variable or glob with no "/": a remote name (ruling's accepted gap)
+		// (ii) a path built at run time; a bare variable, substitution or glob
+		// with no "/" is a remote name (the ruling's accepted gap).
+		return strings.Contains(u, "/") || strings.HasPrefix(u, ".")
 	}
 	// (i) a static path inside a protected work folder.
 	p := u
@@ -200,19 +310,17 @@ func (g *GitGuard) remoteIsProtectedTarget(remote, base string) bool {
 	return inside
 }
 
-// inspectShellPush applies Rules A and B to a shell script. lower is the
-// lower-cased, blank-collapsed script before global options are stripped.
-func (g *GitGuard) inspectShellPush(script, lower, cwd string) (ExecDecision, bool) {
-	if what, ok := h55ScriptOverride(lower); ok {
-		return h55OverrideDeny(what), true
+// ---- entry points ---------------------------------------------------------
+
+// inspectShellPush applies Rules A and B to a shell script (the original
+// text; Rule A normalises its own copy, before any option stripping).
+func (g *GitGuard) inspectShellPush(script, cwd string) (ExecDecision, bool) {
+	if d, denied := h55RuleA(script); denied {
+		return d, true
 	}
 	verbs, args := scriptPushWords(collapseBlanks(script))
 	for i, words := range args {
-		remotes, hasExec := pushOperands(words)
-		if hasExec {
-			return h55OverrideDeny("--exec"), true
-		}
-		for _, r := range remotes {
+		for _, r := range pushOperands(words) {
 			if g.remoteIsProtectedTarget(r, cwd) {
 				return h55PushTargetDeny(verbs[i], r), true
 			}
@@ -225,37 +333,15 @@ func (g *GitGuard) inspectShellPush(script, lower, cwd string) (ExecDecision, bo
 // the global options before the verb, verbArgs the verb's own arguments and
 // effCwd the directory after any -C.
 func (g *GitGuard) inspectGitArgsPush(globals []string, verb string, verbArgs []string, effCwd string) (ExecDecision, bool) {
-	all := append(append(append([]string{}, globals...), verb), verbArgs...)
-	for _, a := range all {
-		la := strings.ToLower(a)
-		if strings.Contains(la, "receive-pack") || strings.Contains(la, "receivepack") {
-			return h55OverrideDeny("receive-pack"), true
-		}
-	}
-	for i, a := range globals {
-		la := strings.ToLower(a)
-		val := ""
-		switch {
-		case (a == "-c" || la == "--config-env") && i+1 < len(globals):
-			val = strings.ToLower(globals[i+1])
-		case strings.HasPrefix(la, "--config-env="):
-			val = la[len("--config-env="):]
-		case strings.HasPrefix(a, "-c"):
-			val = strings.TrimPrefix(la[2:], "=")
-		}
-		if strings.HasPrefix(val, "receive.") {
-			return h55OverrideDeny("-c receive.*"), true
-		}
+	all := append(append(append([]string{"git"}, globals...), verb), verbArgs...)
+	if d, denied := h55RuleA(strings.Join(all, " ")); denied {
+		return d, true
 	}
 	v := strings.ToLower(verb)
 	if v != "push" && v != "send-pack" {
 		return ExecDecision{}, false
 	}
-	remotes, hasExec := pushOperands(verbArgs)
-	if hasExec {
-		return h55OverrideDeny("--exec"), true
-	}
-	for _, r := range remotes {
+	for _, r := range pushOperands(verbArgs) {
 		if g.remoteIsProtectedTarget(r, effCwd) {
 			return h55PushTargetDeny(v, r), true
 		}

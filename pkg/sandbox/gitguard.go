@@ -630,9 +630,9 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	// (#1960 S1 security round 2, F1-a). This only adds refusals.
 	collapsed := collapseBlanks(strings.ToLower(script))
 	// H55 Rules A and B run on the text BEFORE the global options are stripped:
-	// Rule A reads the -c values the stripping removes (#1960 S1, ruling H55).
-	// This only adds refusals.
-	if d, denied := g.inspectShellPush(script, collapsed, cwd); denied {
+	// Rule A reads the -c values the stripping removes (#1960 S1, rulings H55
+	// and H55 v2). This only adds refusals.
+	if d, denied := g.inspectShellPush(script, cwd); denied {
 		return d
 	}
 	lower := stripGitGlobalOptions(collapsed)
