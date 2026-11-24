@@ -808,7 +808,9 @@ describe('SecuritySection — US-B4 score control surface', () => {
     })
 
     const actionLink = screen.getByTestId('issue-action-link-auth-none')
-    expect(actionLink).toHaveAttribute('href', '/settings/gateway')
+    // #1519 U1-7 / D-9 id35 (FR-059): local fix links use the app's hash route.
+    // Keep the bare API fixture and the action label contract.
+    expect(actionLink).toHaveAttribute('href', '/#/settings/gateway')
     expect(actionLink).toHaveTextContent(/go to gateway/i)
   })
 
