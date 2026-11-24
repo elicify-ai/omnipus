@@ -81,7 +81,7 @@ func Apply(live func() *config.Config, publish func(*config.Config) error, patch
 		// product decoder refusing the written value (for example a stored value
 		// outside the vocabulary it knows): it cannot carry it.
 		if err := json.Unmarshal(w.literal, &next.Sandbox); err != nil {
-			return fmt.Errorf("%w: sandbox.%s: the config decoder rejects it: %v", ErrNotCarried, w.key, err)
+			return fmt.Errorf("%w: sandbox.%s: the config decoder rejects it: %w", ErrNotCarried, w.key, err)
 		}
 		if err := carried(next.Sandbox, w.want, ErrNotCarried); err != nil {
 			return err
