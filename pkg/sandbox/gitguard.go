@@ -797,6 +797,8 @@ func shellMutatingTokens() []string {
 		"rm ", "rm -", "rmdir", "mv ", "cp ", "tee ", "dd ", "truncate",
 		"shred", "> ", ">>", "chmod", "chown", "ln ", "install ",
 		"git commit", "git rebase", "git rm", "git reset", "--amend",
+		// In-place editors (H55 re-review F5): they rewrite the file they name.
+		"sed -i", "sed --in-place", "perl -i", "perl -pi", "perl -ni",
 	}
 }
 

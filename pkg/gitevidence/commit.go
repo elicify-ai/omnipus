@@ -103,7 +103,7 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 	// H55 v2: re-assert the local receive pins after every engine commit, so
 	// a pin changed since Open is restored at the next boundary.
 	defer func() {
-		if err := pinReceiveConfig(r.repo); err != nil {
+		if err := pinReceiveConfig(r.repo, r.dir); err != nil {
 			logger.WarnCF("gitevidence", "could not restore the receive pins after a commit", map[string]any{
 				"dir": r.dir, "error": err.Error(),
 			})

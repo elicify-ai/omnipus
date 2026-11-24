@@ -127,6 +127,44 @@ func TestGitGuardPushRulesV2_AllowedControls(t *testing.T) {
 	}
 }
 
+// Re-review F5: the pins in <work>/.git/config cannot be edited away through a
+// direct "git config --file" or an in-place editor, on either path.
+func TestGitGuardPushRulesV2_PinFileWritersRefused(t *testing.T) {
+	l := newPushRuleLayout(t)
+	cfg := l.work + "/.git/config"
+	for _, argv := range [][]string{
+		{"git", "config", "--file", cfg, "receive.denyCurrentBranch", "ignore"},
+		{"git", "config", "--file=" + cfg, "core.bare", "true"},
+		{"git", "config", "-f", "../work/.git/config", "receive.denyCurrentBranch", "ignore"},
+		{"git", "config", "-f../work/.git/config", "core.hooksPath", "/tmp/hk"},
+		{"git", "-C", "..", "config", "--file", "work/.git/config", "receive.denyDeletes", "false"},
+		{"sed", "-i", "s/refuse/ignore/", cfg},
+		{"perl", "-pi", "-e", "s/refuse/ignore/", "../work/.git/config"},
+		// Shell path, same commands.
+		{"bash", "-c", "git config --file " + cfg + " receive.denyCurrentBranch ignore"},
+		{"bash", "-c", "sed -i 's/refuse/ignore/;s/bare = false/bare = true/' ../work/.git/config"},
+		{"bash", "-c", "sed -i.bak s/refuse/ignore/ " + cfg},
+		{"bash", "-c", "perl -pi -e 's/refuse/ignore/' ../work/.git/config"},
+		{"bash", "-c", "perl -i -pe 's/refuse/ignore/' " + cfg},
+	} {
+		if d := l.g.InspectExec(argv, l.mount); d.Allowed {
+			t.Errorf("%q must be refused (it rewrites the evidence repo's pinned config)", argv)
+		}
+	}
+	for _, argv := range [][]string{
+		{"git", "config", "user.name", "Jim"},
+		{"git", "config", "--file", ".gitmodules", "submodule.x.url", "https://x/y"},
+		{"git", "config", "--get", "remote.origin.url"},
+		{"bash", "-c", "sed -i s/a/b/ notes.txt && git config --global user.name Jim"},
+		{"bash", "-c", "perl -pi -e 's/a/b/' notes.txt"},
+		{"bash", "-c", "sed -n 1p ../work/.git/config"},
+	} {
+		if d := l.g.InspectExec(argv, l.mount); !d.Allowed {
+			t.Errorf("%q must stay allowed, got %s (%s)", argv, d.Reason, d.PolicyRule)
+		}
+	}
+}
+
 func TestScanShellWord_BalancesSubstitutions(t *testing.T) {
 	rows := []struct{ in, want string }{
 		{`$(dirname $(pwd))/work HEAD:x`, `$(dirname $(pwd))/work`},

@@ -310,6 +310,32 @@ func (g *GitGuard) remoteIsProtectedTarget(remote, base string) bool {
 	return inside
 }
 
+// configNamesProtectedGit reports the first argument of a direct "git config"
+// that names a path at or under a protected .git: a --file/-f/--blob value
+// (spaced, "=" or glued -f<path>) or any other word, resolved against effCwd.
+// The shell path refuses the same through its "git config" pattern; this
+// keeps the direct-argv path consistent (re-review F5).
+func (g *GitGuard) configNamesProtectedGit(args []string, effCwd string) (string, bool) {
+	for _, a := range args {
+		candidates := []string{a}
+		if eq := strings.IndexByte(a, '='); eq >= 0 {
+			candidates = append(candidates, a[eq+1:])
+		}
+		if strings.HasPrefix(a, "-f") && len(a) > 2 && a[2] != '=' {
+			candidates = append(candidates, a[2:])
+		}
+		for _, c := range candidates {
+			if c == "" || strings.HasPrefix(c, "-") {
+				continue
+			}
+			if p, _ := g.matchesProtectedGit(resolvePathBestEffort(c, effCwd)); p {
+				return a, true
+			}
+		}
+	}
+	return "", false
+}
+
 // ---- entry points ---------------------------------------------------------
 
 // inspectShellPush applies Rules A and B to a shell script (the original
@@ -338,6 +364,17 @@ func (g *GitGuard) inspectGitArgsPush(globals []string, verb string, verbArgs []
 		return d, true
 	}
 	v := strings.ToLower(verb)
+	if v == "config" {
+		if word, ok := g.configNamesProtectedGit(verbArgs, effCwd); ok {
+			return ExecDecision{
+				Allowed:    false,
+				Verb:       "config",
+				Reason:     "git 'config' naming '" + word + "' would write the protected evidence repo's own config",
+				PolicyRule: "git.sandbox.deny: config file inside protected .git (H55 F5)",
+			}, true
+		}
+		return ExecDecision{}, false
+	}
 	if v != "push" && v != "send-pack" {
 		return ExecDecision{}, false
 	}

@@ -59,7 +59,13 @@ func localConfigValues(t *testing.T, dir, key string) []string {
 
 func assertPins(t *testing.T, dir, when string) {
 	t.Helper()
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := map[string]string{
+		"core.hookspath":              filepath.ToSlash(filepath.Join(abs, ".git", noHooksDirName)),
+		"core.alternaterefscommand":   "true",
 		"core.bare":                   "false",
 		"receive.denycurrentbranch":   "refuse",
 		"receive.denynonfastforwards": "true",
@@ -92,6 +98,9 @@ func TestGitEvidence_ReceivePins_RestoredOnReopenAndAfterCommit(t *testing.T) {
 		mustGit(t, dir, home, "config", "--file", cfgPath, "--add", "receive.denyDeletes", "false")
 		mustGit(t, dir, home, "config", "--file", cfgPath, "core.bare", "true")
 		mustGit(t, dir, home, "config", "--file", cfgPath, "include.path", "/tmp/elsewhere")
+		mustGit(t, dir, home, "config", "--file", cfgPath, "--unset-all", "core.hooksPath")
+		mustGit(t, dir, home, "config", "--file", cfgPath, "core.alternateRefsCommand", "touch /tmp/x")
+		mustGit(t, dir, home, "config", "--file", cfgPath, "--add", "core.hooksPath", "/tmp/hk")
 		if got := localConfigValues(t, dir, "receive.denycurrentbranch"); len(got) != 1 || got[0] != "ignore" {
 			t.Fatalf("instrument: the tamper did not take: %q", got)
 		}

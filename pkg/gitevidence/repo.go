@@ -162,7 +162,7 @@ func Open(dir string, opts ...Option) (*Repo, error) {
 	// delete its refs, whatever global config the agent's shell sets. Written
 	// on every Open (new or existing repo); a repo whose pins cannot be
 	// written is not handed out.
-	if err := pinReceiveConfig(gitRepo); err != nil {
+	if err := pinReceiveConfig(gitRepo, dir); err != nil {
 		return nil, err
 	}
 
