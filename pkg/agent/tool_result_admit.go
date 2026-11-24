@@ -56,6 +56,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -378,7 +379,11 @@ type admittedToolResult struct {
 // so the archive line the mark cites is the line the content actually took.
 func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) admittedToolResult {
 	cfg := al.GetConfig()
-	content := adm.Content
+	// B5 (FR-020): the always-on program-token pass runs first, before the
+	// general filter, truncation and archiving, whatever the general switch
+	// and its minimum length say — a token a command wrote to a file and
+	// read_file returned never reaches history or the model.
+	content := programs.MaskTokens(adm.Content)
 	var cs config.ContextSettings
 	if cfg != nil {
 		// FR-013 / B-16: filter the FULL content first; the archive holds

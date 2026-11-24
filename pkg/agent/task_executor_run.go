@@ -700,6 +700,8 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		// FR-032: a continuation after a steer-interrupt delivers the person's
 		// instruction to the SAME native CLI conversation (never a fresh Run).
 		ExternalCLIResume: resume,
+		// FR-041 / S-77: as processTaskDirect's identical field.
+		InputOrigin: al.sessionInstructionOrigin(taskChatID),
 	}
 	// #1263 R1/R5: a task run is unattended whatever started it.
 	al.applyTurnAttendance(&opts)

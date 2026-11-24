@@ -136,6 +136,8 @@ func (al *AgentLoop) remindUnansweredRequests(sessionID string) {
 		// Non-human, exactly like the reply-refusal note: never UserInitiated or
 		// OperatorPrompt, admitted as the owner-wake principal.
 		Metadata: map[string]string{"agent_id": agentID, requestReminderMetadataKey: "1", ownerWakeMetadataKey: "1"},
+		// A server reminder has no origin of its own (I-2): unresolved.
+		Provenance: bus.UnresolvedProvenance(),
 	}); err != nil {
 		// The reminder never went out: give the one reminder back so a later turn
 		// end retries, instead of leaving the sender waiting for ever.

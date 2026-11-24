@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/childenv"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -36,6 +37,9 @@ type Input struct {
 	Variable    string `json:"variable,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
+	// Program selects the program kind: the id of an entry in Settings →
+	// Programs whose token the card stores (connected-programs FR-051).
+	Program string `json:"program,omitempty"`
 }
 
 var envKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
@@ -58,16 +62,26 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 	if in.Variable != "" {
 		forms++
 	}
+	if in.Program != "" {
+		forms++
+	}
 	if cfg == nil || forms != 1 || (in.Endpoint != "" && in.Provider != "") {
-		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("request_secret needs exactly one recipient: endpoint or provider, server + env_key, instance + field, or a private variable")
+		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("request_secret needs exactly one recipient: endpoint or provider, server + env_key, instance + field, a private variable, or a program")
 	}
 	switch {
+	case in.Program != "":
+		return resolveProgram(cfg, in.Program)
 	case in.Variable != "":
 		if err := childenv.CheckPrivateVariableName(in.Variable); err != nil {
 			return nil, nil, gen.SecretRecipientDisplay{}, err
 		}
 		if in.WorkspaceID == "" || in.AgentID == "" {
 			return nil, nil, gen.SecretRecipientDisplay{}, errors.New("a private variable belongs to one agent in one workspace; ask from that agent's chat in the workspace")
+		}
+		// S-13: a token variable of a program switched on for the agent
+		// cannot also be the agent's private variable.
+		if err := programs.PrivateVariableConflict(cfg, in.AgentID, in.Variable); err != nil {
+			return nil, nil, gen.SecretRecipientDisplay{}, err
 		}
 		recipient = credentials.CardRecipient{Kind: credentials.KindAgentPrivate, WorkspaceID: in.WorkspaceID, AgentID: in.AgentID, Field: in.Variable}
 		return []credentials.CardRecipient{recipient}, []gen.SecretRequestField{{Key: "value", Label: in.Variable}}, gen.SecretRecipientDisplay{Kind: recipient.Kind, Lines: recipientLines(recipient)}, nil
@@ -151,6 +165,35 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 	return []credentials.CardRecipient{recipient}, []gen.SecretRequestField{{Key: key, Label: label}}, gen.SecretRecipientDisplay{Kind: recipient.Kind, Lines: lines}, nil
 }
 
+// resolveProgram is the program recipient (FR-051): the card stores the token
+// of one entry in Settings → Programs under that entry's token reference. The
+// display names the program and its words, and carries program_id.
+func resolveProgram(cfg *config.Config, id string) ([]credentials.CardRecipient, []gen.SecretRequestField, gen.SecretRecipientDisplay, error) {
+	entry, found, err := programs.Lookup(cfg, id)
+	if err != nil {
+		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("the programs in Settings → Programs could not be read")
+	}
+	if !found {
+		return nil, nil, gen.SecretRecipientDisplay{}, errors.New(id + " is not a program in Settings → Programs.")
+	}
+	recipient := credentials.CardRecipient{Kind: credentials.KindProgram, Field: programs.TokenReference(entry.ID)}
+	programID := entry.ID
+	display := gen.SecretRecipientDisplay{
+		Kind:      recipient.Kind,
+		Lines:     []string{"Program: " + entry.DisplayName + " (" + strings.Join(entry.ProgramWords, ", ") + ")"},
+		ProgramId: &programID,
+	}
+	return []credentials.CardRecipient{recipient}, []gen.SecretRequestField{{Key: "token", Label: entry.DisplayName + " token"}}, display, nil
+}
+
+// ProgramID returns the program a program card stores a token for.
+func ProgramID(rec Record) (string, bool) {
+	if len(rec.Recipients) != 1 || rec.Recipients[0].Kind != credentials.KindProgram {
+		return "", false
+	}
+	return programs.EntryIDForReference(rec.Recipients[0].Field)
+}
+
 // recipientLines are K2's display lines for one integration recipient. The
 // agent-private kind is composed by DisplayLines, which knows display names.
 func recipientLines(r credentials.CardRecipient) []string {
@@ -161,6 +204,8 @@ func recipientLines(r credentials.CardRecipient) []string {
 		return []string{"Channel instance: " + r.Instance, "Channel type: " + r.ChannelType, "Field: " + r.Field}
 	case credentials.KindAgentPrivate:
 		return []string{r.AgentID + " in " + r.WorkspaceID, "Variable: " + r.Field}
+	case credentials.KindProgram:
+		return []string{"Program token: " + r.Field}
 	}
 	return []string{r.Endpoint, "Field: " + r.Field}
 }

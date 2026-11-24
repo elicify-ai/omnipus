@@ -1,0 +1,58 @@
+title: ProgramEntry
+description: >
+  One connected-program entry, preset or custom (spec cli-credentials S1,
+  FR-001, FR-002). Value-free. Presets are read-only.
+type: object
+required:
+  - id
+  - kind
+  - display_name
+  - program_words
+  - token_variables
+  - network_sites
+  - connection
+  - enabled_agent_ids
+  - revision
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 64
+  kind:
+    type: string
+    enum:
+      - preset
+      - custom
+  display_name:
+    type: string
+    minLength: 1
+    maxLength: 64
+  program_words:
+    type: array
+    items:
+      type: string
+  token_variables:
+    type: array
+    items:
+      type: string
+  network_sites:
+    type: array
+    items:
+      type: string
+  git:
+    $ref: './ProgramGit.yaml'
+  identity_check:
+    $ref: './ProgramIdentityCheck.yaml'
+  connection:
+    $ref: './ProgramConnection.yaml'
+  enabled_agent_ids:
+    type: array
+    description: Ids of the agents this entry is switched on for.
+    items:
+      type: string
+  revision:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Entry revision for optimistic concurrency of custom-entry edits.

@@ -1,0 +1,35 @@
+title: ProgramConnection
+description: >
+  The connection state of one program entry (spec FR-004, FR-043). Value-free:
+  never carries the token.
+type: object
+required:
+  - state
+  - generation
+additionalProperties: false
+properties:
+  state:
+    type: string
+    enum:
+      - not_connected
+      - checking
+      - connected
+      - saved_not_checked
+      - check_failed
+  generation:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Increments on every publication and on disconnect.
+  account_label:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Present only when `state` is `connected` and the check produced a label.
+  checked_at:
+    type: string
+    format: date-time
+  message:
+    type: string
+    maxLength: 500
+    description: Value-free reason text for the current state.

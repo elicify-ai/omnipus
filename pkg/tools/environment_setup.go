@@ -115,6 +115,8 @@ type EnvironmentSetupToolDeps struct {
 	// PrivateEnv supplies the turn's agent-private variables (FR-076),
 	// appended after the setup layer. Nil = none.
 	PrivateEnv PrivateEnvSource
+	// Programs supplies the turn's connected programs (FR-011). Nil = none.
+	Programs ProgramSource
 }
 
 // EnvironmentSetupTool implements the `environment_setup` builtin tool.
@@ -130,6 +132,7 @@ type EnvironmentSetupTool struct {
 	store EnvironmentSetupStore
 
 	privateEnv PrivateEnvSource
+	programs   ProgramSource
 
 	sessionManager *SessionManager
 
@@ -153,6 +156,7 @@ func NewEnvironmentSetupTool(deps EnvironmentSetupToolDeps) *EnvironmentSetupToo
 		proxy:           deps.Proxy,
 		store:           deps.Store,
 		privateEnv:      deps.PrivateEnv,
+		programs:        deps.Programs,
 		sessionManager:  getSessionManager(),
 		auditFailClosed: deps.AuditFailClosed,
 	}
@@ -379,7 +383,7 @@ func (t *EnvironmentSetupTool) execute(ctx context.Context, args map[string]any,
 		// FR-030 (chief ruling Q3): a run refused before launch is
 		// "failed: nothing saved"; a started run reports its verdict when it
 		// finishes (environmentSetupOutcome).
-		res := t.startRun(ctx, args, cb)
+		res := maskProgramTokens(t.startRun(ctx, args, cb))
 		if res != nil && res.IsError {
 			return FinalizeChangeResult(t.Name(), res)
 		}
@@ -387,7 +391,7 @@ func (t *EnvironmentSetupTool) execute(ctx context.Context, args map[string]any,
 	case "poll":
 		return t.executePoll(ctx, args)
 	case "read":
-		return t.executeRead(ctx, args)
+		return maskProgramTokens(t.executeRead(ctx, args))
 	case "kill":
 		return t.executeKill(ctx, args)
 	default:
@@ -484,10 +488,16 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 
 	env := t.setupEnv(lim, area, runtimeEnv)
 	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
-	for _, private := range privateVars {
+	// FR-011: the agent's connected programs reach this child only through
+	// programs.Attach in startSession; the notices ride the start result.
+	turnPrograms := resolveTurnPrograms(ctx, t.programs, privateVars)
+	// FR-024: a variable a connected program also sets is set by neither.
+	for _, private := range withoutProgramConflicts(turnPrograms, privateVars) {
 		env = withPrivateVariable(env, private.Name, private.Value)
 	}
+	privateNotice = joinNotice(privateNotice, programNotices(turnPrograms))
 	return appendRuntimeNotice(t.startSession(ctx, startPlan{
+		programs:       turnPrograms.Attachment(nil),
 		command:        command,
 		purpose:        purpose,
 		scope:          scope,

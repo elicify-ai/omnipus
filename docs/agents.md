@@ -117,7 +117,10 @@ Omnipus can create three kinds of agent:
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). Export and apply answer 200. The upload that returns the preview answers 201. A committed apply is 200 even when activation is pending or the warning is `publish_not_durable`. It is an API only, with no screen in the app.
+**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. The same scripts can export, preview and import one custom agent through `POST /api/v1/packages/export`, `POST /api/v1/packages/import` and `POST /api/v1/packages/import/{staging_id}/apply` — see [How to move an agent to another install](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). Export and apply answer 200. The upload that returns the preview answers 201. A committed apply is 200 even when activation is pending or the warning is `publish_not_durable`. Two more calls serve the app's Export & Import page and scripts alike:
+
+- `POST /api/v1/packages/export/plan` with `{"scope":"agents","agent_ids":["<id>"]}` returns a review (201): the files and sizes the bundle would hold, what is left out and why, the secrets to enter again (names only, never values), the notice that prompt and instructions text is copied as it is, the bundle size and the download file name. It refuses an agent exactly as the export would, writes nothing and is not audited. Read it back with `GET /api/v1/packages/export/plan/{plan_id}` for 30 minutes; after that, or after a gateway restart, the answer is 404 `plan_not_found`. The export itself is not tied to the review: it packs the agent as it is when you export.
+- `DELETE /api/v1/packages/import/{staging_id}` cancels an upload you have not imported: 204 when it is gone, so it no longer counts towards the five waiting uploads. An upload being received, being imported or kept after a failed import is never touched (409 `staging_busy`). If its temporary files cannot be removed, it is still cancelled and frees its place (500 `staging_cleanup_failed`); the next upload, or cancelling again, tries the removal again. A 404 `staging_not_found` does not tell you whether the upload was imported, so check the Team before importing again.
 
 For scripts that change or remove an agent, update with `PUT /api/v1/agents/{id}` and delete with `DELETE /api/v1/agents/{id}` — never add a sub-path. An unknown sub-path returns `404`; a known one (`sessions`, `activity-runs`, `runner/test`, `tools`, `mailboxes/{workspaceId}`, `dependencies`) used with a method it does not serve returns `405` and an `Allow` header listing the methods it does serve. Neither refusal changes or deletes the agent. The gateway answers `OPTIONS` itself, before the agents handler runs; browsers send it as the preflight request.
 
@@ -125,7 +128,12 @@ To change an agent, open its card on the workspace's **Team**, or its row menu i
 
 ## How to move an agent to another install
 
-You can copy one custom agent to another Omnipus you run yourself. The command line packs it into one file and, on the other install, adds it as a **new** agent. The commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install). There is no screen for it, and asking an agent does not do it.
+You can copy one custom agent to another Omnipus you run yourself. It is packed into one file, a bundle (`.omnpkg`), and on the other install it is added as a **new** agent.
+
+- **In the app:** the [Export & Import](export-import.md) page in the sidebar (self-hosted edition). **Export** in an agent's edit sheet opens the export with that agent already chosen.
+- **On the command line:** the commands, the preview, the confirm step and the exit codes are in [Using the Omnipus command line](using-omnipus-cli.md#how-to-move-an-agent-to-another-install).
+
+Asking an agent does not do it.
 
 **Built-in agents never go into a package.** That is Mia, Jim, Omnipus, the shipped workers Planner, Researcher and General Purpose, and the internal agents Judge and Plan Supervisor. Export refuses them, and the message says they cannot be exported. Import never changes a built-in agent. A custom agent that only shares a built-in's name, such as a custom agent named Mia, can be exported. On an install that already has Mia, it arrives as a new custom agent named Mia (imported), with a new id. The built-in Mia's record, prompt and memory are unchanged.
 
@@ -159,6 +167,8 @@ On import the same rules apply as when an agent is created:
 A tool-call limit outside 1 to 1000, or above the global limit on the new install, refuses the package. So does a fallback list of more than two, a fallback that is not paired with a provider, or a figure, role badge or colour that is not one of the listed values. Export only writes values the source install already accepted, so those colour and figure refusals matter for a hand-made or damaged package.
 
 **A secret pasted into the prompt travels.** The prompt is copied with whitespace trimmed from its ends, and non-empty instructions are copied byte for byte. An empty instructions file is not created on the new agent. The export command says so: "SOUL.md and AGENT.md are copied as they are; check them for pasted secrets before sharing." The install's stored credentials, keys and configuration do not travel. Check those two files before you share the package.
+
+**Connected programs arrive off.** The package lists each program switched on for the agent as a secret to set up again (`needs_secrets`, kind `program`, with the program id as its name, for example `github`); `package inspect`, the preview and the result show it. Neither the token nor the switch travels: the new agent starts with every program off, even when a hand-made package carries a `programs` list. On the new install, connect the program under [Settings → Programs](settings.md#programs) and switch it on for the agent (see [Programs](#programs)).
 
 **An agent created through the REST API may arrive without a voice.** Today, creating an agent with `POST /api/v1/agents` accepts a voice and does not store it. Import stores a voice the way the create-agent tool does. So an agent made through that endpoint, then exported, carries an empty voice. This version does not change the REST create behaviour.
 
@@ -392,6 +402,15 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 5. Click **Save heartbeat**. The agent now runs the prompt on that interval.
 
 If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. If you have that chat open, a check-in appears live: the check-in prompt is inserted as it is saved and the answer streams in as it is written when the model provider streams, and otherwise appears whole once the answer is complete (for example with non-streaming or multi-candidate providers), without a reload. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
+
+## Programs
+
+An agent's profile has a **Programs** switch for each entry in [Settings → Programs](settings.md#programs). A new agent starts with every program off. Switching a program on decides which agent may use its stored token; it does not connect a token, so you can switch a program on before or after connecting it.
+
+- **Who can change it.** A person signed in to the web app in a browser, or an agent through `set_agent_permissions` with `programs` (the full list of program ids; `[]` switches all off). That tool asks a person for approval, and an agent can never change its own list. `update_agent` refuses `programs` and names `set_agent_permissions`; `create_agent` does not take it. `get_agent` reports the list, `[]` when none is on. An API token or the command line cannot change it (`403`). System agents cannot have programs.
+- **Conflicts.** A program cannot be switched on when the agent already has a private variable with one of its token variable names, for example "GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off." The reverse holds too: a private variable named after a token variable of a switched-on program is refused. Two programs that supply the git login for the same site cannot both be on for one agent ("… already supplies the git login for github.com to Dev. Switch one of them off."), and an entry's git site cannot be edited to clash that way.
+- An agent has at most 32 programs switched on.
+- **Export and import.** The switches never travel in an exported package; an imported agent starts with every program off (see [How to move an agent to another install](#how-to-move-an-agent-to-another-install)).
 
 ## Limits and things to watch
 

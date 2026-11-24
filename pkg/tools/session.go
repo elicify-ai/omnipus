@@ -6,11 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elicify-ai/omnipus/pkg/programs"
 )
 
 const maxOutputBufferSize = 1 * 1024 * 1024 // 1MB
@@ -83,6 +86,13 @@ type ProcessSession struct {
 	stdinWriter     io.Writer
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
+	// programMasked is set at start when program masking writers wrap the
+	// child's output (programs.Attach with tokens). Immutable afterwards.
+	programMasked bool
+	// maskedRead records, under mu, that a read already drained a
+	// "[FILTERED]" replacement of a masked program session, so the
+	// completion can still say so (S-104).
+	maskedRead bool
 	// lastActivityAt observes real output or terminal completion without
 	// consuming output. It is private and guarded by mu, not a wire field.
 	lastActivityAt time.Time
@@ -351,7 +361,29 @@ func (s *ProcessSession) Read() string {
 
 	data := s.outputBuffer.String()
 	s.outputBuffer.Reset()
+	if s.programMasked && strings.Contains(data, programs.FilteredMarker) {
+		s.maskedRead = true
+	}
 	return data
+}
+
+// maskedEarlierNote is appended to a background completion when a program
+// token was replaced by [FILTERED] in output an earlier read already
+// drained, and the unread rest no longer shows it (S-104).
+const maskedEarlierNote = "Output read earlier showed [FILTERED] where a connected program's token was hidden."
+
+// completionOutputLocked returns the unread output for the completion,
+// adding maskedEarlierNote when the replacement was only in output a read
+// already drained. The caller holds s.mu; the buffer is not consumed.
+func (s *ProcessSession) completionOutputLocked() string {
+	out := s.outputBuffer.String()
+	if s.maskedRead && !strings.Contains(out, programs.FilteredMarker) {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += maskedEarlierNote
+	}
+	return out
 }
 
 func (s *ProcessSession) ToSessionInfo() SessionInfo {

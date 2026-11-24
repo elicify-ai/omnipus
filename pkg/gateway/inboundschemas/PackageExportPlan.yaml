@@ -1,0 +1,174 @@
+title: PackageExportPlan
+description: >
+  The export review ("plan") of POST /api/v1/packages/export/plan (201) and
+  GET /api/v1/packages/export/plan/{plan_id} (200), epic #1094 slice B1. It
+  says what a bundle exported now would contain and leave out, using the same
+  capture, cleaning and refusals as the export itself. It is held in memory
+  for 30 minutes (expires_at = created_at + 30 minutes) and never carries a
+  removed value: names only. The export itself is not bound to the review.
+type: object
+required:
+  - plan_id
+  - created_at
+  - expires_at
+  - scope
+  - elements
+  - left_out
+  - needs_secrets
+  - disclosures
+  - size_bytes
+  - file_name
+additionalProperties: false
+properties:
+  plan_id:
+    type: string
+    format: uuid
+    description: Handle for reading this review back (UUID v4).
+  created_at:
+    type: string
+    format: date-time
+    description: When the review was made (UTC).
+  expires_at:
+    type: string
+    format: date-time
+    description: created_at plus 30 minutes; the review is readable while now is before it.
+  scope:
+    type: string
+    enum:
+      - agents
+    description: Echo of the request's scope.
+    example: agents
+  elements:
+    type: array
+    description: The reviewed elements (exactly one agent in B1).
+    items:
+      type: object
+      required:
+        - type
+        - source_id
+        - name
+        - kind
+        - files
+        - bytes
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: Element type (agent in B1).
+          example: agent
+        source_id:
+          type: string
+          description: The element's ID on this install.
+        name:
+          type: string
+          description: The element's name.
+          example: Writer
+        kind:
+          type: string
+          enum:
+            - main
+            - worker
+            - external_worker
+          description: Agent kind.
+          example: main
+        files:
+          type: array
+          description: The files that go into the bundle for this element, in bundle order.
+          items:
+            type: object
+            required:
+              - path
+              - size
+            additionalProperties: false
+            properties:
+              path:
+                type: string
+                description: Path of the file inside the bundle.
+                example: agents/5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c/SOUL.md
+              size:
+                type: integer
+                format: int64
+                description: Size in bytes.
+                example: 2000
+        bytes:
+          type: integer
+          format: int64
+          description: Sum of the element's file sizes in bytes.
+  left_out:
+    type: array
+    description: >
+      What does not travel, and why, in a fixed order. type and reason are open
+      strings because later slices add values. B1 types: skill, connector,
+      agent_memory, session, work_files, team, agent_setting. B1 reasons:
+      type_not_exportable, host_path, secret_value, not_carried, not_restored.
+    items:
+      type: object
+      required:
+        - type
+        - reason
+        - message
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: What is left out.
+          example: agent_memory
+        reason:
+          type: string
+          description: Why it is left out.
+          example: type_not_exportable
+        message:
+          type: string
+          description: Plain-English explanation. Never contains a value.
+        items:
+          type: array
+          description: Names concerned (skill names, connector IDs, environment variable names). Never values.
+          items:
+            type: string
+  needs_secrets:
+    type: array
+    description: Secrets the importer must enter again (same item shape as the manifest's needs_secrets; names only).
+    items:
+      type: object
+      required:
+        - name
+        - used_by
+        - kind
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Secret name, for example an environment variable name.
+          example: API_TOKEN
+        used_by:
+          type: string
+          description: Source ID of the element that uses the secret.
+        kind:
+          type: string
+          description: Kind of secret.
+          example: executor_env
+  disclosures:
+    type: array
+    description: Notices the person must see before downloading. B1 always carries exactly one, free_text_copied.
+    items:
+      type: object
+      required:
+        - code
+        - message
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          description: Disclosure code.
+          example: free_text_copied
+        message:
+          type: string
+          description: Plain-English text of the disclosure.
+  size_bytes:
+    type: integer
+    format: int64
+    description: Byte length of the bundle as it would be built at review time.
+  file_name:
+    type: string
+    description: The download file name the export will use (same rule as the export's Content-Disposition).
+    example: Writer.omnpkg

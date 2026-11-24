@@ -17,7 +17,9 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // --- background execution ----------------------------------------------------
@@ -66,6 +68,7 @@ func (t *ExecTool) runBackground(
 	timeoutSeconds int32,
 	lim sandbox.Limits,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
@@ -102,22 +105,32 @@ func (t *ExecTool) runBackground(
 		}
 	}
 
-	stdoutReader, err := cmd.StdoutPipe()
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create stdout pipe: %v", err))
+	// The child writes into in-process pipes whose read ends feed
+	// appendOutput. programs.Attach (I-1) wraps the write ends in the masking
+	// writers, so a program token is masked before the bytes reach the
+	// session buffer, a draining read, JSON encoding or the cap. The write
+	// ends are closed once cmd.Wait has drained the child's output.
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
+	closePipes := func() {
+		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
+		_ = stderrWriter.Close()
 	}
-	stderrReader, err := cmd.StderrPipe()
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create stderr pipe: %v", err))
+	if err := programs.Attach(cmd, set); err != nil {
+		closePipes()
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
 	session.outputBuffer = &bytes.Buffer{}
+	session.programMasked = len(set.Tokens) > 0
 
 	var startErr error
 	if t.godMode {
 		var startAbort *ToolResult
 		startAbort, startErr = startGodFloorChild(cmd, lim)
 		if startAbort != nil {
+			closePipes()
 			return startAbort
 		}
 	} else {
@@ -129,6 +142,7 @@ func (t *ExecTool) runBackground(
 		startErr = sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
 	}
 	if startErr != nil {
+		closePipes()
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", startErr))
 	}
 
@@ -154,8 +168,16 @@ func (t *ExecTool) runBackground(
 
 	var pipeWG sync.WaitGroup
 	pipeWG.Add(2)
-	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
-	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
+	// testseam.BackgroundPipeReader returns the pipe unchanged outside the
+	// s1seams test build (#1960 S1, seam H45).
+	go func() {
+		defer pipeWG.Done()
+		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stdout", stdoutReader))
+	}()
+	go func() {
+		defer pipeWG.Done()
+		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stderr", stderrReader))
+	}()
 
 	// naturalCompletionCh is closed by the completion goroutine below the
 	// instant it has recorded a terminal status for the session (whatever
@@ -224,8 +246,9 @@ func (t *ExecTool) runBackground(
 	// explicitly; a missed case previously let "canceled" fall through to a
 	// misleading generic-failure summary, see that function's doc comment).
 	go func() {
+		waitErr := cmd.Wait() // returns once the child's output is copied through
+		closePipes()
 		pipeWG.Wait()
-		waitErr := cmd.Wait()
 
 		session.mu.Lock()
 		if session.Status == StatusRunning {
@@ -248,7 +271,7 @@ func (t *ExecTool) runBackground(
 		// async notification has content to show — do NOT Reset() here: an
 		// explicit action=read call after completion must still be able to
 		// drain this same buffered output (Reset is session.Read()'s job).
-		outputSoFar := session.outputBuffer.String()
+		outputSoFar := session.completionOutputLocked()
 		session.mu.Unlock()
 
 		// Stop the timeout guard now that the session's real fate is settled
@@ -406,6 +429,7 @@ func (t *ExecTool) auditBackgroundSweepFailure(ctx context.Context, command, cwd
 // ("finished (exit code N)", IsError:true) instead of an intentional,
 // user-initiated cancellation.
 func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode int, output string) *ToolResult {
+	output = programs.MaskTokens(output) // B1 (FR-020)
 	if output == "" {
 		output = "(no output)"
 	}
@@ -421,7 +445,10 @@ func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode
 		isError = false
 	case StatusDone:
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
-		isError = false
+		// A natural exit is a success only with exit code 0. A non-zero exit
+		// is an error result, as in the foreground path, so a suppressed-
+		// feedback turn still persists its error notice (S-73).
+		isError = exitCode != 0
 	default:
 		// Unexpected status reaching this switch (e.g. StatusRunning, which
 		// should never be the FINAL status a completion goroutine observes) —
@@ -576,4 +603,17 @@ func startGodFloorChild(cmd *exec.Cmd, lim sandbox.Limits) (*ToolResult, error) 
 		}
 	}
 	return nil, sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
+}
+
+// maskProgramTokens is boundary B1 (connected-programs FR-020): the
+// always-on program-token pass over a bash or environment_setup result,
+// whatever the general filter switch says. B0 already masked the child's
+// output at the source; this is defence in depth.
+func maskProgramTokens(r *ToolResult) *ToolResult {
+	if r == nil {
+		return r
+	}
+	r.ForLLM = programs.MaskTokens(r.ForLLM)
+	r.ForUser = programs.MaskTokens(r.ForUser)
+	return r
 }

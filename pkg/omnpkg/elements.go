@@ -22,6 +22,9 @@ type recordView struct {
 		} `json:"executor"`
 	} `json:"subagents"`
 	ModelParams map[string]json.RawMessage `json:"model_params"`
+	// Programs are the switched-on connected programs, declared in
+	// needs_secrets on export and never carried (connected programs FR-022).
+	Programs []string `json:"programs"`
 }
 
 // asAgentConfig carries the type-deciding fields into config.AgentConfig, so

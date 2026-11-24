@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -1011,6 +1012,10 @@ type CorrectionRequest struct {
 	SupersededMemberID  string       `json:"superseded_member_id,omitempty"`
 	RetriedMemberID     string       `json:"retried_member_id,omitempty"`
 	Reason              string       `json:"reason,omitempty"`
+	// Provenance is the correcting turn's provenance (I-2): a correction
+	// changes the plan's instructions, so it is joined into the plan's
+	// stored provenance. Engine-internal, never persisted as such.
+	Provenance bus.Provenance `json:"-"`
 }
 
 // CorrectionResult is the outcome of processing a correction. HonestExit

@@ -126,6 +126,11 @@ type restAPI struct {
 	// writer's value (T-8 row 2). Every other save is not dedicated.
 	outboundDedicatedWrite bool
 
+	// programsDedicatedWrite is true only while a dedicated Programs writer's
+	// save runs (safeUpdateProgramsConfigJSON, guarded by configMu): only
+	// then may a save change the Programs controls (FR-009, FR-028).
+	programsDedicatedWrite bool
+
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
 	// (agentstore.New(homePath) is used); tests inject I/O and revision
@@ -394,6 +399,10 @@ type restAPI struct {
 	// changes after boot, so the header string is computed on first use.
 	corsAllowHeadersOnce  sync.Once
 	corsAllowHeadersValue string
+
+	// programs is the connected-programs service (Settings → Programs),
+	// built on first use from homePath and the credential store.
+	programs programsHolder
 
 	// restarter performs the graceful self-restart triggered by
 	// POST /api/v1/gateway/restart (O4-backend). It is an indirection so the
@@ -743,6 +752,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 		rae.a.withAuth(middleware.RequirePersonSession(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate))),
 	)
 	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
+	// Settings -> Programs (connected-programs S1): person-session only on
+	// every method (FR-028); see rest_programs.go.
+	rae.cm.RegisterHTTPHandler("/api/v1/programs", rae.a.programsHandler())
+	rae.cm.RegisterHTTPHandler("/api/v1/programs/", rae.a.programsHandler())
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
 	// expansion endpoint (FR-008, contracts/openapi.yaml operationId
 	// listTaskOccurrences). Registered as an EXACT pattern, independent of

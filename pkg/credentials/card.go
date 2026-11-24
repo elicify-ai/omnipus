@@ -48,6 +48,9 @@ type CardReceipt struct {
 	SessionID   string    `json:"session_id"`
 	References  []string  `json:"references"`
 	SubmittedAt time.Time `json:"submitted_at"`
+	// ProgramGeneration is the program generation a program card's commit
+	// created (FR-051); zero for every other card.
+	ProgramGeneration int64 `json:"program_generation,omitempty"`
 }
 
 // CardValue is a transient write input. It must never be logged or persisted
@@ -71,10 +74,24 @@ func (s *Store) CommitCard(requestID, sessionID string, values []CardValue, at t
 	if requestID == "" || sessionID == "" || len(values) < 1 || len(values) > 8 {
 		return CardReceipt{}, errors.New("invalid secret submission")
 	}
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return CardReceipt{}, err
+	for _, item := range values {
+		// Only CommitProgramCredential may write a program-owned entry (I-3).
+		if item.Recipient.Kind == KindProgram {
+			return CardReceipt{}, &ProgramOwnedError{Reference: item.BaseName}
+		}
 	}
+	var receipt CardReceipt
+	err := s.transact(func(sf *storeFile) error {
+		var commitErr error
+		receipt, commitErr = s.commitCardLocked(sf, requestID, sessionID, values, at)
+		return commitErr
+	})
+	return receipt, err
+}
+
+// commitCardLocked is CommitCard's mutation and write, run inside its store
+// transaction.
+func (s *Store) commitCardLocked(sf *storeFile, requestID, sessionID string, values []CardValue, at time.Time) (CardReceipt, error) {
 	if receipt, ok := sf.CardReceipts[requestID]; ok {
 		return receipt, ErrCardAlreadySubmitted
 	}
@@ -105,6 +122,9 @@ func (s *Store) CommitCard(requestID, sessionID string, values []CardValue, at t
 		}
 		sf.CardHighWater[item.BaseName] = version
 		ref := fmt.Sprintf("%s.v%d", item.BaseName, version)
+		if programReservedLocked(sf, ref) {
+			return CardReceipt{}, &ProgramOwnedError{Reference: ref}
+		}
 		entry, sealErr := encrypt(s.key, ref, []byte(item.Value))
 		if sealErr != nil {
 			return CardReceipt{}, errors.New("could not encrypt secret values")
@@ -155,21 +175,19 @@ func (s *Store) PruneCardReceipts(ids []string) error {
 	if s.key == nil {
 		return ErrStoreLocked
 	}
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return err
-	}
-	changed := false
-	for _, id := range ids {
-		if _, ok := sf.CardReceipts[id]; ok {
-			delete(sf.CardReceipts, id)
-			changed = true
+	return s.transact(func(sf *storeFile) error {
+		changed := false
+		for _, id := range ids {
+			if _, ok := sf.CardReceipts[id]; ok {
+				delete(sf.CardReceipts, id)
+				changed = true
+			}
 		}
-	}
-	if !changed {
-		return nil
-	}
-	return s.saveFileNoLock(sf)
+		if !changed {
+			return nil
+		}
+		return s.saveFileNoLock(sf)
+	})
 }
 
 // PruneOrphanCardReceipts reconciles receipt metadata against a complete,
@@ -181,25 +199,23 @@ func (s *Store) PruneOrphanCardReceipts(keep map[string]string) error {
 	if s.key == nil {
 		return ErrStoreLocked
 	}
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return err
-	}
-	changed := false
-	for id, receipt := range sf.CardReceipts {
-		if sessionID, exists := keep[id]; exists {
-			if sessionID != receipt.SessionID {
-				return errors.New("secret receipt session binding does not match saved request")
+	return s.transact(func(sf *storeFile) error {
+		changed := false
+		for id, receipt := range sf.CardReceipts {
+			if sessionID, exists := keep[id]; exists {
+				if sessionID != receipt.SessionID {
+					return errors.New("secret receipt session binding does not match saved request")
+				}
+				continue
 			}
-			continue
+			delete(sf.CardReceipts, id)
+			changed = true
 		}
-		delete(sf.CardReceipts, id)
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	return s.saveFileNoLock(sf)
+		if !changed {
+			return nil
+		}
+		return s.saveFileNoLock(sf)
+	})
 }
 
 // CardSecretMetadata returns internal, value-free reference bindings.

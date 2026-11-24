@@ -61,8 +61,9 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "program", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+    program_id: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -111,6 +112,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    program_generation: z.number().int().min(1).optional(),
     continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),

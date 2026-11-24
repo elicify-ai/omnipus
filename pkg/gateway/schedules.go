@@ -170,6 +170,12 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// EmitToolPolicyAskDenied) does NOT carry the schedule identity fields —
 	// EmitToolPolicyAskDenied has a fixed field set without them.
 	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
+	// I-2 / S-124: a workspace heartbeat is work a person configured with no
+	// starting message: its input is independent. Other schedules carry no
+	// stored origin yet, so their input stays unresolved (fail closed).
+	if job.Payload.Kind == heartbeatJobKind {
+		ctx2 = agent.WithScheduledInputProvenance(ctx2, bus.NewProvenance(bus.OriginIndependent))
+	}
 
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
 	// M6: ProcessScheduled runs the turn with SendResponse:false,

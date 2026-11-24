@@ -622,8 +622,18 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 
 	resolvedCwd := resolvePathBestEffort(cwd, "")
 	_, cwdProtected := g.enclosingProtectedWorkdir(resolvedCwd)
+	// A bash cwd may also be a write mount outside the work dir (ADR-063
+	// addendum 2026-11-24). From there a script can still point git or cd at
+	// the protected work dir ("git -C <work> commit", "cd <work> && git reset
+	// --hard"), and the -C value is stripped above, so check (a) also runs when
+	// any script token names a path inside a protected work dir. This only adds
+	// refusals.
+	if !cwdProtected {
+		cwdProtected = g.scriptNamesProtectedWorkdir(script, cwd)
+	}
 
-	// (a) mutating git verbs anywhere in the script, when cwd is a protected repo.
+	// (a) mutating git verbs anywhere in the script, when cwd is a protected
+	//     repo or the script names a path inside one.
 	if cwdProtected {
 		for _, pat := range gitMutatingScriptPatterns() {
 			if strings.Contains(lower, pat) {
@@ -728,6 +738,39 @@ func (g *GitGuard) scriptNamesProtectedGit(script, cwd string) bool {
 		// but guard against relative ".git" when cwd is the protected repo).
 		if f == ".git" || strings.HasSuffix(f, "/.git") {
 			if _, ok := g.enclosingProtectedWorkdir(resolvePathBestEffort(cwd, "")); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scriptNamesProtectedWorkdir reports whether any token of script, resolved
+// against cwd, lies inside a protected work dir. Tokens are split the same way
+// as scriptNamesProtectedGit; a glued git "-C<dir>" token is also read as its
+// directory. Like every check in this file it is not a shell parser (LIM-02):
+// it judges each token against the starting cwd only.
+func (g *GitGuard) scriptNamesProtectedWorkdir(script, cwd string) bool {
+	if len(g.resolvedWorkdirs()) == 0 {
+		return false
+	}
+	fields := strings.FieldsFunc(script, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '"', '\'', '=':
+			return true
+		}
+		return false
+	})
+	for _, f := range fields {
+		candidates := []string{f}
+		if strings.HasPrefix(f, "-C") && len(f) > 2 {
+			candidates = append(candidates, f[2:])
+		}
+		for _, c := range candidates {
+			if c == "" || strings.HasPrefix(c, "-") {
+				continue
+			}
+			if _, ok := g.enclosingProtectedWorkdir(resolvePathBestEffort(c, cwd)); ok {
 				return true
 			}
 		}

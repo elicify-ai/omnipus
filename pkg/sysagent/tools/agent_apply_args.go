@@ -34,7 +34,7 @@ var agentUpdateArgNames = map[string]struct{}{
 
 // permissionFieldNames are the capability fields only set_agent_permissions
 // may write on an existing agent (FR-024).
-var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers"}
+var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers", "programs"}
 
 // permissionFieldRefusal returns update_agent's refusal when args carries a
 // permission field — present at all, a clear or a null included — so the
@@ -43,7 +43,7 @@ func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
 	for _, name := range permissionFieldNames {
 		if _, present := args[name]; present {
 			return tools.ErrorResult(errorJSON("USE_SET_AGENT_PERMISSIONS",
-				name+" cannot be changed with update_agent; per-agent tool policies and connector assignments change only through set_agent_permissions",
+				name+" cannot be changed with update_agent; per-agent tool policies, connector assignments and programs change only through set_agent_permissions",
 				"Call set_agent_permissions with the agent id, its revision and the capability change"))
 		}
 	}

@@ -79,6 +79,25 @@ func WithScheduledJobContext(ctx context.Context, jobID, jobName string) context
 	})
 }
 
+// scheduledInputProvenanceKey carries a fired schedule's input provenance.
+type scheduledInputProvenanceKey struct{}
+
+// WithScheduledInputProvenance records where a fired schedule's message came
+// from (connected-programs I-2, S-124), so ProcessScheduled can give its turn
+// that input origin. The cron fire path sets it only for a schedule whose
+// origin it knows: a workspace heartbeat, which a person configured, is
+// independent. Without it the scheduled input stays unresolved (fail closed).
+func WithScheduledInputProvenance(ctx context.Context, p bus.Provenance) context.Context {
+	return context.WithValue(ctx, scheduledInputProvenanceKey{}, p)
+}
+
+// scheduledInputOrigin is the input origin WithScheduledInputProvenance put on
+// ctx; unresolved when none was set.
+func scheduledInputOrigin(ctx context.Context) inputOrigin {
+	p, _ := ctx.Value(scheduledInputProvenanceKey{}).(bus.Provenance)
+	return inputOrigin{provenance: p}
+}
+
 // scheduledJobContextFrom retrieves the ScheduledJobInfo from ctx, or returns
 // a zero-value struct when no info was injected (interactive / non-scheduled
 // runs). The boolean reports whether info was present.
@@ -641,7 +660,11 @@ func (al *AgentLoop) processSystemMessage(
 		// silently dropped at the gate even after that stamping fix —
 		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
 		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
-		SenderID:             msg.Sender.CanonicalID,
+		SenderID: msg.Sender.CanonicalID,
+		// I-2/S-108: the continuation's turn joins the provenance the
+		// system message carries (for example the background callback's
+		// {connector:telegram}); without it the turn is unresolved.
+		InputOrigin:          inboundInputOrigin(msg),
 		UserMessage:          fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:      "Background task completed.",
 		SendResponse:         true,

@@ -54,6 +54,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
@@ -77,6 +78,11 @@ type ExecToolDeps struct {
 	// PrivateEnv supplies the turn's agent-private variables (FR-076). They
 	// are appended after every managed environment layer. Nil = none.
 	PrivateEnv PrivateEnvSource
+
+	// Programs supplies the turn's connected programs (FR-011): variables,
+	// git logins and per-run site grants, attached only through
+	// programs.Attach. Nil = none.
+	Programs ProgramSource
 
 	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
 	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
@@ -216,6 +222,8 @@ type ExecTool struct {
 
 	// privateEnv: see ExecToolDeps.PrivateEnv.
 	privateEnv PrivateEnvSource
+	// programs: see ExecToolDeps.Programs.
+	programs ProgramSource
 }
 
 // SetDocumentRuntime makes the versioned document toolchain reachable from
@@ -288,6 +296,7 @@ func NewExecToolWithDeps(
 	tool.approvalGrants = deps.ApprovalGrants
 	tool.commandRules = deps.CommandRules
 	tool.privateEnv = deps.PrivateEnv
+	tool.programs = deps.Programs
 	return tool, nil
 }
 
@@ -408,11 +417,11 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, cb AsyncCal
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args, cb)
+		return maskProgramTokens(t.executeRun(ctx, args, cb))
 	case "poll":
 		return t.executePoll(ctx, args)
 	case "read":
-		return t.executeRead(ctx, args)
+		return maskProgramTokens(t.executeRead(ctx, args))
 	case "kill":
 		return t.executeKill(ctx, args)
 	default:
@@ -515,10 +524,19 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// newly-approved grant. This is the fix for the B-1 reachability defect:
 	// grant consultation now runs from the real execution path, not only
 	// from the classic "ask" tool-policy branch upstream of Execute.
+	// FR-076: the owner pair's selected private variables, and (FR-011) the
+	// turn's connected programs, resolved once per call before the
+	// pre-flight: Auto grants the sites of a visible program word (FR-015).
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	var turnPrograms *programs.TurnPrograms
+	if !isDocumentProbe {
+		turnPrograms = resolveTurnPrograms(ctx, t.programs, privateVars)
+	}
+
 	var perm *shellPermissionResult
 	if !isDocumentProbe {
 		var permErr *ToolResult
-		perm, permErr = t.enforceShellPermissionMode(ctx, command)
+		perm, permErr = t.enforceShellPermissionMode(withTurnPrograms(ctx, turnPrograms), command)
 		if permErr != nil {
 			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 			return permErr
@@ -606,6 +624,14 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// recognised. perm is nil for the document probe and for Ask/God Mode
 	// (never Auto), so egressToken is "" there — unaffected, exactly as
 	// before this fix.
+	if perm != nil && perm.mode == ShellModeAsk {
+		// FR-016: in Ask the person already permitted this command; the
+		// sites of its visible program words are granted for this run only.
+		if sites, _ := programSiteSplit(turnPrograms, command); len(sites) > 0 && t.proxy != nil {
+			perm.egressToken = newOnceEgressToken()
+			t.proxy.GrantRunHosts(perm.egressToken, sites)
+		}
+	}
 	if perm != nil {
 		lim.EgressProxyToken = perm.egressToken
 		if !runInBackground && strings.HasPrefix(perm.egressToken, onceEgressTokenPrefix) {
@@ -665,22 +691,28 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-076: the owner pair's selected private variables reach this child
 	// only, appended after every managed layer; never the gateway env.
-	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
-	for _, private := range privateVars {
+	// FR-024: a variable a connected program also sets is set by neither.
+	for _, private := range withoutProgramConflicts(turnPrograms, privateVars) {
 		execEnv = withPrivateVariable(execEnv, private.Name, private.Value)
 	}
 	turnNotice = joinNotice(turnNotice, privateNotice)
 
+	// FR-011/FR-013/FR-014: the connected programs' variables and git logins
+	// reach the child only through programs.Attach at its launch site.
+	programSet, execEnv, programNotice := programAttachment(ctx, turnPrograms, command, cwd, execEnv, lim)
+	turnNotice = joinNotice(turnNotice, programNotices(turnPrograms))
+	turnNotice = joinNotice(turnNotice, programNotice)
+
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		startedResult := t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, execEnv, ownerSessionID, cb)
+		startedResult := t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, execEnv, programSet, ownerSessionID, cb)
 		// The background START result carries the same truthful notice as the
 		// foreground path: a broken optional runtime never blocks the command,
 		// but it is never silent either.
 		return appendRuntimeNotice(startedResult, turnNotice)
 	}
 	started := time.Now()
-	result := t.runForeground(ctx, command, lim, timeoutSeconds, execEnv)
+	result := t.runForeground(ctx, command, lim, timeoutSeconds, execEnv, programSet)
 	result = t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
 	return appendRuntimeNotice(result, turnNotice)
 }
@@ -902,10 +934,6 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 	rawCWD, _ := args["cwd"].(string)
 	rawCWD = strings.TrimSpace(rawCWD)
 
-	if filepath.IsAbs(rawCWD) {
-		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path)")
-	}
-
 	policyForCWD, err := fspolicy.EffectiveFSPolicy(
 		ctx, baseDir, "", true, config.OmnipusHomeDir(), ToolAgentID(ctx), ToolWorkspaceID(ctx),
 	)
@@ -913,8 +941,30 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 		return "", fmt.Errorf("workspace dir not resolvable: %w", err)
 	}
 
+	if filepath.IsAbs(rawCWD) {
+		mountCWD, ok, mountErr := resolveMountCWD(ctx, policyForCWD, rawCWD)
+		if mountErr != nil {
+			return "", mountErr
+		}
+		if ok {
+			return mountCWD, nil
+		}
+		return "", fmt.Errorf("path escapes workspace: absolute path not allowed (use a relative path, or a folder inside a write mount)")
+	}
+
 	handle, err := ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)
 	if err != nil {
+		if errors.Is(err, ErrOutsideScope) {
+			// A relative cwd that resolves outside the work dir (in practice
+			// the work/<name> link of a mount) may still name a write mount.
+			mountCWD, ok, mountErr := resolveMountCWD(ctx, policyForCWD, rawCWD)
+			if mountErr != nil {
+				return "", mountErr
+			}
+			if ok {
+				return mountCWD, nil
+			}
+		}
 		return "", fmt.Errorf("path escapes workspace: %w", err)
 	}
 	defer handle.Close()
@@ -924,6 +974,61 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 		return "", fmt.Errorf("failed to resolve cwd: %w", err)
 	}
 	return realPath, nil
+}
+
+// resolveMountCWD is the one widening of bash's cwd (ADR-063 addendum
+// 2026-11-24, founder ruling on #1960 S-20): a cwd inside an operator-approved
+// WRITE mount of this turn's workspace is admitted. It reports ok=false (the
+// caller keeps its normal refusal) unless ResolvePath with FSOpWrite, given
+// only the workspace mounts as AllowedRoots, admits rawCWD, the resolved real
+// path lies inside one of those mount roots and outside the work dir, and it
+// is an existing directory. Nothing else is opened:
+//
+//   - AllowedRoots is ONLY the workspace mounts (turnMountRoots): never the
+//     operator/media allowlist, a D7 path grant or a setup root, so the
+//     SEC-05/FR-B2 rule in resolveCWD still holds for everything that is not
+//     a mount.
+//   - The work dir keeps exactly its earlier rules: an absolute path inside
+//     it is still refused, and a relative path into it still takes the
+//     FSOpExec route only.
+//   - ResolvePath checks the secret set (IsCarveOut) before any mount, so a
+//     mount never reopens a protected path; the evidence push guard
+//     (sandbox/gitguard.go) is unchanged and still judges every git command.
+//
+// A refused FSOpWrite resolve is not an error here: it means "not a mount",
+// and the caller reports its own refusal. Only a failure after a mount
+// matched (stat, not a directory) is returned as an error.
+func resolveMountCWD(ctx context.Context, policyForCWD fspolicy.FSPolicy, rawCWD string) (string, bool, error) {
+	mountRoots := turnMountRoots(ctx, config.OmnipusHomeDir())
+	if len(mountRoots) == 0 {
+		return "", false, nil
+	}
+	mountPolicy := policyForCWD
+	mountPolicy.AllowedRoots = mountRoots
+	handle, err := ResolvePath(ctx, mountPolicy, "bash", "", FSOpWrite, rawCWD)
+	if err != nil {
+		// A refused write resolve means "not inside a mount"; the caller refuses.
+		return "", false, nil
+	}
+	defer handle.Close()
+	realPath, err := handle.RealPath()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve cwd: %w", err)
+	}
+	if isWithinWorkspace(realPath, policyForCWD.WorkDir) {
+		return "", false, nil
+	}
+	if _, inMount := matchedAllowedRoot(realPath, mountRoots); !inMount {
+		return "", false, nil
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return "", false, fmt.Errorf("path escapes workspace: cwd inside write mount is not usable: %w", err)
+	}
+	if !info.IsDir() {
+		return "", false, fmt.Errorf("path escapes workspace: cwd inside write mount is not a directory: %q", rawCWD)
+	}
+	return realPath, true, nil
 }
 
 // --- audit helpers -----------------------------------------------------------
@@ -1027,13 +1132,17 @@ func (t *ExecTool) runForeground(
 	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 ) *ToolResult {
 	argv := buildShellArgv(command)
 
 	if t.godMode {
-		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv)
+		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv, set)
 	}
 
+	// The sandboxed spawner attaches set (programs.Attach) to the child it
+	// builds, after its own environment merge and before the capture cap.
+	lim.Programs = &set
 	res, err := sandbox.Run(ctx, argv, execEnv, lim)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
@@ -1129,6 +1238,7 @@ func (t *ExecTool) runUnconstrained(
 	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
+	set programs.ResolvedPrograms,
 ) *ToolResult {
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -1142,6 +1252,10 @@ func (t *ExecTool) runUnconstrained(
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	// I-1: program variables and the masking writers, before the launch.
+	if err := programs.Attach(cmd, set); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+	}
 
 	// The floor: profile first (macOS), then the locked-thread spawn that
 	// carries the policy to the child on Linux. A nil policy — sandbox off,

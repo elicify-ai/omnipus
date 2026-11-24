@@ -1,0 +1,10 @@
+{
+  "id": "fly",
+  "kind": "preset",
+  "display_name": "Fly",
+  "program_words": ["fly", "flyctl"],
+  "token_variables": ["FLY_API_TOKEN"],
+  "network_sites": ["api.fly.io", "api.machines.dev"],
+  "identity_check": {"program_word": "fly", "args": ["auth", "whoami"],
+                     "timeout_seconds": 20, "max_output_bytes": 4096}
+}

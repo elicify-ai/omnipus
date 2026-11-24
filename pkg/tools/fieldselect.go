@@ -63,7 +63,7 @@ var AgentFieldNames = []string{
 	"model", "provider", "reasoning_effort", "fallback_models", "model_chain", "model_params",
 	"max_tool_iterations", "context_window_override", "memory_enabled",
 	"soul", "agent_md", "skills", "stale_skill_grants", "tool_permissions", "stored_overrides",
-	"connectors", "executor", "runnable", "program_warning",
+	"connectors", "executor", "runnable", "program_warning", "programs",
 	"activation_status", "editable_fields", "has_main_chat",
 }
 

@@ -1,0 +1,18 @@
+title: ProgramGit
+description: >
+  Git site of a connected program (spec cli-credentials S1, contract table).
+  `host` is stored canonical: lower-case, no trailing dot, no port and no
+  scheme (a request may send `GitHub.com.`; it is stored as `github.com`).
+  `username` defaults to `x-access-token` when omitted.
+type: object
+required:
+  - host
+additionalProperties: false
+properties:
+  host:
+    type: string
+    minLength: 1
+    maxLength: 253
+  username:
+    type: string
+    pattern: '^[A-Za-z0-9._@-]{1,64}$'

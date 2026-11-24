@@ -17,6 +17,12 @@ func initializeOrdinaryRootRecord(rec *session.LifecycleRecord, meta *session.Un
 	// The immutable owner (DEL-11); never the retired active_agent_id.
 	rec.AgentID = meta.AgentID
 	rec.Origin = &session.Origin{Kind: session.OriginKind(meta.Type)}
+	// FR-050: the mode is written once, here. A root stores no provenance;
+	// a lineage-classified record created here has none to copy and is
+	// unresolved (fail closed).
+	rec.ProvenanceMode = session.ClassifyProvenanceMode(session.ProvenanceModeEvidence{
+		Origin: rec.Origin.Kind, ParentSessionID: meta.ParentSessionID, TaskID: meta.TaskID,
+	})
 }
 
 // The caller holds entryMu. The existing parent-only publication primitive

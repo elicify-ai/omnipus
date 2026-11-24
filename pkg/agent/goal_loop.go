@@ -943,6 +943,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 				Content: "An adjudication for this goal is already running in the background. " +
 					"Its verdict will arrive on its own — there is no need to claim again right now.",
 				SessionID: gl.sessionID, SessionKey: gl.opts.SessionKey,
+				Provenance: tools.ToolTurnProvenance(gl.ctx),
 			})
 			return
 		}

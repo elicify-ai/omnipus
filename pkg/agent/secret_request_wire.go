@@ -179,6 +179,10 @@ func (al *AgentLoop) dispatchSecretResume(rec secretrequest.Record) error {
 		Channel: "webchat", ChatID: rec.ChatID, SessionID: rec.Card.SessionId,
 		Content: secretrequest.ResumeMessage(rec), GatewayUserID: rec.Owner,
 		Metadata: map[string]string{"agent_id": rec.Card.ActingAgentId, secretResumeMetadataKey: rec.Card.RequestId, ownerWakeMetadataKey: "1"},
+		// The card request records no provenance of the turn that raised it:
+		// the continuation is unresolved (I-2, fail closed); the chat's own
+		// lineage, if any, is joined at turn start.
+		Provenance: bus.UnresolvedProvenance(),
 	}
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
 		current, readErr := lifecycle.Load(rec.Card.SessionId)

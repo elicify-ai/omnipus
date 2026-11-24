@@ -86,6 +86,8 @@ type Config struct {
 	// precedence over these global values. No token/money fields (NFR-1).
 	Planning PlanningConfig `json:"planning,omitempty" yaml:"-"`
 
+	Programs ProgramsConfig `json:"programs,omitempty" yaml:"-"` // connected programs (pkg/config/programs.go)
+
 	// SessionMessaging holds the ADR-053 §8 session-control-plane operability
 	// config (FR-195's 21 keys): the global kill switch (enabled), the wake
 	// kill switch (wake_enabled), and the caps/tunables the S2/S3 transport,
@@ -696,7 +698,8 @@ type AgentConfig struct {
 	// impartial (same evidence -> same verdict) rather than drifting with
 	// accumulated episodic memory across adjudications. Every other agent
 	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
-	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+	MemoryEnabled *bool    `json:"memory_enabled,omitempty"`
+	Programs      []string `json:"programs,omitempty"` // connected programs switched on (FR-042); absent = none
 	// ContextWindowOverride is the per-agent context-window override
 	// (tokens), rung 1 of the ADR-066 D2 resolution ladder. nil = unset.
 	// Like every override it can only LOWER the window: the resolver clamps
@@ -1141,6 +1144,9 @@ type ChannelInstanceConfig struct {
 	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
 	// change it; set_config refuses channels.*.outbound (FR-024).
 	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
+	// ProgramsAllowed lets work from this connection use connected programs
+	// (FR-010); only PUT /channels/{id}/programs writes it, a rebind clears it.
+	ProgramsAllowed bool `json:"programs_allowed,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
 	AllowFrom    FlexibleStringSlice `json:"allow_from,omitempty"`

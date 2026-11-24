@@ -235,6 +235,10 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 			CanonicalID: "webchat_user",
 		},
 		GatewayUserID: set.Owner,
+		// The answer set records no provenance of the asking turn; the
+		// resume is unresolved (fail closed, I-2) and the session's stored
+		// lineage, if any, is joined at turn start.
+		Provenance: bus.UnresolvedProvenance(),
 	}
 	if set.AgentID != "" {
 		msg.Metadata = map[string]string{"agent_id": set.AgentID}

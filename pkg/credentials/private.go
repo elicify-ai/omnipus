@@ -93,28 +93,31 @@ func (s *Store) RemoveReference(ref string) (CardInventoryEntry, error) {
 	if s.key == nil {
 		return CardInventoryEntry{}, ErrStoreLocked
 	}
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return CardInventoryEntry{}, err
-	}
-	secret, card := sf.CardSecrets[ref]
-	if _, stored := sf.Credentials[ref]; !stored && !card {
-		return CardInventoryEntry{}, &NotFoundError{Name: ref}
-	}
-	entry := CardInventoryEntry{Reference: ref, Secret: secret, Plain: !card}
-	if !card {
-		entry.Secret.Version = 1
-	}
-	delete(sf.Credentials, ref)
-	delete(sf.CardSecrets, ref)
-	if card && secret.Recipient.Kind == KindAgentPrivate {
-		key := privateKey(secret.Recipient)
-		if sf.PrivateSelected[key] == ref {
-			entry.Selected = true
-			delete(sf.PrivateSelected, key)
+	var entry CardInventoryEntry
+	err := s.transact(func(sf *storeFile) error {
+		if programReservedLocked(sf, ref) {
+			return &ProgramOwnedError{Reference: ref}
 		}
-	}
-	if err := s.saveFileNoLock(sf); err != nil {
+		secret, card := sf.CardSecrets[ref]
+		if _, stored := sf.Credentials[ref]; !stored && !card {
+			return &NotFoundError{Name: ref}
+		}
+		entry = CardInventoryEntry{Reference: ref, Secret: secret, Plain: !card}
+		if !card {
+			entry.Secret.Version = 1
+		}
+		delete(sf.Credentials, ref)
+		delete(sf.CardSecrets, ref)
+		if card && secret.Recipient.Kind == KindAgentPrivate {
+			key := privateKey(secret.Recipient)
+			if sf.PrivateSelected[key] == ref {
+				entry.Selected = true
+				delete(sf.PrivateSelected, key)
+			}
+		}
+		return s.saveFileNoLock(sf)
+	})
+	if err != nil {
 		return CardInventoryEntry{}, err
 	}
 	return entry, nil
@@ -129,28 +132,32 @@ func (s *Store) SetPrivateChannelAvailability(ref string, available bool) (CardI
 	if s.key == nil {
 		return CardInventoryEntry{}, ErrStoreLocked
 	}
-	sf, err := s.loadFileInternal()
+	var out CardInventoryEntry
+	err := s.transact(func(sf *storeFile) error {
+		if programReservedLocked(sf, ref) {
+			return &ProgramOwnedError{Reference: ref}
+		}
+		secret, ok := sf.CardSecrets[ref]
+		if !ok {
+			return ErrCardSecretNotFound
+		}
+		if secret.Recipient.Kind != KindAgentPrivate {
+			return ErrNotPrivateSecret
+		}
+		key := privateKey(secret.Recipient)
+		if sf.PrivateOptions == nil {
+			sf.PrivateOptions = make(map[string]PrivateOptions)
+		}
+		options := sf.PrivateOptions[key]
+		options.AvailableInChannelTurns = available
+		sf.PrivateOptions[key] = options
+		out = CardInventoryEntry{Reference: ref, Secret: secret, Selected: sf.PrivateSelected[key] == ref, Options: options}
+		return s.saveFileNoLock(sf)
+	})
 	if err != nil {
 		return CardInventoryEntry{}, err
 	}
-	secret, ok := sf.CardSecrets[ref]
-	if !ok {
-		return CardInventoryEntry{}, ErrCardSecretNotFound
-	}
-	if secret.Recipient.Kind != KindAgentPrivate {
-		return CardInventoryEntry{}, ErrNotPrivateSecret
-	}
-	key := privateKey(secret.Recipient)
-	if sf.PrivateOptions == nil {
-		sf.PrivateOptions = make(map[string]PrivateOptions)
-	}
-	options := sf.PrivateOptions[key]
-	options.AvailableInChannelTurns = available
-	sf.PrivateOptions[key] = options
-	if err := s.saveFileNoLock(sf); err != nil {
-		return CardInventoryEntry{}, err
-	}
-	return CardInventoryEntry{Reference: ref, Secret: secret, Selected: sf.PrivateSelected[key] == ref, Options: options}, nil
+	return out, nil
 }
 
 // SelectPrivateVersion makes ref the selected version of its private
@@ -161,36 +168,41 @@ func (s *Store) SelectPrivateVersion(ref string) (CardInventoryEntry, error) {
 	if s.key == nil {
 		return CardInventoryEntry{}, ErrStoreLocked
 	}
-	sf, err := s.loadFileInternal()
+	var out CardInventoryEntry
+	err := s.transact(func(sf *storeFile) error {
+		if programReservedLocked(sf, ref) {
+			return &ProgramOwnedError{Reference: ref}
+		}
+		secret, ok := sf.CardSecrets[ref]
+		if !ok {
+			return ErrCardSecretNotFound
+		}
+		if secret.Recipient.Kind != KindAgentPrivate {
+			return ErrNotPrivateSecret
+		}
+		entry, stored := sf.Credentials[ref]
+		if !stored {
+			return ErrCardSecretNotFound
+		}
+		// Metadata presence does not prove the value is usable: a version
+		// that cannot be decrypted is refused here, keeping the current
+		// selection, rather than displacing a readable one (gate r1 SFH
+		// T2-SF-05).
+		if _, err := decrypt(s.key, ref, entry); err != nil {
+			return err
+		}
+		key := privateKey(secret.Recipient)
+		if sf.PrivateSelected == nil {
+			sf.PrivateSelected = make(map[string]string)
+		}
+		sf.PrivateSelected[key] = ref
+		out = CardInventoryEntry{Reference: ref, Secret: secret, Selected: true, Options: sf.PrivateOptions[key]}
+		return s.saveFileNoLock(sf)
+	})
 	if err != nil {
 		return CardInventoryEntry{}, err
 	}
-	secret, ok := sf.CardSecrets[ref]
-	if !ok {
-		return CardInventoryEntry{}, ErrCardSecretNotFound
-	}
-	if secret.Recipient.Kind != KindAgentPrivate {
-		return CardInventoryEntry{}, ErrNotPrivateSecret
-	}
-	entry, stored := sf.Credentials[ref]
-	if !stored {
-		return CardInventoryEntry{}, ErrCardSecretNotFound
-	}
-	// Metadata presence does not prove the value is usable: a version that
-	// cannot be decrypted is refused here, keeping the current selection,
-	// rather than displacing a readable one (gate r1 SFH T2-SF-05).
-	if _, err := decrypt(s.key, ref, entry); err != nil {
-		return CardInventoryEntry{}, err
-	}
-	key := privateKey(secret.Recipient)
-	if sf.PrivateSelected == nil {
-		sf.PrivateSelected = make(map[string]string)
-	}
-	sf.PrivateSelected[key] = ref
-	if err := s.saveFileNoLock(sf); err != nil {
-		return CardInventoryEntry{}, err
-	}
-	return CardInventoryEntry{Reference: ref, Secret: secret, Selected: true, Options: sf.PrivateOptions[key]}, nil
+	return out, nil
 }
 
 // PrivateVariableError reports private variables of a pair whose selected

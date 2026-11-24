@@ -69,6 +69,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/childenv"
+	"github.com/elicify-ai/omnipus/pkg/programs"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // restrictAuditHook is the package-level audit emitter for B1.2(d)
@@ -287,6 +289,13 @@ type Limits struct {
 	// operator-configured cfg.Sandbox.EgressAllowList, exactly as before
 	// this fix.
 	EgressProxyToken string
+
+	// Programs is the connected-programs set for the child Run builds
+	// (connected programs I-1): Run calls programs.Attach on it after its own
+	// environment merge and output capture are set, before the launch, so
+	// program variables reach the child and the masking writers sit in front
+	// of the capture cap. Nil = no programs.
+	Programs *programs.ResolvedPrograms
 
 	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
 	// typically produced by sandbox.DeriveKernelPolicy from the turn's
@@ -535,16 +544,23 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// Bounded stdout/stderr capture. We use bytes.Buffer with manual length
 	// checks rather than io.LimitWriter because we want a clear truncation
 	// notice in the captured output rather than a silent cut.
+	// testseam.CaptureCap/CaptureWriter return their input unchanged outside
+	// the s1seams test build (#1960 S1, seam H44).
 	var stdoutBuf, stderrBuf cappedBuffer
-	stdoutBuf.cap = outputCap
-	stderrBuf.cap = outputCap
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	stdoutBuf.cap = testseam.CaptureCap("stdout", outputCap)
+	stderrBuf.cap = testseam.CaptureCap("stderr", outputCap)
+	cmd.Stdout = testseam.CaptureWriter("stdout", &stdoutBuf)
+	cmd.Stderr = testseam.CaptureWriter("stderr", &stderrBuf)
 	// Stdin: bind to an empty in-memory reader so os/exec does not open
 	// /dev/null on our behalf. Landlock at the gateway level does not grant
 	// access to /dev, and an empty reader yields the same EOF semantics as
 	// /dev/null without traversing the device tree.
 	cmd.Stdin = bytes.NewReader(nil)
+	if lim.Programs != nil {
+		if err := programs.Attach(cmd, *lim.Programs); err != nil {
+			return Result{}, fmt.Errorf("hardened_exec: attach program variables: %w", err)
+		}
+	}
 
 	// Apply platform-specific hardening (Setpgid+Pdeathsig+prlimit on
 	// Linux, rlimit on darwin, Job Object on windows). Failure to apply

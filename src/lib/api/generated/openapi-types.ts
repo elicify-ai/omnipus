@@ -1273,6 +1273,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/{id}/programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the channel's connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). Signed-in person's browser session only. Absent setting reads `allowed: false`.
+         */
+        get: operations["getChannelPrograms"];
+        /**
+         * Set the channel's connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). The only writer of `programs_allowed`; set_config and the generic config writer refuse it. Signed-in person's browser session only; a stale revision answers 409.
+         */
+        put: operations["setChannelPrograms"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List connected-program entries
+         * @description Spec cli-credentials FR-002 (S1). Presets and custom entries with their value-free connection state. Signed-in person's browser session only.
+         */
+        get: operations["listPrograms"];
+        put?: never;
+        /**
+         * Create a custom program entry
+         * @description Spec cli-credentials FR-019 (S1), dataset D-2. At most 32 custom entries. Signed-in person's browser session only.
+         */
+        post: operations["createProgram"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the web-chat connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). Independent work follows this setting (founder Q1 = A). Signed-in person's browser session only.
+         */
+        put: operations["updateProgramSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit a custom program entry
+         * @description Spec cli-credentials FR-019, FR-042 (S1). Requires `revision`; a stale revision or a git-host conflict for an agent the entry is on for answers 409. Presets answer 422.
+         */
+        put: operations["updateProgram"];
+        post?: never;
+        /**
+         * Delete a custom program entry
+         * @description Spec cli-credentials FR-019 (S1). Refused 409 while the entry is on for an agent (the message names the agent); presets answer 422.
+         */
+        delete: operations["deleteProgram"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save a program token and start its account check
+         * @description Spec cli-credentials FR-003, FR-004, FR-006, FR-043 (S1). Answers the entry in `checking` with the new generation. A body over 65,536 bytes answers 413; a failed save keeps the previous token (500).
+         */
+        put: operations["saveProgramCredential"];
+        post?: never;
+        /**
+         * Disconnect a program (remove the local token)
+         * @description Spec cli-credentials FR-023 (S1). Increments the generation; agent switches stay on.
+         */
+        delete: operations["disconnectProgram"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run the account check again
+         * @description Spec cli-credentials FR-023, FR-047 (S1). Supersedes a running check; the generation is unchanged.
+         */
+        post: operations["recheckProgram"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels/{id}/test": {
         parameters: {
             query?: never;
@@ -1593,6 +1741,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/packages/export/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review what a bundle of one agent would contain (export review)
+         * @description Runs the same capture, cleaning and refusals as POST /packages/export for exactly one agent, builds the bundle in memory only to measure it, discards the bytes and keeps the review in memory for 30 minutes (at most 32 reviews; adding one more drops expired reviews first, then the oldest). Writes nothing to the data folder, writes no audit entry and uses no upload slot. The review never carries a removed value, only names. Reviews do not survive a gateway restart. Local mode only; refused while developer bypass mode is on.
+         */
+        post: operations["createPackageExportPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/export/plan/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read back an export review
+         * @description Returns the stored review unchanged while now is before its expires_at. Does not capture the agent again. An unknown, malformed or expired ID, or any ID after a gateway restart, answers 404 plan_not_found. Local mode only; refused while developer bypass mode is on.
+         */
+        get: operations["getPackageExportPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/packages/import": {
         parameters: {
             query?: never;
@@ -1608,6 +1796,26 @@ export interface paths {
          */
         post: operations["uploadPackage"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/packages/import/{staging_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel an unused upload
+         * @description Cancels a staged upload that is ready and has not been applied, in one step under the staging registry lock that the apply also takes. A ready upload (expired or not) has its folder removed and its slot freed (204). If the folder cannot be removed, the upload is marked cancelled: it can never be applied and holds no slot, and removal is attempted again by the next upload's clean-up or a repeated cancel (500 staging_cleanup_failed). An upload being received, being applied or kept for clean-up after a failed import is never touched (409 staging_busy). Not audited (no data enters or leaves). Local mode only; refused while developer bypass mode is on.
+         */
+        delete: operations["cancelPackageImport"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8813,6 +9021,8 @@ export interface components {
         AgentColor: "#6E8BA8" | "#7A8C9E" | "#4F8A80" | "#5E6973" | "#7B7290" | "#B76E79" | "#A97142" | "#9C8A5B" | "#CDBA96" | "#8E9196";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs. */
+            programs?: string[];
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -9305,6 +9515,8 @@ export interface components {
         };
         /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). The full list replaces the stored one. Accepted only from a signed-in person's browser session; any other caller is refused 403 before any change. */
+            programs?: string[];
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
@@ -9528,6 +9740,8 @@ export interface components {
          * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
          */
         AgentDetail: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs. */
+            programs?: string[];
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
             id: string;
             /** @example Researcher */
@@ -13319,6 +13533,117 @@ export interface components {
             bound: boolean;
         };
         /**
+         * ChannelProgramsSetting
+         * @description Whether agents may use connected programs for work that came from this channel connection (spec FR-009; default off). Written only by PUT /channels/{id}/programs; rebinding the channel turns it off.
+         */
+        ChannelProgramsSetting: {
+            allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
+         * ProgramConnection
+         * @description The connection state of one program entry (spec FR-004, FR-043). Value-free: never carries the token.
+         */
+        ProgramConnection: {
+            /** @enum {string} */
+            state: "not_connected" | "checking" | "connected" | "saved_not_checked" | "check_failed";
+            /**
+             * Format: int64
+             * @description Increments on every publication and on disconnect.
+             */
+            generation: number;
+            /** @description Present only when `state` is `connected` and the check produced a label. */
+            account_label?: string;
+            /** Format: date-time */
+            checked_at?: string;
+            /** @description Value-free reason text for the current state. */
+            message?: string;
+        };
+        /**
+         * ProgramCredentialRequest
+         * @description Save a program token (PUT /programs/{id}/credential, spec FR-003, FR-043). The value is 8 to 16,384 bytes after trimming surrounding whitespace; inner line breaks and NUL are refused. A stale `expected_generation` answers 409.
+         */
+        ProgramCredentialRequest: {
+            value: string;
+            /** Format: int64 */
+            expected_generation?: number;
+        };
+        /**
+         * ProgramCustomRequest
+         * @description Create (POST /programs) or edit (PUT /programs/{id}) of a custom entry (spec FR-019, dataset D-2). A create requires display_name, program_words and token_variables; an edit requires `revision` and changes only the fields it carries.
+         */
+        ProgramCustomRequest: {
+            display_name?: string;
+            program_words?: string[];
+            token_variables?: string[];
+            network_sites?: string[];
+            git?: components["schemas"]["ProgramGit"];
+            identity_check?: components["schemas"]["ProgramIdentityCheck"];
+            /** Format: int64 */
+            revision?: number;
+        };
+        /**
+         * ProgramEntry
+         * @description One connected-program entry, preset or custom (spec cli-credentials S1, FR-001, FR-002). Value-free. Presets are read-only.
+         */
+        ProgramEntry: {
+            id: string;
+            /** @enum {string} */
+            kind: "preset" | "custom";
+            display_name: string;
+            program_words: string[];
+            token_variables: string[];
+            network_sites: string[];
+            git?: components["schemas"]["ProgramGit"];
+            identity_check?: components["schemas"]["ProgramIdentityCheck"];
+            connection: components["schemas"]["ProgramConnection"];
+            /** @description Ids of the agents this entry is switched on for. */
+            enabled_agent_ids: string[];
+            /**
+             * Format: int64
+             * @description Entry revision for optimistic concurrency of custom-entry edits.
+             */
+            revision: number;
+        };
+        /**
+         * ProgramGit
+         * @description Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+         */
+        ProgramGit: {
+            host: string;
+            username?: string;
+        };
+        /**
+         * ProgramIdentityCheck
+         * @description The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+         */
+        ProgramIdentityCheck: {
+            /** @description One of the entry's program words. */
+            program_word: string;
+            args?: string[];
+            /** @description Defaults to 20. */
+            timeout_seconds?: number;
+            /** @description Fixed at 4096; any other value is refused. */
+            max_output_bytes?: number;
+        };
+        /**
+         * ProgramList
+         * @description The program catalog as listed by GET /programs (spec FR-002). Independent work follows `web_chat_allowed` (founder Q1 = A).
+         */
+        ProgramList: {
+            entries: components["schemas"]["ProgramEntry"][];
+            web_chat_allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
+         * ProgramSettingsUpdate
+         * @description The web-chat program setting (spec FR-009; also governs independent work).
+         */
+        ProgramSettingsUpdate: {
+            web_chat_allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
          * ChannelRoutingUpdateRequest
          * @description Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
          */
@@ -14493,6 +14818,144 @@ export interface components {
              *     ]
              */
             agent_ids: string[];
+        };
+        /**
+         * PackageExportPlanRequest
+         * @description Request body of POST /api/v1/packages/export/plan (the export review, epic #1094 slice B1). B1 accepts scope "agents" and exactly one agent ID; any other count is refused by the server with 400 export_selection_invalid (not by this schema), so later slices can add several agents and other scopes without breaking this shape.
+         */
+        PackageExportPlanRequest: {
+            /**
+             * @description What to review. B1 knows only "agents".
+             * @example agents
+             * @enum {string}
+             */
+            scope: "agents";
+            /**
+             * @description IDs of the agents to review (exactly one in B1).
+             * @example [
+             *       "5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c"
+             *     ]
+             */
+            agent_ids: string[];
+        };
+        /**
+         * PackageExportPlan
+         * @description The export review ("plan") of POST /api/v1/packages/export/plan (201) and GET /api/v1/packages/export/plan/{plan_id} (200), epic #1094 slice B1. It says what a bundle exported now would contain and leave out, using the same capture, cleaning and refusals as the export itself. It is held in memory for 30 minutes (expires_at = created_at + 30 minutes) and never carries a removed value: names only. The export itself is not bound to the review.
+         */
+        PackageExportPlan: {
+            /**
+             * Format: uuid
+             * @description Handle for reading this review back (UUID v4).
+             */
+            plan_id: string;
+            /**
+             * Format: date-time
+             * @description When the review was made (UTC).
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description created_at plus 30 minutes; the review is readable while now is before it.
+             */
+            expires_at: string;
+            /**
+             * @description Echo of the request's scope.
+             * @example agents
+             * @enum {string}
+             */
+            scope: "agents";
+            /** @description The reviewed elements (exactly one agent in B1). */
+            elements: {
+                /**
+                 * @description Element type (agent in B1).
+                 * @example agent
+                 */
+                type: string;
+                /** @description The element's ID on this install. */
+                source_id: string;
+                /**
+                 * @description The element's name.
+                 * @example Writer
+                 */
+                name: string;
+                /**
+                 * @description Agent kind.
+                 * @example main
+                 * @enum {string}
+                 */
+                kind: "main" | "worker" | "external_worker";
+                /** @description The files that go into the bundle for this element, in bundle order. */
+                files: {
+                    /**
+                     * @description Path of the file inside the bundle.
+                     * @example agents/5f0c1a2b-3d4e-4f5a-8b7c-9d0e1f2a3b4c/SOUL.md
+                     */
+                    path: string;
+                    /**
+                     * Format: int64
+                     * @description Size in bytes.
+                     * @example 2000
+                     */
+                    size: number;
+                }[];
+                /**
+                 * Format: int64
+                 * @description Sum of the element's file sizes in bytes.
+                 */
+                bytes: number;
+            }[];
+            /** @description What does not travel, and why, in a fixed order. type and reason are open strings because later slices add values. B1 types: skill, connector, agent_memory, session, work_files, team, agent_setting. B1 reasons: type_not_exportable, host_path, secret_value, not_carried, not_restored. */
+            left_out: {
+                /**
+                 * @description What is left out.
+                 * @example agent_memory
+                 */
+                type: string;
+                /**
+                 * @description Why it is left out.
+                 * @example type_not_exportable
+                 */
+                reason: string;
+                /** @description Plain-English explanation. Never contains a value. */
+                message: string;
+                /** @description Names concerned (skill names, connector IDs, environment variable names). Never values. */
+                items?: string[];
+            }[];
+            /** @description Secrets the importer must enter again (same item shape as the manifest's needs_secrets; names only). */
+            needs_secrets: {
+                /**
+                 * @description Secret name, for example an environment variable name.
+                 * @example API_TOKEN
+                 */
+                name: string;
+                /** @description Source ID of the element that uses the secret. */
+                used_by: string;
+                /**
+                 * @description Kind of secret.
+                 * @example executor_env
+                 */
+                kind: string;
+            }[];
+            /** @description Notices the person must see before downloading. B1 always carries exactly one, free_text_copied. */
+            disclosures: {
+                /**
+                 * @description Disclosure code.
+                 * @example free_text_copied
+                 */
+                code: string;
+                /** @description Plain-English text of the disclosure. */
+                message: string;
+            }[];
+            /**
+             * Format: int64
+             * @description Byte length of the bundle as it would be built at review time.
+             */
+            size_bytes: number;
+            /**
+             * @description The download file name the export will use (same rule as the export's Content-Disposition).
+             * @example Writer.omnpkg
+             */
+            file_name: string;
         };
         /**
          * PackageImportPreview
@@ -19087,6 +19550,11 @@ export interface components {
             reference_names?: string[];
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: int64
+             * @description Present when the request is `submitted` and its recipient kind is `program`: the program credential generation the submission committed (spec cli-credentials FR-051).
+             */
+            program_generation?: number;
         };
         /**
          * SecretNameEntry
@@ -19099,7 +19567,7 @@ export interface components {
              * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "program" | "unbound";
             /** Format: int64 */
             version: number;
             recipient: components["schemas"]["SecretRecipientDisplay"];
@@ -19771,9 +20239,11 @@ export interface components {
              * @description Recipient kind.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "program" | "unbound";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
+            /** @description Id of the program the card stores a token for. Present when `kind` is `program`, absent otherwise (spec cli-credentials FR-051). */
+            program_id?: string;
         };
         /**
          * RoomEntryAuthor
@@ -22955,6 +23425,299 @@ export interface operations {
             503: components["responses"]["503BypassActive"];
         };
     };
+    getChannelPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelProgramsSetting"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    setChannelPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelProgramsSetting"];
+            };
+        };
+        responses: {
+            /** @description The stored setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelProgramsSetting"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    listPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    createProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCustomRequest"];
+            };
+        };
+        responses: {
+            /** @description The created entry. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    updateProgramSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The catalog after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramList"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    updateProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCustomRequest"];
+            };
+        };
+        responses: {
+            /** @description The edited entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    deleteProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    saveProgramCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved; the account check is running. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            /** @description Body larger than 65,536 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    disconnectProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    recheckProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The check is running. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
     testChannel: {
         parameters: {
             query?: never;
@@ -23688,6 +24451,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            /** @description The key is owned by a connected program: "<reference> belongs to the program <name>. Change it in Settings -> Programs." No store change (spec cli-credentials FR-048). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Key field is required (empty key). */
             422: {
                 headers: {
@@ -23743,6 +24515,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             /** @description Credential key not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The key is owned by a connected program: "<reference> belongs to the program <name>. Change it in Settings -> Programs." No store change (spec cli-credentials FR-048). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23891,6 +24672,136 @@ export interface operations {
             };
         };
     };
+    createPackageExportPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageExportPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The review. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageExportPlan"];
+                };
+            };
+            /** @description agent_ids does not hold exactly one ID (export_selection_invalid), the body is not valid JSON, has an unknown property, or scope is not agents. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Agent not found (agent_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only POST). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JSON body over 1 MiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent cannot be exported; the same code the export gives (core_agent_not_exportable, agent_prompt_missing, element_not_creatable, agent_file_unreadable, external_worker_not_supported_yet). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPackageExportPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The plan_id from the review. */
+                plan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageExportPlan"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Review unknown, malformed or expired (plan_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only GET). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     uploadPackage: {
         parameters: {
             query?: never;
@@ -23934,6 +24845,73 @@ export interface operations {
             };
             /** @description The package was refused (not_a_package, package_too_new, element_schema_too_new, package_too_large with details.limit window, checksum_mismatch, manifest_mismatch, unsafe_path, unsafe_entry_type, no_supported_element, too_many_agents, element_type_not_supported, invalid_element, element_not_creatable, external_worker_not_supported_yet). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Developer bypass mode is on. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancelPackageImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The staging_id from the upload's preview. */
+                staging_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload was cancelled and its folder removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Staging unknown, already used or already cancelled (staging_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method not allowed (only DELETE on this path; POST on /apply). */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upload is being received, being applied, or kept for clean-up (staging_busy); nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upload is cancelled but its folder could not be removed yet (staging_cleanup_failed); removal is attempted again at a later upload or a repeated cancel. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29267,6 +30245,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The stored request's recipient kind is `program` and the caller is not a signed-in person's browser session ("this action requires a signed-in person"). Decided before the body is read (spec cli-credentials FR-028). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
             /** @description The request is not pending (including a duplicate submit); body is its current state. */
             409: {
@@ -29896,6 +30883,15 @@ export type ChannelConfigureError = components["schemas"]["ChannelConfigureError
 export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
 export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelProgramsSetting = components["schemas"]["ChannelProgramsSetting"];
+export type ProgramConnection = components["schemas"]["ProgramConnection"];
+export type ProgramCredentialRequest = components["schemas"]["ProgramCredentialRequest"];
+export type ProgramCustomRequest = components["schemas"]["ProgramCustomRequest"];
+export type ProgramEntry = components["schemas"]["ProgramEntry"];
+export type ProgramGit = components["schemas"]["ProgramGit"];
+export type ProgramIdentityCheck = components["schemas"]["ProgramIdentityCheck"];
+export type ProgramList = components["schemas"]["ProgramList"];
+export type ProgramSettingsUpdate = components["schemas"]["ProgramSettingsUpdate"];
 export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
@@ -29934,6 +30930,8 @@ export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"]
 export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
 export type PackageManifest = components["schemas"]["PackageManifest"];
 export type PackageExportRequest = components["schemas"]["PackageExportRequest"];
+export type PackageExportPlanRequest = components["schemas"]["PackageExportPlanRequest"];
+export type PackageExportPlan = components["schemas"]["PackageExportPlan"];
 export type PackageImportPreview = components["schemas"]["PackageImportPreview"];
 export type PackageImportApplyRequest = components["schemas"]["PackageImportApplyRequest"];
 export type PackageImportResult = components["schemas"]["PackageImportResult"];

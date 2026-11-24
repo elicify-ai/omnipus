@@ -149,6 +149,14 @@ type Goal struct {
 	// a keeper follow-up's delivery address on a non-webchat channel.
 	RouteChannel string `json:"route_channel,omitempty"`
 	RouteChatID  string `json:"route_chat_id,omitempty"`
+
+	// Provenance is where this goal's instructions came from
+	// (connected-programs I-2, FR-041, S-109): the origins of the agent turn
+	// that registered its definition, joined with every later agent turn
+	// that changed it. Empty means no origin was recorded; a goal wake then
+	// carries only its session's stored lineage (unresolved for a root, fail
+	// closed). Server-set only.
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // New constructs a fresh Goal in the defining phase (D2): it exists, is

@@ -49,6 +49,7 @@ const RECIPIENT_KIND_LABEL: Record<SessionStateSecretRequest['recipient']['kind'
   channel_credential: 'Chat channel credential',
   mailbox_password: 'Mailbox password',
   agent_private: 'Private variable',
+  program: 'Connected program token',
   unbound: 'Stored in Settings',
 }
 

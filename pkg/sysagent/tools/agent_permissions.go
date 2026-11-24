@@ -32,7 +32,7 @@ type AgentPermissionsTool struct{ deps *Deps }
 func NewAgentPermissionsTool(d *Deps) *AgentPermissionsTool { return &AgentPermissionsTool{deps: d} }
 
 var agentPermissionsArgNames = map[string]struct{}{
-	"id": {}, "revision": {}, "tool_policy_changes": {}, "mcp_servers": {},
+	"id": {}, "revision": {}, "tool_policy_changes": {}, "mcp_servers": {}, "programs": {},
 }
 
 func (t *AgentPermissionsTool) Name() string                 { return "set_agent_permissions" }
@@ -42,9 +42,10 @@ func (t *AgentPermissionsTool) Category() tools.ToolCategory { return tools.Cate
 // Description documents the FR-024 permission split and the tool's inputs.
 func (t *AgentPermissionsTool) Description() string {
 	return "Change an existing agent's per-agent tool policies and connector (MCP) assignments. This is the only agent-tool path for those changes — update_agent refuses both. The shipped policy asks the user for approval before it runs; Omnipus skips approvals in God Mode. " +
-		"Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. " +
+		"Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes, mcp_servers or programs. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. " +
 		"tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. " +
 		"mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. " +
+		"programs replaces the full list of connected programs switched on for the agent (ids from Settings → Programs); a switch-on that conflicts with a private variable of the agent or with another program's git login for the same host is refused. " +
 		"An agent cannot change its own permissions: an id equal to the calling agent is refused. " +
 		"External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy."
 }
@@ -57,6 +58,8 @@ func (t *AgentPermissionsTool) Parameters() map[string]any {
 			"revision":            map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
 			"tool_policy_changes": toolPolicyChangesParameters(),
 			"mcp_servers":         mcpServersParameters(),
+			"programs": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Full list of program ids (from Settings → Programs) switched on for the agent; [] switches all off"},
 		},
 		"required":             []string{"id", "revision"},
 		"additionalProperties": false,
@@ -92,7 +95,7 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 	}
 	if len(fields) == 0 {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"at least one of tool_policy_changes or mcp_servers is required", ""))
+			"at least one of tool_policy_changes, mcp_servers or programs is required", ""))
 	}
 	sort.Strings(fields)
 	var requested map[string]config.ToolPolicy
@@ -129,7 +132,10 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 		if err := agentmutation.ValidateFields(*a, fields); err != nil {
 			return err
 		}
-		return applyCapabilityArgs(a, args, known, inv)
+		if err := applyCapabilityArgs(a, args, known, inv); err != nil {
+			return err
+		}
+		return t.applyProgramsArg(a, args)
 	}, nil)
 	if mutateErr != nil {
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)

@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1319,6 +1320,11 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 						"error":   pubErr.Error(),
 					})
 			}
+			persisted := userContent
+			if cfg := ex.rx.rr.rq.ri.rf.rt.al.GetConfig(); cfg != nil {
+				persisted = cfg.FilterSensitiveData(persisted)
+			}
+			persistAsyncToolFeedback(ts, toolCallID, persisted, result.IsError)
 		}
 	}
 
@@ -1355,8 +1361,10 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
-		finishedToolName:    toolName,
-		finishedToolCallID:  session.ToolCallID(toolCallID),
+		// I-2: the background callback carries the turn that started it.
+		Provenance:         ex.rx.rr.rq.ri.rf.rt.ts.origin.Provenance(),
+		finishedToolName:   toolName,
+		finishedToolCallID: session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
 		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
 		// warning. A second raw-cause log here would duplicate that reporting and
@@ -1745,12 +1753,14 @@ func toolResultUserContent(toolName, channel string, suppress bool, result *tool
 	if result == nil || result.Silent || result.ForUser == "" {
 		return ""
 	}
+	// B2 (FR-020): the always-on program-token pass, whatever the general
+	// filter switch says.
 	if !suppress {
-		return result.ForUser
+		return programs.MaskTokens(result.ForUser)
 	}
 	channelType, _ := config.ParseInstanceKey(channel)
 	if result.IsError && isMessagingChannel(channelType) {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1763,7 +1773,7 @@ func asyncToolResultUserContent(toolName, channel string, suppress bool, result 
 		return content
 	}
 	if suppress && channel == "webchat" && result != nil && !result.Silent && result.IsError && result.ForUser != "" {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1782,7 +1792,7 @@ func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
 		AgentID:   ts.resolveActiveAgentID(),
-		Content:   content,
+		Content:   programs.MaskTokens(content), // B3 (FR-020)
 		Timestamp: now,
 		Status:    "error",
 		TurnID:    ts.turnID,

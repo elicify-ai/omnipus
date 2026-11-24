@@ -44,6 +44,12 @@ const (
 	CodeNameSuffixExhausted        = "name_suffix_exhausted"
 	CodeImportRolledBack           = "import_rolled_back"
 	CodeImportRollbackIncomplete   = "import_rollback_incomplete"
+
+	// B1 cancel lifecycle (spec "Cancel lifecycle"): a staging that is being
+	// received, applied or kept for clean-up is never cancelled; a ready one
+	// whose folder could not be removed is cancelled with removal pending.
+	CodeStagingBusy          = "staging_busy"
+	CodeStagingCleanupFailed = "staging_cleanup_failed"
 )
 
 // Values of details.limit on a package_too_large refusal (FR-008).

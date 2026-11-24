@@ -68,6 +68,8 @@ func workspaceSetupOfferInbound(offer WorkspaceSetupOffer) bus.InboundMessage {
 		Sender:    bus.SenderInfo{CanonicalID: "workspace-setup:" + offer.TargetWorkspaceID},
 		Content:   workspaceSetupOfferText(offer.TargetWorkspaceID, offer.TargetName),
 		SessionID: offer.MainSessionID,
+		// A server offer has no origin of its own (I-2): unresolved.
+		Provenance: bus.UnresolvedProvenance(),
 		Metadata: map[string]string{
 			"agent_id":                      string(coreagent.IDOmnipus),
 			"workspace_id":                  offer.MainWorkspaceID,

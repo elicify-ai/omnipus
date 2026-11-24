@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
 
@@ -1973,7 +1974,10 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUpReserved(sessionID, goalID, source
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
-		Metadata:            metadata,
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
+		Metadata:   metadata,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
@@ -2109,6 +2113,7 @@ func (al *AgentLoop) handleBareGoalClaim(
 				Sender:    bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
 				Content:   goalStatusBareClaimSteer,
 				SessionID: sessionID, SessionKey: opts.SessionKey,
+				Provenance: tools.ToolTurnProvenance(ctx),
 			})
 		}
 		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
@@ -2189,6 +2194,7 @@ func (al *AgentLoop) handleBareGoalClaim(
 					"A second bare completion claim cost a round (%d/%d). Provide [goal:evidence] before GOAL_STATUS: met, or keep working.\n",
 				rec.Prompt, newRound, maxRounds),
 			SessionID: sessionID, SessionKey: opts.SessionKey,
+			Provenance: tools.ToolTurnProvenance(ctx),
 		})
 	}
 	return true
@@ -2240,6 +2246,9 @@ func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, 
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
 		Metadata: map[string]any{
 			"steer_message_id": messageID,
 			"steer_generation": rec.Generation,

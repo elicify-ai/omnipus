@@ -626,6 +626,23 @@ var blockedConfigKeys = []blockedConfigKey{
 			"agent must be able to see which targets a channel may start messages to (list_channels " +
 			"shows the same list), as with the ownership record above. The write stays blocked",
 	},
+	{
+		Key: "channels.*.programs_allowed",
+		Reason: "it decides whether turns from this connection may use connected programs and their " +
+			"tokens (connected-programs FR-009) — only a signed-in person changes it, in Connectors " +
+			"or with PUT /api/v1/channels/{id}/programs; an agent switching it on would hand program " +
+			"tokens to messages from that connection",
+		ReadOKReason: "the switch is enforcement configuration, not credential material — an agent " +
+			"refused a program token must be able to see why. The write stays blocked",
+	},
+	{
+		Key: "programs",
+		Reason: "it holds the connected programs (custom entries and the web-chat switch) whose " +
+			"tokens reach agents' commands — only a signed-in person changes it, in Settings → " +
+			"Programs; an agent rewriting an entry could redirect a token to a program of its choice",
+		ReadOKReason: "the entries carry no token — tokens live in the credential store — so reading " +
+			"them is diagnosis, not access. The write stays blocked",
+	},
 
 	// ---- security: the trust anchor, and one reserved sibling ----
 	//
