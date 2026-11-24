@@ -162,3 +162,48 @@ func TestSkillPolicyResolution_Table(t *testing.T) {
 		})
 	}
 }
+
+// skillEntryPointRows is C-11's entry-point table (E1-E9) as the spec names the
+// entry points, with the real-path observer this pack already has for the row
+// (verified by test name and header comment), or "none cited".
+var skillEntryPointRows = []struct {
+	id, label, entry, observer string
+}{
+	{"E1", "skill load", "pkg/tools/skill.go::SkillTool.execLoad -> pkg/agent/skill_activation.go::loadSkillActivation",
+		"pkg/agent TestSkillLoad_AskUnattendedRefused (unattended; D1#10, D1#11, S-13)"},
+	{"E2", "skill menu", "pkg/skills/loader.go::BuildSkillsSummaryFuncWithProject",
+		"pkg/agent TestVisibilityTransitions row 6 (level only); none cited for the deny outcome"},
+	{"E3", "skill search", "pkg/tools/skill.go::SkillTool.execSearch", "none cited"},
+	{"E4", "slash command", "pkg/agent/loop_slash.go::applyExplicitSkillCommand", "none cited"},
+	{"E5", "delegation requested_skill", "pkg/agent/subturn_identity.go::resolveRequestedSkillForChild", "none cited"},
+	{"E6", "file tools on a skill folder", "pkg/tools/skill_turn_authority.go::resolveTurnSkillAuthority",
+		"pkg/tools TestSkillAuthority_FoldersFollowOutcome (S-85, S-86, S-87)"},
+	{"E7", "helper execution", "pkg/tools/shell_skill_operands.go::loadableSkillReadOrRun",
+		"pkg/tools TestSkillAuthority_FoldersFollowOutcome (S-85, S-86, S-87)"},
+	{"E8", "Full level", "C-1 Full level, C-14", "pkg/agent TestFullSkills_SentinelAndBudget (D9 rows 5-10)"},
+	{"E9", "unified search", "C-17 unified search", "pkg/agent TestToolSearch_FindsSkills (S-96)"},
+}
+
+// TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome is the native-path
+// binding obligation for skillOutcomeOf (CHECK round 4, false-green table row
+// 23). TestSkillPolicyResolution_Table drives Dataset D1 through one adapter
+// with the grant, global, agent, trust, verification and God Mode inputs handed
+// in; it cannot tell whether any of the nine entry points of C-11 reaches the
+// function the adapter binds to, so a resolver only that table calls passes it
+// while each entry point decides on its own. FR-066: every entry point E1-E9
+// MUST use the single per-skill outcome. This can only be checked after GREEN,
+// so each row is a loud BLOCKED leaf (never a skip); the test author replaces
+// each at test-side reconciliation with a check that seeds a stored per-skill
+// outcome (never the adapter) and enters through that entry point, and CHECK
+// then mutates the bound function and requires the check of every row to fail.
+func TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome(t *testing.T) {
+	for _, row := range skillEntryPointRows {
+		t.Run(row.id+" "+row.label, func(t *testing.T) {
+			t.Fatalf("BLOCKED: %s (%s) is not shown to take its decision from the one "+
+				"function skillOutcomeOf binds to — required by C-11 %s and FR-066 (every "+
+				"entry point E1-E9 MUST use the single per-skill outcome); a resolver only "+
+				"the D1 table calls must never turn this green; known real-path observer: %s",
+				row.id, row.entry, row.id, row.observer)
+		})
+	}
+}

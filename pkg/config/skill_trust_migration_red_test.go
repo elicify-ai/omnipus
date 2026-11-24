@@ -69,3 +69,26 @@ func TestSkillTrustMigration_LegacyValues(t *testing.T) {
 		})
 	}
 }
+
+// TestSkillTrustMigration_LoadPathRewritesAndAudits is the native-path binding
+// obligation for migrateLegacySkillTrustOf (CHECK round 4, false-green table
+// row 8). TestSkillTrustMigration_LegacyValues pins the mapping and the
+// "rewrote" flag the audit entry is gated on; this file's own header gives the
+// "one audit entry" half of S-33 to the boot path. Neither half observes that
+// a start rewrites the stored sandbox.skill_trust, so a mapping function only
+// the adapter calls passes it. This can only be checked after GREEN, so it is a
+// loud BLOCKED leaf (never a skip); the test author replaces it at test-side
+// reconciliation with a check that starts a home carrying each legacy value,
+// reads config.json and the audit log back, and starts it twice, and CHECK then
+// mutates the bound function and requires it to fail. No real-path observer of
+// the trust rewrite is cited today: TestSkillPermissionsUpgrade_StopAtEveryStep
+// seeds warn_unverified but its persisted-value assertions do not name
+// sandbox.skill_trust.
+func TestSkillTrustMigration_LoadPathRewritesAndAudits(t *testing.T) {
+	t.Fatal("BLOCKED: starting a home whose config.json carries a legacy " +
+		"sandbox.skill_trust is not shown to rewrite it through the function " +
+		"migrateLegacySkillTrustOf binds to, once, with exactly one audit entry " +
+		"and none on a second start — required by C-3, S-33 and Dataset D3 rows " +
+		"1-4 and 10; a mapping function only this adapter calls must never turn " +
+		"this green")
+}

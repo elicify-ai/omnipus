@@ -126,3 +126,25 @@ func assertStringMap(t *testing.T, what string, got, want map[string]string) {
 		t.Fatalf("%s is nil, want entries (spec C-2 self-heal)", what)
 	}
 }
+
+// TestSkillPolicyReconcile_LoadPathRunsTheSelfHeal is the native-path binding
+// obligation for reconcileSkillMapsOf (CHECK round 4, false-green table row 6).
+// TestSkillPolicyReconcile_NewSkillAsk reads an adapter that takes the stored
+// maps and the installed set as inputs; it cannot show that any boot or reload
+// runs the self-heal, so an additive function nothing calls passes it while a
+// skill with no stored value resolves to the fail-closed deny (Dataset D1#13).
+// C-2 puts the self-heal in "the same pattern as ReconcileToolPolicyCeiling" and
+// after the one-time migrations of C-19; the ceiling twin runs at boot and on
+// every reload from pkg/gateway/gateway_sandbox.go::repairAndValidateToolPolicyCoverage.
+// This can only be checked after GREEN, so it is a loud BLOCKED leaf (never a
+// skip); the test author replaces it at test-side reconciliation with a check
+// that loads a config.json missing the skill keys through the real boot or
+// reload path and reads back Ask and name_and_description, and CHECK then
+// mutates the bound function and requires it to fail.
+func TestSkillPolicyReconcile_LoadPathRunsTheSelfHeal(t *testing.T) {
+	t.Fatal("BLOCKED: gateway boot and every config reload are not shown to run " +
+		"the skill-map self-heal through the function reconcileSkillMapsOf binds " +
+		"to, after the C-19 one-time migrations — required by C-2 (self-heal, same " +
+		"pattern as ReconcileToolPolicyCeiling) and S-17; an additive function " +
+		"nothing calls must never turn this green")
+}
