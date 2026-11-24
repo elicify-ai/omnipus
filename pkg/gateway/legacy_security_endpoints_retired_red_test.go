@@ -154,6 +154,8 @@ func TestLegacySecurityEndpoints_Retired(t *testing.T) {
 		write("node_modules/leftover.js", `fetch("/api/v1/security/tool-policies");`)
 		write("pkg/gateway/spa/assets/app.js", `fetch("/api/v1/security/tool-policies");`)
 		write("pkg/api/generated/types.gen.go", `const legacy = "/api/v1/security/skill-trust";`)
+		write("src/lib/api/generated/schemas.ts", `fetch("/api/v1/security/tool-policies");`)
+		write(guardSelfRelPath, `r := httptest.NewRequest(http.MethodGet, "/api/v1/security/skill-trust", nil)`)
 
 		found := scanLegacySecurityPathCallers(t, root)
 		sort.Strings(found)
@@ -166,6 +168,30 @@ func TestLegacySecurityEndpoints_Retired(t *testing.T) {
 		require.Len(t, found, 3, "the probe file is NOT blanket-exempt: an unintended direct caller is caught too")
 		require.Contains(t, found[0], "pkg/gateway/security_permissions_red_test.go")
 
+		// Only the three exact generated/embed paths are excluded. A live caller
+		// does not become harmless because an ancestor has a familiar basename.
+		nestedCallers := []string{
+			"tests/e2e/testdata/live.ts",
+			"tests/fixtures/dist/live.ts",
+			"pkg/other/spa/live.go",
+			"src/other/generated/live.ts",
+		}
+		for _, rel := range nestedCallers {
+			write(rel, `fetch("/api/v1/security/tool-policies");`)
+		}
+		found = scanLegacySecurityPathCallers(t, root)
+		paths := make([]string, 0, len(found))
+		for _, hit := range found {
+			paths = append(paths, strings.SplitN(hit, ":", 2)[0])
+		}
+		want := append([]string{
+			"pkg/gateway/security_permissions_red_test.go",
+			"src/legacy-caller.ts",
+			"tests/z-real-caller.test.ts",
+		}, nestedCallers...)
+		sort.Strings(want)
+		require.Equal(t, want, paths, "misleading directory names never exempt a real caller")
+
 		clean := scanLegacySecurityPathCallers(t, t.TempDir())
 		require.Empty(t, clean, "guard instrument: a clean tree passes")
 	})
@@ -176,13 +202,10 @@ func TestLegacySecurityEndpoints_Retired(t *testing.T) {
 // "path:line :: matched line" entry per offending file.
 func scanLegacySecurityPathCallers(t *testing.T, root string) []string {
 	t.Helper()
-	skipDirNames := map[string]bool{
-		"node_modules": true,
-		".git":         true,
-		"dist":         true,
-		"spa":          true, // the embedded build output under pkg/gateway/spa
-		"generated":    true, // pkg/api/generated, src/lib/api/generated
-		"testdata":     true,
+	skipPaths := map[string]bool{
+		"pkg/gateway/spa":       true,
+		"pkg/api/generated":     true,
+		"src/lib/api/generated": true,
 	}
 	var offenders []string
 	for _, scanRoot := range []string{"src", "pkg", "cmd", "tests"} {
@@ -194,17 +217,17 @@ func scanLegacySecurityPathCallers(t *testing.T, root string) []string {
 			if err != nil {
 				return err
 			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
 			if d.IsDir() {
-				if skipDirNames[d.Name()] {
+				if skipPaths[filepath.ToSlash(rel)] {
 					// SkipDir skips ONLY this subtree; the walk continues with
 					// the siblings (CHECK round 1 finding 11).
 					return filepath.SkipDir
 				}
 				return nil
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return relErr
 			}
 			if filepath.ToSlash(rel) == guardSelfRelPath {
 				return nil
