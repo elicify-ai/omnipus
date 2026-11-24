@@ -67,12 +67,17 @@ func ReadSkillMenuView(home, agentID, workspaceID string) (SkillMenuView, error)
 	}
 	v.decided = v.settings.Policies != nil || (v.agentSkills != nil && len(v.agentSkills.Policies) > 0)
 	raw, err := json.Marshal(struct {
-		Levels   map[string]string
-		Settings config.PersistedSkillSettings
-		Agent    *config.AgentSkillsCfg
-		Grants   []string
-		Approved string
-	}{v.levels, v.settings, v.agentSkills, grants, skills.RecordsFingerprint(filepath.Join(home, "skills"))})
+		Levels   map[string]string      `json:"levels"`
+		Policies map[string]string      `json:"policies"`
+		Trust    string                 `json:"trust"`
+		GodMode  bool                   `json:"god_mode"`
+		Agent    *config.AgentSkillsCfg `json:"agent"`
+		Grants   []string               `json:"grants"`
+		Approved string                 `json:"approved"`
+	}{
+		v.levels, v.settings.Policies, string(v.settings.Trust), v.settings.GodMode, v.agentSkills, grants,
+		skills.RecordsFingerprint(filepath.Join(home, "skills")),
+	})
 	if err != nil {
 		return v, fmt.Errorf("skill menu stamp: %w", err)
 	}

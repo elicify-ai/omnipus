@@ -127,7 +127,7 @@ func (a *restAPI) patchPermissionSettings(w http.ResponseWriter, r *http.Request
 	}
 
 	a.afterPermissionChanges(r, changes)
-	if err := a.triggerReloadAndWait(); err != nil {
+	if err = a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: reload after permission settings change failed", "error", err)
 		jsonErr(w, http.StatusServiceUnavailable,
 			"The settings were saved, but could not be applied to running agents. "+

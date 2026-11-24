@@ -48,7 +48,7 @@ func denyEverySkill(skills.SkillInfo, bool) (string, bool) { return "", true }
 // stored skill levels and outcomes.
 func (cb *ContextBuilder) skillMenuGeneration(workspaceID string) uint64 {
 	generation := skills.Generation()
-	stamp := ""
+	var stamp string
 	if view, err := tools.ReadSkillMenuView(omnipusHome(), cb.agentID, workspaceID); err != nil {
 		stamp = "unreadable: " + err.Error()
 	} else {
