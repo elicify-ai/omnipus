@@ -115,16 +115,21 @@ properties:
       absent for other event types.
     example: gateway.god_mode
   old_value:
-    type: object
     description: >
       The config value before the change, recursively redacted for
       sensitive keys. Present on security_setting_change records. May be
-      absent for other event types.
-    additionalProperties: true
+      absent for other event types. Any JSON value: pkg/audit.SecurityChangeRecord
+      carries the writer's value as-is, and the writers send objects
+      (gateway.god_mode), plain strings (sandbox.mode, session.dm_scope),
+      booleans (sandbox.auto_approve), integers (max_tool_iterations),
+      string arrays (sandbox.allowed_paths) and null (no previous paths).
+      Audit history is append-only and HMAC-chained, so the contract follows
+      what is on disk.
+    example: permissive
   new_value:
-    type: object
     description: >
       The config value after the change, recursively redacted for
       sensitive keys. Present on security_setting_change records. May be
-      absent for other event types.
-    additionalProperties: true
+      absent for other event types. Any JSON value, with the same writer
+      shapes as old_value.
+    example: strict
