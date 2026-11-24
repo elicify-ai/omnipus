@@ -180,6 +180,11 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Confirms replacing an installed skill that has local changes (edits made after it was installed). The local changes stay in the version history.",
 			},
+			"category": map[string]any{
+				"type":        "string",
+				"enum":        skills.SkillCategories(),
+				"description": "Category the skill is listed under. Optional; defaults to the category in the skill file, else uncategorised.",
+			},
 			"ownerHandle": map[string]any{
 				"type": "string",
 				"description": "Disambiguates slug when it is published by more than one owner on the " +
@@ -222,6 +227,11 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	registryName, _ := args["registry"].(string)
 	if err := utils.ValidateSkillIdentifier(registryName); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid registry %q: error: %s", registryName, err.Error()))
+	}
+
+	category, _ := args["category"].(string)
+	if category != "" && !skills.IsSkillCategory(category) {
+		return ErrorResult(skills.UnknownCategoryError(category).Error() + ". Nothing was installed.")
 	}
 
 	version, _ := args["version"].(string)
@@ -345,9 +355,25 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (re
 	// publish the verified package (§5.6). The precondition is the request's
 	// own expectation — absence for a new install, the given revision for a
 	// replacement — never a session's seen record.
+	installCategory, err := skills.InstallCategory(category, stageDir)
+	if err != nil {
+		return ErrorResult(err.Error() + ". Nothing was installed.")
+	}
 	publish, err := t.publish(ctx, skillsDir, onDisk, stageDir, revision, alreadyInstalled, replaceLocal)
 	if err != nil {
 		return installFailure(slug, publish, err)
+	}
+	// C-5: category and verification live in Omnipus data, never in the
+	// skill folder. A failed write is reported, not hidden: the skill is
+	// installed but listed as uncategorised and unverified.
+	installRec := skills.InstallRecord{Category: installCategory}
+	if result.Verified {
+		installRec.VerifiedRevision = publish.Revision
+	}
+	if recErr := skills.WriteInstallRecord(skillsDir, onDisk, installRec); recErr != nil {
+		logger.ErrorCF("tools", "install_skill: skill installed but its category and verification were not saved",
+			map[string]any{"skill": onDisk, "error": recErr.Error()})
+		publish.Warning = strings.TrimSpace(publish.Warning + " The category and verification were not saved: " + recErr.Error())
 	}
 
 	// Build result with moderation warning if suspicious.

@@ -70,7 +70,18 @@ func resolveTurnSkillAuthority(home, agentID string) turnSkillAuthority {
 	if rec.Tools != nil && len(rec.Tools.Builtin.Policies) > 0 {
 		pol.Policies = rec.Tools.Builtin.Policies
 	}
-	folders, err := skills.LoadableFolders(filepath.Join(home, "skills"), rec.Skills, rec.SkillGrants)
+	settings, err := config.ReadPersistedSkillSettings(home)
+	if err != nil {
+		logger.WarnCF("tools", "skills authority: skill settings unreadable; no skill folder is readable this turn",
+			map[string]any{"agent_id": agentID, "error": err.Error()})
+		return turnSkillAuthority{}
+	}
+	var agentSkills *config.AgentSkillsCfg
+	if rec.Tools != nil {
+		agentSkills = rec.Tools.Skills
+	}
+	usable := filterLoadableByOutcome(home, agentID, settings, agentSkills, rec.Skills)
+	folders, err := skills.LoadableFolders(filepath.Join(home, "skills"), usable, rec.SkillGrants)
 	if err != nil {
 		logger.WarnCF("tools", "skills authority: granted skill folders unreadable; no skill folder is readable this turn",
 			map[string]any{"agent_id": agentID, "error": err.Error()})
