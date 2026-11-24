@@ -1,28 +1,82 @@
 package security
 
-// approvalgrants_adr057_test.go — tests for ADR-057 W10 / unit U17a
-// (pkg/security/approvalgrants.go).
+// approvalgrants_adr057_test.go — ADR-057 W10 / unit U17a tests for
+// pkg/security/approvalgrants.go, MIGRATED to C-26 of the Skills & Tools
+// redesign spec (docs/internal/specs/skills-tools-redesign-spec.md, "C-26
+// Timed allowances replace Always Allow on every approval card", founder
+// R2-Q1, 2026-11-22). Fix round 4, candidate 6 (CHECK round 4).
 //
-// Per the ADR-057 session-unification spec's binding rule 5, every unit's new
-// tests go in a NEW file named `<subject>_adr057_test.go`; this file is
-// U17a's. It covers TDD plan rows #25, #84 and #85 (BDD-31, BDD-32, BDD-88,
-// BDD-89 / US-6) and the "Inheritance source/destination" dataset rows 1-6.
+// WHAT THE SPEC CHANGED FOR THIS FILE (section and row cited, never a line):
+//   - C-26 "Lifetime and scope", row Key: "(agent id, kind, subject) ... The
+//     session id is no longer part of the key."
+//   - same section, row Covers: every session of that agent "and helpers it
+//     starts for itself (same agent id). A helper of another agent, or a
+//     delegation to another agent, is not covered and asks as usual".
+//   - "How a timed allowance reaches a helper run": a helper the agent starts
+//     for itself "looks up the same allowances with no copy at spawn", and
+//     inheritSessionPermissions "stops copying grants (ApprovalGrantStore.
+//     InheritFrom is removed or reduced to egress-token bookkeeping)".
+//   - "Code paths that change", row ApprovalGrantStore.InheritFrom: "copies no
+//     grants (self-helpers share the key; other agents get nothing)".
+//   - "Security-relevant change", point 5: "a delegation to another agent no
+//     longer inherits the delegating chat's grants."
 //
-// Binding rule 1 (real state, never a spy) is satisfied structurally: the
-// subject is an in-memory store with no I/O, so every assertion below reads
-// the store's own resolution (IsAllowed) or its own counters — never "the
-// function was called".
+// DISPOSITION OF THE FIVE ADR-057 TESTS. An expectation is flipped only where
+// a quoted spec row says the old one is wrong; an assertion is retired only
+// with the behaviour it pinned; every other assertion is kept.
 //
-// Corollary "distinct ids everywhere" and dataset row 5 (`parentSid ==
-// childSid` is a FORBIDDEN fixture shape) are enforced by requireDistinct
-// below, which every fixture calls before exercising the subject: a fixture
-// whose two session ids coincide cannot distinguish a working two-key re-key
-// from grill finding C-1's silent no-op, and would pass green either way.
+//	TestApprovalGrants_InheritFromTwoKeys (BDD-31/32/88, rows 1 and 4)
+//	  -> TestApprovalGrants_DelegateToAnotherAgentInheritsNothing
+//	  FLIPPED: the delegate no longer gets the delegator's allowance (copy ->
+//	  nothing; spec rows InheritFrom and security point 5). KEPT: copy-not-move
+//	  (the delegator still holds it), no widening in either direction, the
+//	  destination's own allowance survives (row 4, "not replaced").
+//	  MOVED: BDD-32 (chat close) to approvalgrants_test.go::
+//	  TestApprovalGrantStore_ClearSession_KeepsTheAgentAllowances, because the
+//	  spec reverses it in its own row (ClearSession).
+//	TestApprovalGrants_InheritFrom_SelfDelegationUnion (row #85, dataset row 3)
+//	  -> TestApprovalGrants_SelfDelegationSharesAgentAllowance
+//	  FLIPPED: the old precondition "must NOT resolve before InheritFrom" is
+//	  what "no copy at spawn" reverses; it now must already resolve.
+//	TestApprovalGrants_InheritFrom_SourceMissIsNotSilent (row #84, BDD-89)
+//	  -> TestApprovalGrants_InheritFrom_InvalidKeysAreInert
+//	  RETIRED with the behaviour they pinned: the source-miss counter, the
+//	  invalid-key counter and the "no grants to inherit" / level=WARN log
+//	  lines. They describe a copy that "copies no grants" removes: there is no
+//	  source to miss. (The developer's GREEN keeps the counters; the spec does
+//	  not require them, so no test does.) KEPT: an invalid key never gives
+//	  anyone an allowance, the existing allowance is untouched, a nil
+//	  receiver never panics.
+//	TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88 (grill finding C-1)
+//	  -> TestApprovalGrants_OneIdInheritFromCopiesNothing
+//	  RETIRED: the negative control of a copy that no longer exists (it proved
+//	  the two-key copy works where the one-id copy no-ops). KEPT: the one-id
+//	  form copies nothing and leaves the delegator's allowance in place.
+//	TestApprovalGrants_InheritFrom_ConcurrentSafe
+//	  -> TestApprovalGrants_ConcurrentAgentKeyedSafe
+//	  RETIRED: the exact miss COUNT (no counter, see above). KEPT: the -race
+//	  lock-discipline coverage, now with the agent-keyed scope as the oracle.
+//
+// Binding rule 1 (real state, never a spy): the subject is an in-memory store
+// with no I/O, so every assertion reads the store's own resolution
+// (IsAllowed, PathGrantsFor, ...) — never "the function was called".
+//
+// RECORDING: allowances here are recorded with the store's existing recording
+// methods and read back through its real lookups. The spec's duration-bearing
+// recorders and the clock are exercised by
+// approval_grants_agent_timed_red_test.go; expiry is not this file's subject.
+// A scope assertion fails on today's session-keyed store with a real
+// expected-vs-actual (RED); a safety property C-26 keeps passes before and
+// after and is marked as such. No test in this file is a GREEN claim.
+//
+// Dataset row 5 (parentSid == childSid is a FORBIDDEN fixture shape) is
+// enforced by requireDistinct below: with equal session ids a test cannot
+// tell a session-keyed store from an agent-keyed one and would pass either
+// way.
 
 import (
-	"bytes"
-	"log/slog"
-	"strings"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -37,263 +91,88 @@ func requireDistinct(t *testing.T, srcSessionID, dstSessionID string) {
 	}
 	if srcSessionID == dstSessionID {
 		t.Fatalf("fixture defect (dataset row 5): src and dst session ids must be "+
-			"distinct or the test cannot distinguish a working re-key from C-1's "+
-			"no-op; both were %q", srcSessionID)
+			"distinct or the test cannot distinguish an agent-keyed store from a "+
+			"session-keyed one; both were %q", srcSessionID)
 	}
 }
 
-// captureLogs installs a Debug-level text handler as the default slog logger
-// for the duration of the test and returns the buffer it writes into.
+// TestApprovalGrants_DelegateToAnotherAgentInheritsNothing replaces
+// TestApprovalGrants_InheritFromTwoKeys (BDD-31/88, dataset rows 1 and 4).
 //
-// This asserts on emitted output — real bytes produced by the subject — not on
-// a recording spy, so it is inside binding rule 2 rather than an exception to
-// it.
-func captureLogs(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return buf
-}
-
-// TestApprovalGrants_InheritFromTwoKeys is TDD plan row #25, tracing to
-// BDD-31, BDD-32 and BDD-88 (US-6 acceptance scenarios 1 and 2).
+// C-26 (row InheritFrom; Covers; security point 5):
 //
-// BDD-88:
-//
-//	Given  parentSessionID != childSessionID, and a grant recorded ONLY under
-//	       {parentSessionID, parentAgentID}, VERIFIED ABSENT under
-//	       {childSessionID, childAgentID}
-//	When   InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
-//	       runs
-//	Then   the grant resolves under {childSessionID, childAgentID}
-//	And    it still resolves under {parentSessionID, parentAgentID} —
-//	       inheritance is a copy, not a move
-//
-// The "absent before" assertion is the load-bearing one and the reason this
-// test was rewritten: a test that seeds the grant under the destination key to
-// begin with passes green while production hangs, because it never observes a
-// transition. Everything after it is only meaningful because it ran.
-func TestApprovalGrants_InheritFromTwoKeys(t *testing.T) {
+//	Given  jim holds an allowance answered in chat P and ava holds her own
+//	When   jim delegates to ava in chat C and the runtime calls
+//	       InheritFrom(P, jim, C, ava)
+//	Then   ava does NOT hold jim's allowance, in C or in P
+//	And    jim still holds it in P (copy-not-move survives as "untouched")
+//	And    ava keeps her own allowance, and it does not reach jim
+func TestApprovalGrants_DelegateToAnotherAgentInheritsNothing(t *testing.T) {
 	const (
 		parentSid   = "sess_parent_9f13"
 		childSid    = "sess_child_4a02"
 		parentAgent = "jim"
 		childAgent  = "ava"
 		toolT       = "bash"
+		toolU       = "web_fetch"
 	)
 	requireDistinct(t, parentSid, childSid)
 
 	s := NewApprovalGrantStore()
 	if !s.Record(parentSid, parentAgent, toolT, nil) {
-		t.Fatal("fixture: Record on the source key must succeed")
+		t.Fatal("fixture: Record on the delegator's key must succeed")
 	}
-
-	// --- ABSENT BEFORE (BDD-88, dataset row 1). Without this the rest of the
-	// test is vacuous.
-	if s.IsAllowed(childSid, childAgent, toolT, nil) {
-		t.Fatalf("precondition violated: %q must NOT resolve under the destination "+
-			"key {%s, %s} before InheritFrom runs", toolT, childSid, childAgent)
-	}
-
-	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-
-	if !s.IsAllowed(childSid, childAgent, toolT, nil) {
-		t.Errorf("BDD-88: after InheritFrom, %q must resolve under the destination "+
-			"key {%s, %s}", toolT, childSid, childAgent)
-	}
-	// Copy, not move.
-	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
-		t.Errorf("BDD-88: inheritance is a COPY — %q must still resolve under the "+
-			"source key {%s, %s}", toolT, parentSid, parentAgent)
-	}
-	// Scoping is otherwise unchanged: the destination AGENT under the SOURCE
-	// session, and the source agent under the destination session, are both
-	// still unrelated keys.
-	if s.IsAllowed(parentSid, childAgent, toolT, nil) {
-		t.Errorf("InheritFrom must not widen scope: {%s, %s} must not resolve",
-			parentSid, childAgent)
-	}
-	if s.IsAllowed(childSid, parentAgent, toolT, nil) {
-		t.Errorf("InheritFrom must not widen scope: {%s, %s} must not resolve",
-			childSid, parentAgent)
-	}
-	// No no-op branch was taken.
-	if got := s.InheritSourceMissCount(); got != 0 {
-		t.Errorf("source-miss count = %d, want 0 on a successful inheritance", got)
-	}
-	if got := s.InheritInvalidKeyCount(); got != 0 {
-		t.Errorf("invalid-key count = %d, want 0 on a successful inheritance", got)
-	}
-
-	// --- Dataset row 4: a destination that ALREADY holds a grant of its own
-	// gets the union, not a replacement.
-	const toolU = "web_fetch"
+	// Dataset row 4: the destination already holds an allowance of its own.
 	if !s.Record(childSid, childAgent, toolU, nil) {
-		t.Fatal("fixture: Record on the destination key must succeed")
-	}
-	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-	if !s.IsAllowed(childSid, childAgent, toolT, nil) || !s.IsAllowed(childSid, childAgent, toolU, nil) {
-		t.Errorf("dataset row 4: destination must hold the UNION {%s, %s}, got T=%v U=%v",
-			toolT, toolU,
-			s.IsAllowed(childSid, childAgent, toolT, nil),
-			s.IsAllowed(childSid, childAgent, toolU, nil))
-	}
-	// The union must not have leaked back into the source.
-	if s.IsAllowed(parentSid, parentAgent, toolU, nil) {
-		t.Errorf("dataset row 4: the destination's own grant %q must not leak into "+
-			"the source key", toolU)
+		t.Fatal("fixture: Record on the delegate's key must succeed")
 	}
 
-	// --- BDD-32: the child's inherited grant does not outlive the child, and
-	// clearing the child leaves the parent untouched.
-	s.ClearSession(childSid)
-	if s.IsAllowed(childSid, childAgent, toolT, nil) || s.IsAllowed(childSid, childAgent, toolU, nil) {
-		t.Errorf("BDD-32: after ClearSession(%s) the child's grant set must be gone", childSid)
-	}
+	// INSTRUMENT (true before and after C-26): the lookup behind every negative
+	// below can see each allowance under the key it was answered for. Without
+	// this, "ava does not hold it" could be an observer that sees nothing.
 	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
-		t.Errorf("BDD-32: clearing the child must leave the PARENT's grant set untouched")
+		t.Fatalf("instrument: %q recorded for {%s, %s} must resolve for that key", toolT, parentSid, parentAgent)
 	}
-}
-
-// TestApprovalGrants_InheritFrom_SelfDelegationUnion is TDD plan row #85,
-// tracing to BDD-88 and dataset row 3.
-//
-// Self-delegation is a same-AGENT, different-SESSION union. It is the case the
-// retired single-key form cannot express at all: with one session parameter,
-// srcAgentID == dstAgentID collapses the whole call to an identity.
-func TestApprovalGrants_InheritFrom_SelfDelegationUnion(t *testing.T) {
-	const (
-		parentSid = "sess_self_parent_0001"
-		childSid  = "sess_self_child_0002"
-		agentX    = "ray"
-		toolT     = "bash"
-	)
-	requireDistinct(t, parentSid, childSid)
-
-	s := NewApprovalGrantStore()
-	if !s.Record(parentSid, agentX, toolT, nil) {
-		t.Fatal("fixture: Record must succeed")
+	if !s.IsAllowed(childSid, childAgent, toolU, nil) {
+		t.Fatalf("instrument: %q recorded for {%s, %s} must resolve for that key", toolU, childSid, childAgent)
 	}
-	if s.IsAllowed(childSid, agentX, toolT, nil) {
-		t.Fatalf("precondition violated: %q must NOT resolve under {%s, %s} before "+
-			"InheritFrom runs", toolT, childSid, agentX)
+	// ABSENT BEFORE (BDD-88): without it "ava does not hold it after" proves nothing.
+	if s.IsAllowed(childSid, childAgent, toolT, nil) {
+		t.Fatalf("precondition violated: %q must not resolve for {%s, %s} before the delegation step",
+			toolT, childSid, childAgent)
 	}
 
-	s.InheritFrom(parentSid, agentX, childSid, agentX)
-
-	if !s.IsAllowed(childSid, agentX, toolT, nil) {
-		t.Errorf("dataset row 3: same agent, different session — %q must resolve "+
-			"under the destination session %s", toolT, childSid)
-	}
-	if !s.IsAllowed(parentSid, agentX, toolT, nil) {
-		t.Errorf("dataset row 3: the source session %s must be untouched", parentSid)
-	}
-	if got := s.InheritSourceMissCount(); got != 0 {
-		t.Errorf("source-miss count = %d, want 0", got)
-	}
-}
-
-// TestApprovalGrants_InheritFrom_SourceMissIsNotSilent is TDD plan row #84,
-// tracing to BDD-89 (US-6 acceptance scenario 7) and dataset rows 2 and 6.
-//
-// BDD-89:
-//
-//	Given  a source that holds NO grants
-//	When   InheritFrom runs
-//	Then   a log record names the source key, the destination key and the fact
-//	       that there was nothing to inherit
-//	And    a counter increments across the call
-//	But    the function does not return silently as the retired single-key
-//	       Inherit did
-//
-// The counter is the tripwire the spec asks for: it is what makes a future
-// re-key that misses its source visible instead of green.
-func TestApprovalGrants_InheritFrom_SourceMissIsNotSilent(t *testing.T) {
-	const (
-		parentSid   = "sess_empty_parent_aa11"
-		childSid    = "sess_empty_child_bb22"
-		parentAgent = "jim"
-		childAgent  = "ava"
-	)
-	requireDistinct(t, parentSid, childSid)
-
-	logs := captureLogs(t)
-	s := NewApprovalGrantStore()
-
-	// --- Dataset row 2: well-formed keys, but the source holds nothing.
-	if got := s.InheritSourceMissCount(); got != 0 {
-		t.Fatalf("fixture: source-miss count must start at 0, got %d", got)
-	}
 	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
 
-	if got := s.InheritSourceMissCount(); got != 1 {
-		t.Errorf("BDD-89: source-miss count = %d, want 1 — the empty-source branch "+
-			"must be COUNTED, not a bare return", got)
+	if s.IsAllowed(childSid, childAgent, toolT, nil) {
+		t.Errorf("C-26 (InheritFrom copies no grants; security point 5): a delegation to "+
+			"another agent must not inherit %q into {%s, %s}", toolT, childSid, childAgent)
 	}
-	out := logs.String()
-	for _, want := range []string{parentSid, parentAgent, childSid, childAgent, "no grants to inherit"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("BDD-89: the log record must name %q; got:\n%s", want, out)
-		}
+	if s.IsAllowed(parentSid, childAgent, toolT, nil) {
+		t.Errorf("no widening: ava must not hold %q in the delegator's chat %s either", toolT, parentSid)
 	}
-	// The no-op is still a no-op: nothing was invented under either key.
-	if s.IsAllowed(childSid, childAgent, "bash", nil) || s.IsAllowed(parentSid, parentAgent, "bash", nil) {
-		t.Error("BDD-89: a source miss must not create any grant")
+	// Copy, not move: the delegator keeps what it had.
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Errorf("the delegator's allowance must survive a delegation untouched: "+
+			"%q must still resolve for {%s, %s}", toolT, parentSid, parentAgent)
 	}
-
-	// --- Dataset row 6: an empty key component is a CALLER defect, counted
-	// separately and logged at Warn, and it must not be confused with a
-	// legitimate empty source set.
-	before := s.InheritSourceMissCount()
-	s.InheritFrom("", parentAgent, childSid, childAgent)
-	s.InheritFrom(parentSid, "", childSid, childAgent)
-	s.InheritFrom(parentSid, parentAgent, "", childAgent)
-	s.InheritFrom(parentSid, parentAgent, childSid, "")
-	if got := s.InheritInvalidKeyCount(); got != 4 {
-		t.Errorf("dataset row 6: invalid-key count = %d, want 4 (one per empty "+
-			"component)", got)
+	// Dataset row 4, migrated: the destination's own allowance is neither
+	// replaced nor leaked back to the delegator.
+	if !s.IsAllowed(childSid, childAgent, toolU, nil) {
+		t.Errorf("dataset row 4: ava's own allowance %q must survive the delegation step", toolU)
 	}
-	if got := s.InheritSourceMissCount(); got != before {
-		t.Errorf("dataset row 6: an invalid key must not be counted as a source "+
-			"miss; count moved %d -> %d", before, got)
-	}
-	if !strings.Contains(logs.String(), "level=WARN") {
-		t.Errorf("dataset row 6: an empty key component is a caller defect and must "+
-			"be logged at WARN; got:\n%s", logs.String())
-	}
-
-	// --- Nil-receiver safety: no panic, no counting, no state.
-	var nilStore *ApprovalGrantStore
-	nilStore.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-	if got := nilStore.InheritSourceMissCount(); got != 0 {
-		t.Errorf("nil store: source-miss count = %d, want 0", got)
-	}
-	if got := nilStore.InheritInvalidKeyCount(); got != 0 {
-		t.Errorf("nil store: invalid-key count = %d, want 0", got)
+	if s.IsAllowed(parentSid, parentAgent, toolU, nil) || s.IsAllowed(childSid, parentAgent, toolU, nil) {
+		t.Errorf("no widening: ava's own allowance %q must not reach jim", toolU)
 	}
 }
 
-// TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88 is the executable form of
-// ADR-057 grill finding C-1, and the permanent negative control for
-// TestApprovalGrants_InheritFromTwoKeys.
-//
-// A single-key inheritance is, by construction, a call in which one session id
-// serves as BOTH source and destination. This test drives exactly that shape
-// the way v1's FR-031 described it — "Inherit's first argument MUST become the
-// child's own session id" — and pins the consequence: the SOURCE lookup misses,
-// so the call does nothing at all while reporting success. The same fixture
-// then succeeds through the two-key form.
-//
-// It is written against InheritFrom rather than the retired Inherit shim on
-// purpose, so that it keeps discriminating after unit U7 deletes that shim.
-// The shim delegates to precisely this shape, so this covers it too.
-//
-// Without this control, TestApprovalGrants_InheritFromTwoKeys would still pass
-// against any implementation that happened to seed both keys, and the one-line
-// "fix" that caused C-1 would look indistinguishable from the real one.
-func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
+// TestApprovalGrants_OneIdInheritFromCopiesNothing is the control that
+// survives of TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88 (ADR-057
+// grill finding C-1): the degenerate call in which one session id serves as
+// both source and destination, with two different agents, hands over nothing.
+// It passes on today's product and after C-26 (spec row InheritFrom: copies no
+// grants), so it is a kept safety property, not a RED row.
+func TestApprovalGrants_OneIdInheritFromCopiesNothing(t *testing.T) {
 	const (
 		parentSid   = "sess_c1_parent_7777"
 		childSid    = "sess_c1_child_8888"
@@ -307,61 +186,227 @@ func TestApprovalGrants_SingleKeyFormCannotSatisfyBDD88(t *testing.T) {
 	if !s.Record(parentSid, parentAgent, toolT, nil) {
 		t.Fatal("fixture: Record on the source key must succeed")
 	}
-	if s.IsAllowed(childSid, childAgent, toolT, nil) {
-		t.Fatalf("precondition violated: %q must NOT resolve under {%s, %s} yet",
-			toolT, childSid, childAgent)
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Fatalf("instrument: %q recorded for {%s, %s} must resolve for that key", toolT, parentSid, parentAgent)
 	}
 
-	// v1's literal FR-031: re-key the single argument to the child. One id has
-	// to serve as both source and destination, so the source lookup misses.
 	s.InheritFrom(childSid, parentAgent, childSid, childAgent)
 
 	if s.IsAllowed(childSid, childAgent, toolT, nil) {
-		t.Fatalf("C-1 control is broken: the single-key form must NOT be able to " +
-			"carry a grant across two different session ids — if it can, this test " +
-			"no longer discriminates and the two-key requirement is unproven")
+		t.Errorf("the one-id InheritFrom form must copy nothing to ava in {%s, %s}", childSid, childAgent)
 	}
-	if got := s.InheritSourceMissCount(); got != 1 {
-		t.Errorf("the C-1 no-op must be COUNTED so it can never be silent again; "+
-			"source-miss count = %d, want 1", got)
-	}
-
-	// The two-key form, same fixture, does carry it.
-	s.InheritFrom(parentSid, parentAgent, childSid, childAgent)
-	if !s.IsAllowed(childSid, childAgent, toolT, nil) {
-		t.Errorf("InheritFrom must succeed on the fixture the single-key form fails")
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Errorf("the one-id InheritFrom form must leave the delegator's allowance in place")
 	}
 }
 
-// TestApprovalGrants_InheritFrom_ConcurrentSafe exercises the two-key path
-// under concurrency so the -race detector covers the lock discipline around
-// the new counters, which live outside the mutex.
-func TestApprovalGrants_InheritFrom_ConcurrentSafe(t *testing.T) {
+// TestApprovalGrants_SelfDelegationSharesAgentAllowance replaces
+// TestApprovalGrants_InheritFrom_SelfDelegationUnion (TDD plan row #85,
+// dataset row 3).
+//
+// C-26 "How a timed allowance reaches a helper run": a helper the agent starts
+// for itself "looks up the same allowances with no copy at spawn".
+//
+//	Given  ray holds an allowance answered in chat P
+//	When   ray starts a helper for itself (same agent id, chat H) — with or
+//	       without the runtime's InheritFrom call
+//	Then   the allowance resolves in H, and already did BEFORE any inherit step
+//	       (the old "must NOT resolve before InheritFrom" precondition is what
+//	       the spec reverses)
+//	But    another agent in H or in P still does not hold it
+func TestApprovalGrants_SelfDelegationSharesAgentAllowance(t *testing.T) {
+	const (
+		parentSid  = "sess_self_parent_0001"
+		childSid   = "sess_self_child_0002"
+		agentX     = "ray"
+		otherAgent = "kay"
+		toolT      = "bash"
+	)
+	requireDistinct(t, parentSid, childSid)
+
 	s := NewApprovalGrantStore()
-	s.Record("sess_conc_src_1", "jim", "bash", nil)
+	if !s.Record(parentSid, agentX, toolT, nil) {
+		t.Fatal("fixture: Record must succeed")
+	}
+	if !s.IsAllowed(parentSid, agentX, toolT, nil) {
+		t.Fatalf("instrument: %q recorded for {%s, %s} must resolve for that key", toolT, parentSid, agentX)
+	}
 
-	done := make(chan struct{})
-	const workers = 8
-	for i := 0; i < workers; i++ {
-		go func() {
-			defer func() { done <- struct{}{} }()
-			for j := 0; j < 200; j++ {
-				s.InheritFrom("sess_conc_src_1", "jim", "sess_conc_dst_1", "ava")
-				s.InheritFrom("sess_conc_absent", "jim", "sess_conc_dst_1", "ava")
-				_ = s.IsAllowed("sess_conc_dst_1", "ava", "bash", nil)
-				_ = s.InheritSourceMissCount()
+	if !s.IsAllowed(childSid, agentX, toolT, nil) {
+		t.Errorf("C-26 (helper shares, no copy at spawn): %q must resolve for the same agent %s in "+
+			"its helper's chat %s before any InheritFrom runs", toolT, agentX, childSid)
+	}
+
+	s.InheritFrom(parentSid, agentX, childSid, agentX)
+
+	if !s.IsAllowed(childSid, agentX, toolT, nil) {
+		t.Errorf("dataset row 3: same agent, different session — %q must resolve under "+
+			"the helper's session %s", toolT, childSid)
+	}
+	if !s.IsAllowed(parentSid, agentX, toolT, nil) {
+		t.Errorf("dataset row 3: the source session %s must be untouched", parentSid)
+	}
+	if s.IsAllowed(childSid, otherAgent, toolT, nil) || s.IsAllowed(parentSid, otherAgent, toolT, nil) {
+		t.Errorf("no widening: agent %s must not hold %s's allowance in either chat", otherAgent, agentX)
+	}
+}
+
+// TestApprovalGrants_InheritFrom_InvalidKeysAreInert replaces
+// TestApprovalGrants_InheritFrom_SourceMissIsNotSilent (TDD plan row #84,
+// BDD-89, dataset rows 2 and 6).
+//
+// RETIRED, with the spec row: the source-miss counter, the invalid-key counter
+// and the log lines "no grants to inherit" / level=WARN. Row InheritFrom says
+// it "copies no grants", so an empty source is not a miss: there is nothing to
+// copy and nothing to report, and the spec names no counter or log for it.
+//
+// KEPT, against the new semantics: an empty key component is a caller defect
+// that must stay fail-closed. An invalid InheritFrom hands nobody an
+// allowance, the allowance that exists is untouched, and a nil receiver never
+// panics and never reports a grant. This test passes on today's product and
+// must keep passing: it is the invalid-input safety the brief asks to
+// preserve, not a RED row.
+func TestApprovalGrants_InheritFrom_InvalidKeysAreInert(t *testing.T) {
+	const (
+		parentSid   = "sess_empty_parent_aa11"
+		childSid    = "sess_empty_child_bb22"
+		parentAgent = "jim"
+		childAgent  = "ava"
+		toolT       = "bash"
+	)
+	requireDistinct(t, parentSid, childSid)
+
+	// Dataset row 2: well-formed keys, a source that holds nothing.
+	empty := NewApprovalGrantStore()
+	empty.InheritFrom(parentSid, parentAgent, childSid, childAgent)
+	for _, key := range [][2]string{{parentSid, parentAgent}, {childSid, childAgent}, {childSid, parentAgent}, {parentSid, childAgent}} {
+		if empty.IsAllowed(key[0], key[1], toolT, nil) {
+			t.Errorf("an empty source must not create a grant; {%s, %s} resolves %q", key[0], key[1], toolT)
+		}
+	}
+
+	// A real allowance, so "inert" is observable in both directions.
+	s := NewApprovalGrantStore()
+	if !s.Record(parentSid, parentAgent, toolT, nil) {
+		t.Fatal("fixture: Record on the source key must succeed")
+	}
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Fatalf("instrument: %q recorded for {%s, %s} must resolve for that key", toolT, parentSid, parentAgent)
+	}
+
+	// Dataset row 6: one empty component per call.
+	s.InheritFrom("", parentAgent, childSid, childAgent)
+	s.InheritFrom(parentSid, "", childSid, childAgent)
+	s.InheritFrom(parentSid, parentAgent, "", childAgent)
+	s.InheritFrom(parentSid, parentAgent, childSid, "")
+
+	if s.IsAllowed(childSid, childAgent, toolT, nil) || s.IsAllowed(parentSid, childAgent, toolT, nil) {
+		t.Errorf("an invalid-key InheritFrom must not give the delegate %q", toolT)
+	}
+	if s.IsAllowed(childSid, "", toolT, nil) {
+		t.Errorf("an invalid-key InheritFrom must not create an allowance for the empty agent id")
+	}
+	if !s.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Errorf("an invalid-key InheritFrom must not remove the existing allowance for {%s, %s}",
+			parentSid, parentAgent)
+	}
+
+	// Nil-receiver safety: no panic, and a nil store never reports a grant.
+	var nilStore *ApprovalGrantStore
+	nilStore.InheritFrom(parentSid, parentAgent, childSid, childAgent)
+	if nilStore.IsAllowed(childSid, childAgent, toolT, nil) || nilStore.IsAllowed(parentSid, parentAgent, toolT, nil) {
+		t.Error("a nil store must never report a grant")
+	}
+}
+
+// TestApprovalGrants_ConcurrentAgentKeyedSafe replaces
+// TestApprovalGrants_InheritFrom_ConcurrentSafe. It exercises the agent-keyed
+// store under concurrency so the -race detector covers its lock discipline,
+// and checks that parallel recording, lookups, delegation calls and chat
+// closes never move an allowance between agents.
+//
+// RETIRED with the counters: the old "source-miss count == workers*200"
+// assertion (spec row InheritFrom: no copy, so no miss to count).
+//
+// Oracle, from C-26: each worker's agent holds ITS OWN tool in every chat the
+// worker touches (Key: the agent, not the session), no other agent ever holds
+// it (Covers), and a chat close ends nothing (row ClearSession).
+func TestApprovalGrants_ConcurrentAgentKeyedSafe(t *testing.T) {
+	const (
+		workers = 8
+		rounds  = 200
+	)
+	agentOf := func(w int) string { return fmt.Sprintf("agent_conc_%d", w) }
+	toolOf := func(w int) string { return fmt.Sprintf("tool_conc_%d", w) }
+	chatOf := func(w int) string { return fmt.Sprintf("sess_conc_%d", w) }
+	helperChatOf := func(w int) string { return fmt.Sprintf("sess_conc_helper_%d", w) }
+
+	s := NewApprovalGrantStore()
+
+	var (
+		mu       sync.Mutex
+		failures []string
+	)
+	fail := func(w, round int, format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		failures = append(failures, fmt.Sprintf("worker %d round %d: ", w, round)+fmt.Sprintf(format, args...))
+	}
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			agent, tool, chat, helper := agentOf(w), toolOf(w), chatOf(w), helperChatOf(w)
+			neighbour := agentOf((w + 1) % workers)
+			if !s.Record(chat, agent, tool, nil) {
+				fail(w, -1, "Record must succeed for {%s, %s}", chat, agent)
+				return
 			}
-		}()
+			for j := 0; j < rounds; j++ {
+				// A delegation to the neighbouring agent and a close of the
+				// helper's chat, interleaved with every other worker's calls.
+				s.InheritFrom(chat, agent, helper, neighbour)
+				if s.IsAllowed(helper, neighbour, tool, nil) {
+					fail(w, j, "the delegate %s must never hold %s's tool %q", neighbour, agent, tool)
+				}
+				if !s.IsAllowed(helper, agent, tool, nil) {
+					fail(w, j, "agent %s must hold its own tool %q in its helper's chat %s", agent, tool, helper)
+				}
+				s.ClearSession(helper)
+			}
+		}(w)
 	}
-	for i := 0; i < workers; i++ {
-		<-done
+	wg.Wait()
+
+	const maxReported = 5
+	for i, f := range failures {
+		if i == maxReported {
+			t.Errorf("... and %d more failures", len(failures)-maxReported)
+			break
+		}
+		t.Error(f)
 	}
 
-	if !s.IsAllowed("sess_conc_dst_1", "ava", "bash", nil) {
-		t.Error("concurrent InheritFrom must still produce the destination grant")
-	}
-	if got, want := s.InheritSourceMissCount(), int64(workers*200); got != want {
-		t.Errorf("source-miss count = %d, want %d — every miss must be counted exactly once",
-			got, want)
+	for w := 0; w < workers; w++ {
+		agent, tool := agentOf(w), toolOf(w)
+		for _, chat := range []string{chatOf(w), helperChatOf(w)} {
+			if !s.IsAllowed(chat, agent, tool, nil) {
+				t.Errorf("after the concurrent run, agent %s must still hold %q in chat %s "+
+					"(the allowance belongs to the agent and no chat close ends it)", agent, tool, chat)
+			}
+		}
+		for v := 0; v < workers; v++ {
+			if v == w {
+				continue
+			}
+			for _, chat := range []string{chatOf(w), helperChatOf(w), chatOf(v)} {
+				if s.IsAllowed(chat, agentOf(v), tool, nil) {
+					t.Errorf("cross-agent contamination: agent %s holds %s's tool %q in chat %s",
+						agentOf(v), agent, tool, chat)
+				}
+			}
+		}
 	}
 }
