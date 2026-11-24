@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -93,18 +94,24 @@ func CheckSkillPolicyKey(scope SkillKeyScope, key string) (string, error) {
 }
 
 // CheckSkillPolicyMap checks every key of a request map and refuses a skill
-// named twice (letter case). It returns the map with stored keys.
+// named twice (letter case), checking keys in sorted order so the refusal
+// is the same on every run. It returns the map with stored keys.
 func CheckSkillPolicyMap[V any](scope SkillKeyScope, in map[string]V) (map[string]V, error) {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	out := make(map[string]V, len(in))
-	for key, v := range in {
+	for _, key := range keys {
 		stored, err := CheckSkillPolicyKey(scope, key)
 		if err != nil {
 			return nil, err
 		}
 		if _, dup := out[stored]; dup {
-			return nil, &skillKeyError{text: fmt.Sprintf("`%s` is listed twice.", key)}
+			return nil, &skillKeyError{text: fmt.Sprintf("`%s` is listed twice.", stored)}
 		}
-		out[stored] = v
+		out[stored] = in[key]
 	}
 	return out, nil
 }

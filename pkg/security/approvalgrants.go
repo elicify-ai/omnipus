@@ -592,7 +592,9 @@ func (s *ApprovalGrantStore) RecordNetworkHosts(sessionID, agentID string, hosts
 	return true
 }
 
-// HasNetworkGrant reports a running "usual ports to any address" allowance.
+// HasNetworkGrant reports whether the agent holds a running network
+// allowance: the "usual ports to any address" one or one for named
+// addresses (NetworkHostsFor lists those), as before the agent-keyed store.
 func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
 	if s == nil || sessionID == "" || agentID == "" {
 		return false
@@ -600,7 +602,18 @@ func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := s.agents[agentID]
-	return a != nil && a.hasNetwork && s.live(a.networkAny)
+	if a == nil {
+		return false
+	}
+	if a.hasNetwork && s.live(a.networkAny) {
+		return true
+	}
+	for _, end := range a.hosts {
+		if s.live(end) {
+			return true
+		}
+	}
+	return false
 }
 
 // NetworkHostsFor returns the agent's running named-address allowances.
