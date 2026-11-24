@@ -46,13 +46,26 @@ func main() {
 }
 
 func run(resultPath string) (err error) {
+	// S-08 / FR-005: the account check does not run a program that lies in a
+	// folder agents can write to. That covers the Omnipus data folder (home) and
+	// the per-user temporary folder, which the product treats as agent-writable
+	// on every host where it is not the shared /tmp
+	// (pkg/thirdpartycli/executor_settings.go::runtimeTempRoots). S-93 needs the
+	// fake exampletool to run, so it lives in its own folder, made first, and the
+	// temporary folder of this process is then moved inside the data folder
+	// (TMPDIR, TMP, TEMP below): the tool is outside both on any host.
+	bin, err := os.MkdirTemp("", "s1-preset-bin-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(bin)
 	home, err := os.MkdirTemp("", "s1-preset-http-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(home)
-	bin := filepath.Join(home, "bin")
-	if err = os.Mkdir(bin, 0700); err != nil {
+	scratch := filepath.Join(home, "tmp")
+	if err = os.Mkdir(scratch, 0700); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
@@ -73,6 +86,7 @@ func run(resultPath string) (err error) {
 	for key, value := range map[string]string{
 		"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), config.EnvHome: home,
 		credentials.EnvMasterKey: hex.EncodeToString(bytes.Repeat([]byte{0x52}, 32)), "OMNIPUS_BEARER_TOKEN": "",
+		"TMPDIR": scratch, "TMP": scratch, "TEMP": scratch,
 	} {
 		if err = os.Setenv(key, value); err != nil {
 			return err
