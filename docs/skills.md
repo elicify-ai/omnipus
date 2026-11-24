@@ -84,7 +84,7 @@ Only a plain program name, such as `python3`, is checked. Anything else, for exa
 
 Agents change a skill with the ordinary file tools (`write_file`, `edit_file`, `append_file`) and with `edit_skill`. `edit_skill` does four things only: `copy` a skill, `delete_file` (remove one file), `delete` (remove the whole skill) and `restore` (bring back an older version). There is no `create_skill` or `remove_skill` any more. To create a skill, an agent writes `<new-name>/SKILL.md`. To delete one, it uses `edit_skill` with `action=delete`.
 
-Skill changes are governed by the `edit_skill` permission together with the file tool's permission. The installation-wide tool-permission editor is temporarily unavailable in the web app until the Skills & Tools update lands; it is not in the new Settings, and Skills & Tools has no replacement editor yet. An agent's own **Tools & Permissions** panel can tighten that agent's access, but cannot loosen the global ceiling (see [tools](tools.md)).
+Skill changes are governed by the `edit_skill` permission together with the file tool's permission. The installation-wide value is set on **Skills & Tools** (see [tools](tools.md#how-to-change-the-installation-wide-setting)). An agent's own **Tools & Permissions** panel can tighten that agent's access, but cannot loosen the global ceiling (see [tools](tools.md)).
 
 | Setting | What happens |
 |---|---|
@@ -104,7 +104,7 @@ Built-in skills belong to Omnipus. Nobody can edit or delete them, you and agent
 
 To change a built-in skill:
 
-1. Open **Skills & Tools**, then Installed Skills.
+1. Open **Skills & Tools**, then the **Skills** tab.
 2. Click **Make a copy** on the skill. Built-in rows show "Built-in · read-only".
 3. Type a name for your copy. It starts as `<name>-copy`. The dialog checks the name as you type.
 4. Click **Create copy**, then grant the copy to the agents that should use it.
@@ -140,11 +140,10 @@ Every change to a skill you own is saved as a version of the whole folder. The h
 
 ## How to add a skill and grant it
 
-1. Open **Skills & Tools** in the sidebar. You see three tabs: Installed Skills, MCP Servers, Built-in Tools.
-2. Click **Browse Skills**. A search window opens over the screen.
-3. Type what you are looking for. Results come from the ClawHub registry, each with its name, version, and summary.
-4. Click **Install** on the one you want. The skill appears under Installed Skills, marked Community.
-5. To use a file you already have, choose **Install from file** in the same window. A file install cannot be verified against a published checksum, so Omnipus shows what the skill claims to do and asks you to confirm. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
+1. Open **Skills & Tools** in the sidebar. You see three tabs: **Skills**, **Omnipus tools** and **External tools**.
+2. Click **New skill**. It offers **Write with Omnipus** (opens Omnipus's chat with the write-a-skill workflow), **Upload a skill** and **Browse the catalog**.
+3. To browse, type what you are looking for. Results come from the ClawHub registry, each with its name, version, and summary. Click **Install** on the one you want. The skill appears on the Skills tab, marked Community.
+4. To use a file you already have, choose **Upload a skill**. Omnipus first shows a review: the skill's name and version, whether it is verified, what the **Unverified skills** setting does with it, and a category to choose. Click **Install** to install it. The page then checks what was actually installed and says "Installed <name>." only once the installed version matches the reviewed one. If it cannot confirm the install, it says so with **Retry**; Retry checks again and never installs twice. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
 6. Grant the skill. Open the agent, new or existing, and tick the skill in its skills list. An agent with nothing ticked has no skills.
 7. Send the agent a task that matches the skill's description. You can also type `/` in chat and pick the skill to activate it for that one message.
 
@@ -210,7 +209,7 @@ A skill installed from a GitHub link takes its folder name from the link. That n
 - Installing is not granting. A new skill sits unused until you grant it to an agent, and a new agent starts with no skills at all.
 - If you delete a skill and later create a new one with the same name, the new skill starts with no grants. An agent that held the old skill does not get the new one. Grant it again. The agent's Skills tab marks such a skill **stale grant**; untick and tick it, then save, to grant the current skill.
 - A skill that never fires looks identical to a skill nobody needed. The "Last used" row on each card is the only signal.
-- Registry installs are checked against a published checksum; file installs cannot be. The unverified-skill trust control is temporarily unavailable in the web app until the Skills & Tools update lands. Its existing configured value still applies; there is no replacement control in the new Settings or in Skills & Tools yet. **Block unverified** refuses installs with no checksum to check, **Warn unverified** allows them with a warning (the default), and **Allow all** turns checking off.
+- Registry installs are checked against a published checksum; file installs cannot be. The **Unverified skills** block at the top of the Skills tab decides what happens to installs with no checksum to check: **Deny** refuses them, **Ask** shows the review and installs only after you confirm (the default), and **Allow** installs them without asking, with a warning shown while it is on. It saves on its own, like the permission rows.
 - A `bash` command may read or run files of a skill the agent can load (for example `cat`, `sh <skill>/scripts/x.sh`, or `cd` into the folder followed only by `./` script runs and read-only commands such as `cat` or `ls` that stay inside it: an operand with a `..` segment is refused). A command that could change a skill file (an output redirect, `rm`, `cp`, `mv`, `chmod` and similar, also after a `cd` into the folder) is refused with a message that points to the file tools. A path with a wildcard (`*`, `?`, `[`) never counts as a skill path, and `rg --pre` is not treated as a read. Skills the agent cannot load, and Omnipus's own skill bookkeeping folders, stay closed to `bash`.
 - Skill scripts run under the agent's normal `bash` permission. With the sandbox on (macOS and Linux), a script can read and run skill folders but cannot change them. Where there is no sandbox, only Omnipus's own checks protect them. On Linux kernels older than 6.2 a script can still empty an existing skill file, because Landlock cannot block truncation there. Landlock does not restrict `chmod` either, so on Linux a script you approved can change a skill file's permissions (mode) even with the sandbox on. See [security](security.md#skill-folders-are-protected-by-mode).
 - Each skill in a session's menu adds its name and description to later requests. Omnipus captures the menu when it first builds a request for the session and reuses it. Changes made during a session may not show in that session's menu; start a new conversation to be sure. The menu is not an access grant: current permissions still govern loading a skill and running its tools.
@@ -221,4 +220,4 @@ A skill installed from a GitHub link takes its folder name from the link. That n
 - [agents](agents.md) — creating agents and choosing each one's skills.
 - [library](library.md) — mounting a folder into a workspace, which is how a repository's own skills arrive.
 - [memory](memory.md) — what your agents remember across conversations — different from a procedure you teach once.
-- [settings](settings.md) — the app's configuration, including the current absence of the installation-wide permission editor and skill-trust control.
+- [settings](settings.md) — the app's configuration. Tool permissions, skill trust and web search are set on Skills & Tools, not in Settings.

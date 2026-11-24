@@ -1,0 +1,144 @@
+// PermissionRow — one tool or skill on Skills & Tools: Allow / Ask / Deny,
+// "What the model sees" and the row's own save status (C-16).
+
+import { CaretDown } from '@phosphor-icons/react'
+import type { ModelVisibility, ToolPolicy } from '@/lib/api/generated/openapi-types'
+import { Button } from '@/components/ui/button'
+import { TextToggle } from '@/components/ui/text-toggle'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { SAVE_TEXT, type PermissionSaveQueue, type PermissionSection, type SaveStatus } from '@/lib/permissionSaveQueue'
+import {
+  LEVELS,
+  LEVEL_MEANINGS,
+  LEVEL_WORDS,
+  LOCKED_LEVEL_SENTENCE,
+  POLICIES,
+  POLICY_WORDS,
+  levelOf,
+  policyOf,
+  type CatalogItem,
+} from './skillsToolsModel'
+
+function statusText(status: SaveStatus): string {
+  switch (status.kind) {
+    case 'saving': return SAVE_TEXT.saving
+    case 'saved': return SAVE_TEXT.saved
+    case 'refused': return status.text
+    case 'not_applied': return SAVE_TEXT.notApplied
+    case 'checking': return SAVE_TEXT.checking
+    case 'shown_stored': return SAVE_TEXT.shownStored
+    case 'load_failed': return SAVE_TEXT.loadFailed
+  }
+}
+
+const RETRYABLE: ReadonlySet<SaveStatus['kind']> = new Set(['refused', 'not_applied', 'load_failed'])
+
+/** A row's save status with its Retry, shown inside the row it belongs to. */
+export function SaveStatusLine({ queue, section, name }: { queue: PermissionSaveQueue; section: PermissionSection; name?: string }) {
+  const status = queue.statusOf(section, name)
+  if (!status) return null
+  const problem = status.kind !== 'saving' && status.kind !== 'saved'
+  return (
+    <div className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)]">
+      <span className={problem ? 'text-[var(--color-warning)]' : 'text-[var(--color-muted)]'}>{statusText(status)}</span>
+      {RETRYABLE.has(status.kind) && (
+        <Button variant="outline" size="sm" className="h-7 pointer-coarse:min-h-[var(--target-touch-minimum)]" onClick={() => queue.retry(section, name)}>
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
+interface PermissionRowProps {
+  item: CatalogItem
+  queue: PermissionSaveQueue
+  disabled: boolean
+  testIdPrefix: 'tool' | 'skill'
+  onPolicy: (item: CatalogItem, policy: ToolPolicy) => void
+  onLevel: (item: CatalogItem, level: ModelVisibility) => void
+  onRowFocus: (key: string, choice: string | null) => void
+}
+
+export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, onLevel, onRowFocus }: PermissionRowProps) {
+  const policy = policyOf(queue, item)
+  const level = levelOf(queue, item)
+  const statusSection = queue.statusOf(item.levelSection, item.key) && !queue.statusOf(item.policySection, item.key)
+    ? item.levelSection
+    : item.policySection
+  return (
+    <div
+      data-testid={`${testIdPrefix}-row-${item.key}`}
+      data-row-key={item.key}
+      onFocus={(event) => onRowFocus(item.key, (event.target as HTMLElement).getAttribute('data-choice'))}
+      className="flex flex-col gap-[var(--space-1)] border-b border-[var(--color-border)] py-[var(--space-2)] last:border-b-0"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-[var(--space-2)]">
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-text)] wrap-anywhere">{item.label}</div>
+          {item.description && (
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] wrap-anywhere">{item.description}</p>
+          )}
+        </div>
+        {item.fixedSentence ? (
+          <p className="max-w-[28rem] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{item.fixedSentence}</p>
+        ) : (
+          <div className="flex shrink-0 flex-wrap items-center gap-[var(--space-1)]">
+            {POLICIES.map((choice) => (
+              <TextToggle
+                key={choice}
+                size="sm"
+                data-choice={choice}
+                pressed={policy === choice}
+                disabled={disabled || item.refused.includes(choice)}
+                onPressedChange={() => { if (policy !== choice) onPolicy(item, choice) }}
+                className="pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
+              >
+                {POLICY_WORDS[choice]}
+              </TextToggle>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+        {item.levelLocked ? (
+          item.fixedSentence ? null : (
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{LOCKED_LEVEL_SENTENCE}</p>
+          )
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                data-choice="level"
+                aria-label={`What the model sees: ${LEVEL_WORDS[level]}`}
+                className="h-7 gap-[var(--space-1)] px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] pointer-coarse:min-h-[var(--target-touch-minimum)]"
+              >
+                {LEVEL_WORDS[level]}
+                <CaretDown size={11} aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {LEVELS.map((choice) => (
+                <DropdownMenuItem key={choice} onClick={() => { if (choice !== level) onLevel(item, choice) }}>
+                  <span>
+                    <span className="font-medium">{LEVEL_WORDS[choice]}</span>
+                    {`: ${LEVEL_MEANINGS[choice]}`}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <SaveStatusLine queue={queue} section={statusSection} name={item.key} />
+      </div>
+    </div>
+  )
+}

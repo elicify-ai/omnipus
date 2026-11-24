@@ -1,0 +1,312 @@
+// PermissionCatalog — one tab's list on Skills & Tools: one search field and
+// two flat filters above collapsed groups (FR-002), Set all per group
+// (FR-003), the empty state (FR-004), rows leaving a filter (FR-005) with
+// focus kept on a neighbour and the result announced (FR-052, S-100).
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { CaretDown, ShieldWarning } from '@phosphor-icons/react'
+import type { ModelVisibility, ToolPolicy } from '@/lib/api/generated/openapi-types'
+import { Button } from '@/components/ui/button'
+import { SearchField } from '@/components/ui/search-field'
+import { FilterMenu } from '@/components/ui/filter-menu'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import type { PermissionSaveQueue } from '@/lib/permissionSaveQueue'
+import { PermissionRow } from './PermissionRow'
+import {
+  LEVELS,
+  LEVEL_WORDS,
+  POLICIES,
+  POLICY_WORDS,
+  filtersActive,
+  groupItems,
+  levelOf,
+  policyOf,
+  rowMatches,
+  type CatalogFilters,
+  type CatalogItem,
+} from './skillsToolsModel'
+
+const AUTONOMOUS_PLAN_TOOL = 'execute_plan'
+
+type PolicyChange = { item: CatalogItem; policy: ToolPolicy }
+
+interface PermissionCatalogProps {
+  items: readonly CatalogItem[]
+  queue: PermissionSaveQueue
+  /** Plural noun of the rows: "tools", "skills". */
+  noun: string
+  testIdPrefix: 'tool' | 'skill'
+  loading: boolean
+  /** Writing is off while anything the page needs is missing (S-66, S-67). */
+  disabled: boolean
+  announce: (text: string) => void
+  /** Extra controls in a group's header line (Web & Search → Settings). */
+  groupActions?: (groupId: string) => ReactNode
+  /** Shown above the list on its tab (the trust block on Skills). */
+  children?: ReactNode
+}
+
+function emptyFilters(): CatalogFilters {
+  return { search: '', policy: null, level: null }
+}
+
+export function PermissionCatalog({
+  items, queue, noun, testIdPrefix, loading, disabled, announce, groupActions, children,
+}: PermissionCatalogProps) {
+  const [filters, setFilters] = useState<CatalogFilters>(emptyFilters)
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  const [pendingAllow, setPendingAllow] = useState<PolicyChange[] | null>(null)
+  const active = filtersActive(filters)
+  const groups = useMemo(() => groupItems(items), [items])
+  const visibleGroups = groups
+    .map((group) => ({ ...group, rows: group.items.filter((item) => rowMatches(queue, item, filters)) }))
+    .filter((group) => !active || group.rows.length > 0)
+  const shown = visibleGroups.reduce((sum, group) => sum + group.rows.length, 0)
+
+  // A search or filter opens the groups with matches, and they stay open
+  // when it is cleared; Escape / the clear control collapses them (S-47).
+  const signature = `${filters.search}|${filters.policy}|${filters.level}`
+  useEffect(() => {
+    if (!active) return
+    setExpanded((current) => {
+      const next = new Set(current)
+      for (const group of visibleGroups) next.add(group.id)
+      return next
+    })
+    // Only a change of the search or filters opens groups.
+  }, [signature])
+
+  const focusRef = useFocusKeeper({ visibleGroups, signature, queue, announce, shown, testIdPrefix, policyFiltered: filters.policy !== null })
+
+  const change = (changes: PolicyChange[]) => {
+    if (changes.length === 0) return
+    if (changes.some(({ item, policy }) => item.key === AUTONOMOUS_PLAN_TOOL && policy === 'allow')) {
+      setPendingAllow(changes)
+      return
+    }
+    queue.change(changes.map(({ item, policy }) => ({ section: item.policySection, name: item.key, value: policy })))
+  }
+  const changeLevel = (item: CatalogItem, level: ModelVisibility) => {
+    queue.change([{ section: item.levelSection, name: item.key, value: level }])
+  }
+  const setAll = (rows: readonly CatalogItem[], policy: ToolPolicy) => {
+    const eligible = rows.filter((row) => !row.fixedSentence && !row.refused.includes(policy))
+    const skipped = rows.filter((row) => !eligible.includes(row))
+    change(eligible.map((item) => ({ item, policy })))
+    if (skipped.length > 0) {
+      announce(`Set ${eligible.length} to ${POLICY_WORDS[policy]}. Skipped: ${skipped.map((row) => row.label).join(', ')}.`)
+    }
+  }
+  const clearAll = () => {
+    setFilters(emptyFilters())
+    setExpanded(new Set())
+  }
+  const toggleGroup = (id: string, open: boolean) => {
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (open) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  const searchDisabled = loading
+  return (
+    <div className="flex flex-col gap-[var(--space-3)]">
+      {children}
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+        <SearchField
+          value={filters.search}
+          onValueChange={(search) => {
+            if (search === '' && filters.search !== '') setExpanded(new Set())
+            setFilters((current) => ({ ...current, search }))
+          }}
+          placeholder={`Search ${noun}…`}
+          aria-label={`Search ${noun}`}
+          disabled={searchDisabled}
+          className="min-w-[12rem] flex-1"
+        />
+        <FilterMenu
+          mode="single"
+          label={filters.policy ? `Permission: ${POLICY_WORDS[filters.policy]}` : 'Permission'}
+          aria-label="Permission filter"
+          clearLabel="All"
+          value={filters.policy}
+          onChange={(value) => setFilters((current) => ({ ...current, policy: value as ToolPolicy | null }))}
+          options={POLICIES.map((value) => ({ value, label: POLICY_WORDS[value] }))}
+          disabled={searchDisabled}
+        />
+        <FilterMenu
+          mode="single"
+          label={filters.level ? `Sees: ${LEVEL_WORDS[filters.level]}` : 'What the model sees'}
+          aria-label="What the model sees"
+          clearLabel="All levels"
+          value={filters.level}
+          onChange={(value) => setFilters((current) => ({ ...current, level: value as ModelVisibility | null }))}
+          options={LEVELS.map((value) => ({ value, label: LEVEL_WORDS[value] }))}
+          disabled={searchDisabled}
+        />
+      </div>
+      {filters.level !== null && (
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          Denied items are not loaded, so this filter leaves them out. Use the Permission filter to find them.
+        </p>
+      )}
+      {loading ? (
+        <div className="flex flex-col gap-[var(--space-2)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{`Loading ${noun}…`}</p>
+          {[0, 1, 2].map((n) => <Skeleton key={n} data-testid="skeleton-row" className="h-10 w-full" />)}
+        </div>
+      ) : active && shown === 0 ? (
+        <div className="flex flex-col items-start gap-[var(--space-2)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            {filters.search.trim() ? `No ${noun} match "${filters.search.trim()}"` : `No ${noun} match the filters`}
+          </p>
+          <Button variant="outline" size="sm" onClick={clearAll}>Clear search and filters</Button>
+        </div>
+      ) : (
+        <div ref={focusRef} className="flex flex-col gap-[var(--space-1)]">
+          {visibleGroups.map((group) => {
+            const open = active || expanded.has(group.id)
+            return (
+              <section key={group.id} data-group-id={group.id} className="rounded-md border border-[var(--color-border)] px-[var(--space-2)]">
+                <div className="flex items-center gap-[var(--space-2)]">
+                  <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} data-group-header="">
+                    <span className="font-medium text-[var(--color-text)]">{group.label}</span>
+                    <span className="text-[var(--color-muted)]">{active ? `${group.rows.length} of ${group.items.length}` : group.items.length}</span>
+                  </DisclosureRow>
+                  {open && groupActions?.(group.id)}
+                  {open && (
+                    <SetAllMenu
+                      rows={group.rows}
+                      label={active ? `Set ${group.rows.filter((row) => !row.fixedSentence).length} of ${group.rows.length} matching…` : 'Set all…'}
+                      disabled={disabled}
+                      onChoose={(policy) => setAll(group.rows, policy)}
+                    />
+                  )}
+                </div>
+                {open && group.rows.map((item) => (
+                  <PermissionRow
+                    key={item.key}
+                    item={item}
+                    queue={queue}
+                    disabled={disabled}
+                    testIdPrefix={testIdPrefix}
+                    onPolicy={(row, policy) => change([{ item: row, policy }])}
+                    onLevel={changeLevel}
+                    onRowFocus={(key, choice) => { focusRef.lastFocus.current = { key, choice } }}
+                  />
+                ))}
+              </section>
+            )
+          })}
+        </div>
+      )}
+      <ConfirmDialog
+        open={pendingAllow !== null}
+        onOpenChange={(open) => { if (!open) setPendingAllow(null) }}
+        title={(
+          <span className="flex items-center gap-[var(--space-2)]">
+            <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
+            Confirm autonomous plan execution
+          </span>
+        )}
+        description="Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt — once this resolves to Allow, the agent can author and run a full task plan end-to-end with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry, required acceptance criteria) still apply, but no operator approval prompt will be raised."
+        confirmLabel="Allow autonomous execution"
+        onConfirm={() => {
+          const changes = pendingAllow ?? []
+          setPendingAllow(null)
+          queue.change(changes.map(({ item, policy }) => ({ section: item.policySection, name: item.key, value: policy })))
+        }}
+      />
+    </div>
+  )
+}
+
+function SetAllMenu({ rows, label, disabled, onChoose }: {
+  rows: readonly CatalogItem[]
+  label: string
+  disabled: boolean
+  onChoose: (policy: ToolPolicy) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled || rows.every((row) => row.fixedSentence)}
+          className="ml-auto h-7 shrink-0 gap-[var(--space-1)] text-[length:var(--type-caption-size)] pointer-coarse:min-h-[var(--target-touch-minimum)]"
+        >
+          {label}
+          <CaretDown size={11} aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {POLICIES.map((policy) => (
+          <DropdownMenuItem key={policy} onClick={() => onChoose(policy)}>{POLICY_WORDS[policy]}</DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+type FocusKeeperInput = {
+  visibleGroups: Array<{ id: string; rows: CatalogItem[] }>
+  signature: string
+  queue: PermissionSaveQueue
+  announce: (text: string) => void
+  shown: number
+  testIdPrefix: 'tool' | 'skill'
+  policyFiltered: boolean
+}
+
+/**
+ * When the focused row leaves the list because its saved value no longer
+ * matches the filter, focus moves to the same control of the row before it
+ * (else after it, else its group header) and the result is announced
+ * (FR-052, S-100). A change of the filters themselves announces nothing.
+ */
+function useFocusKeeper({ visibleGroups, signature, queue, announce, shown, testIdPrefix, policyFiltered }: FocusKeeperInput) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const lastFocus = useRef<{ key: string; choice: string | null } | null>(null)
+  const previous = useRef<{ order: Array<{ key: string; group: string; item: CatalogItem }>; signature: string }>({ order: [], signature })
+  const order = visibleGroups.flatMap((group) => group.rows.map((item) => ({ key: item.key, group: group.id, item })))
+
+  useLayoutEffect(() => {
+    const before = previous.current
+    previous.current = { order, signature }
+    const focused = lastFocus.current
+    if (!focused || before.signature !== signature) return
+    if (order.some((entry) => entry.key === focused.key)) return
+    const at = before.order.findIndex((entry) => entry.key === focused.key)
+    if (at < 0) return
+    const left = before.order[at]
+    lastFocus.current = null
+    const policy = policyOf(queue, left.item)
+    const words = policyFiltered && policy ? POLICY_WORDS[policy] : LEVEL_WORDS[levelOf(queue, left.item)]
+    announce(`${left.item.label} set to ${words}. It no longer matches the filter. ${shown} shown.`)
+    const stillShown = new Set(order.map((entry) => entry.key))
+    const neighbour = [...before.order.slice(0, at)].reverse().find((entry) => stillShown.has(entry.key)) ??
+      before.order.slice(at + 1).find((entry) => stillShown.has(entry.key))
+    const root = containerRef.current
+    if (!root) return
+    const active = document.activeElement
+    if (active && active !== document.body && root.contains(active)) return
+    const row = neighbour ? root.querySelector<HTMLElement>(`[data-testid="${testIdPrefix}-row-${CSS.escape(neighbour.key)}"]`) : null
+    const target = row?.querySelector<HTMLElement>(`[data-choice="${focused.choice ?? ''}"]`) ??
+      row?.querySelector<HTMLElement>('button') ??
+      root.querySelector<HTMLElement>(`[data-group-id="${CSS.escape(left.group)}"] [data-group-header]`)
+    target?.focus()
+  })
+
+  return Object.assign((node: HTMLDivElement | null) => { containerRef.current = node }, { lastFocus })
+}
