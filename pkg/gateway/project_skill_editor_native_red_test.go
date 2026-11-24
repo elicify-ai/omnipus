@@ -123,8 +123,8 @@ func runF25NativeEditor(t *testing.T, permission string, editor bool) {
 	require.NoError(t, err)
 	for i := range cfg.Agents.List {
 		if cfg.Agents.List[i].ID == "test-agent" {
-			record, err := agentstore.New(h.api.homePath).Get("test-agent")
-			require.NoError(t, err)
+			record, getErr := agentstore.New(h.api.homePath).Get("test-agent")
+			require.NoError(t, getErr)
 			cfg.Agents.List[i] = *record
 		}
 	}
@@ -135,7 +135,9 @@ func runF25NativeEditor(t *testing.T, permission string, editor bool) {
 	require.NoError(t, err)
 	var document map[string]any
 	require.NoError(t, json.Unmarshal(raw, &document))
-	document["sandbox"].(map[string]any)["skill_policies"] = map[string]string{"project:f25/notes": permission}
+	sandboxObject, sandboxIsObject := document["sandbox"].(map[string]any)
+	require.True(t, sandboxIsObject, "the marshalled config carries a sandbox object: %s", raw)
+	sandboxObject["skill_policies"] = map[string]string{"project:f25/notes": permission}
 	raw, err = json.Marshal(document)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(h.api.homePath, "config.json"), raw, 0o600))

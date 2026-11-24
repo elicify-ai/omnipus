@@ -113,7 +113,8 @@ func writeD14Permission(t *testing.T, f d14NativeFixture, permission string) {
 	require.NoError(t, err)
 	var document map[string]any
 	require.NoError(t, json.Unmarshal(raw, &document))
-	sb := document["sandbox"].(map[string]any)
+	sb, hasSandbox := document["sandbox"].(map[string]any)
+	require.True(t, hasSandbox, "the persisted config carries a sandbox object: %s", raw)
 	sb["skill_policies"] = map[string]string{f.key: permission}
 	sb["skill_trust"] = "allow" // Isolate raw permission; project files remain unverified.
 	raw, err = json.Marshal(document)
@@ -248,9 +249,9 @@ func TestProjectSkillPathGate(t *testing.T) {
 			case "alias":
 				alias := filepath.Join(f.work, "innocuous-alias.md")
 				require.NoError(t, os.Symlink(f.skill, alias))
-				real, err := filepath.EvalSymlinks(alias)
+				resolved, err := filepath.EvalSymlinks(alias)
 				require.NoError(t, err)
-				require.Equal(t, f.skill, real)
+				require.Equal(t, f.skill, resolved)
 				assertD14Denied(t, reader.Execute(f.ctx, map[string]any{"path": alias}), "read_file", "")
 			case "workdir":
 				ctx := WithTurnWorkspaceDir(f.ctx, f.mount)

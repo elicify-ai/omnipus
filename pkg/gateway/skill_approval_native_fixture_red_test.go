@@ -275,8 +275,8 @@ func nativeTrustReadChild(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
 	require.NoError(t, err)
 	var cfg config.Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatalf("BLOCKED: native config cannot load the C-3 trust vocabulary before C-24 durable readback — required by C-3/C-24; never remap ask to a legacy value in the reader: %v", err)
+	if unmarshalErr := json.Unmarshal(raw, &cfg); unmarshalErr != nil {
+		t.Fatalf("BLOCKED: native config cannot load the C-3 trust vocabulary before C-24 durable readback — required by C-3/C-24; never remap ask to a legacy value in the reader: %v", unmarshalErr)
 	}
 	msgBus := bus.NewMessageBus()
 	defer msgBus.Close()
@@ -303,8 +303,8 @@ func assertFreshSkillTrust(t *testing.T, home, key string, approved bool) {
 	// isolated HOME. Inheriting OMNIPUS_HOME would mark it as ambient, so
 	// mustAgentLoop would correctly replace it with another empty test home.
 	for _, variable := range os.Environ() {
-		key, _, _ := strings.Cut(variable, "=")
-		if key != config.EnvHome && key != config.EnvConfig && key != "OMNIPUS_F18_TRUST_HOME" {
+		variableName, _, _ := strings.Cut(variable, "=")
+		if variableName != config.EnvHome && variableName != config.EnvConfig && variableName != "OMNIPUS_F18_TRUST_HOME" {
 			cmd.Env = append(cmd.Env, variable)
 		}
 	}

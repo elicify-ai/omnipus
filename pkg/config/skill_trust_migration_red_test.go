@@ -24,7 +24,11 @@ package config
 // this unit test pins the mapping and the "rewrote at all" decision the
 // audit entry is gated on.
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+)
 
 // migrateLegacySkillTrustOf is the test-local seam for the C-3 one-time
 // trust rewrite. The GREEN step wires it to the production entry point; it
@@ -34,11 +38,8 @@ var migrateLegacySkillTrustOf func(stored string) (newValue string, rewrote bool
 // TestSkillTrustMigration_LegacyValues drives Dataset D3 rows 1–4 and 10.
 // Traces to: BDD S-33; spec C-3; Dataset D3.
 func TestSkillTrustMigration_LegacyValues(t *testing.T) {
-	if migrateLegacySkillTrustOf == nil {
-		t.Fatal("BLOCKED: the C-3 legacy trust migration is not implemented — " +
-			"required by skills-tools-redesign-spec C-3 (one-time rewrite to " +
-			"allow/ask/deny) and Dataset D3 rows 1-4, 10")
-	}
+	nativebinding.Require(t, "pkg/config", migrateLegacySkillTrustOf,
+		"C-3/S-33/D3: native trust migration; post-GREEN load/audit-path re-audit required")
 	cases := []struct {
 		name        string
 		stored      string // the value found in sandbox.skill_trust at load
@@ -57,7 +58,6 @@ func TestSkillTrustMigration_LegacyValues(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			gotNew, rewrote := migrateLegacySkillTrustOf(tc.stored)
 			if gotNew != tc.wantNew {

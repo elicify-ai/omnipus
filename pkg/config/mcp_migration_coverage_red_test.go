@@ -17,86 +17,88 @@ package config
 // loud (BLOCKED), never a skip.
 import (
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // mcpMigrationRow is one D8 row's inputs and expected outputs.
 type mcpMigrationRow struct {
 	name string
 	// inputs
-	global    map[string]string // the persisted global ceiling entries relevant to the row
-	agent     string            // Mia's own stored entry for mcp_github_read ("" = none)
-	godMode   bool
-	phase     string // "first" | "repeat" | "new-service"
-	service   string // "" = github with tool mcp_github_read
-	tool      string // "" = mcp_github_read
+	global  map[string]string // the persisted global ceiling entries relevant to the row
+	agent   string            // Mia's own stored entry for mcp_github_read ("" = none)
+	godMode bool
+	phase   string // "first" | "repeat" | "new-service"
+	service string // "" = github with tool mcp_github_read
+	tool    string // "" = mcp_github_read
 	// expected
-	writes   map[string]string // the keys the migration writes (empty = nothing)
-	effective string           // Mia's effective value for the tool after start
+	writes    map[string]string // the keys the migration writes (empty = nothing)
+	effective string            // Mia's effective value for the tool after start
 }
 
 func TestMcpMigration_CoverageMatrix(t *testing.T) {
 	rows := []mcpMigrationRow{
 		{
-			name: "D8#1: covered exact server key — nothing written, allow stands",
-			global: map[string]string{"mcp_github_*": "allow"},
+			name:      "D8#1: covered exact server key — nothing written, allow stands",
+			global:    map[string]string{"mcp_github_*": "allow"},
 			effective: "allow",
 		},
 		{
-			name: "D8#2: covered by the broader mcp_* key — nothing written, deny stands",
-			global: map[string]string{"mcp_*": "deny"},
+			name:      "D8#2: covered by the broader mcp_* key — nothing written, deny stands",
+			global:    map[string]string{"mcp_*": "deny"},
 			effective: "deny",
 		},
 		{
-			name: "D8#3: partly covered (exact deny only) — write mcp_github_* ask, exact deny wins",
-			global: map[string]string{"mcp_github_read": "deny"},
-			writes: map[string]string{"mcp_github_*": "ask"},
+			name:      "D8#3: partly covered (exact deny only) — write mcp_github_* ask, exact deny wins",
+			global:    map[string]string{"mcp_github_read": "deny"},
+			writes:    map[string]string{"mcp_github_*": "ask"},
 			effective: "deny",
 		},
 		{
-			name: "D8#4: uncovered — write mcp_github_* ask, tool asks",
-			writes: map[string]string{"mcp_github_*": "ask"},
+			name:      "D8#4: uncovered — write mcp_github_* ask, tool asks",
+			writes:    map[string]string{"mcp_github_*": "ask"},
 			effective: "ask",
 		},
 		{
-			name: "D8#5: agent-only allow — write mcp_github_* ask, tool asks",
-			agent: "allow",
-			writes: map[string]string{"mcp_github_*": "ask"},
+			name:      "D8#5: agent-only allow — write mcp_github_* ask, tool asks",
+			agent:     "allow",
+			writes:    map[string]string{"mcp_github_*": "ask"},
 			effective: "ask",
 		},
 		{
-			name: "D8#6: agent-only deny — write mcp_github_* ask, tool denies",
-			agent: "deny",
-			writes: map[string]string{"mcp_github_*": "ask"},
+			name:      "D8#6: agent-only deny — write mcp_github_* ask, tool denies",
+			agent:     "deny",
+			writes:    map[string]string{"mcp_github_*": "ask"},
 			effective: "deny",
 		},
 		{
-			name: "D8#7: God Mode on, agent-only allow — write mcp_github_* ask, tool allows",
+			name:  "D8#7: God Mode on, agent-only allow — write mcp_github_* ask, tool allows",
 			agent: "allow", godMode: true,
-			writes: map[string]string{"mcp_github_*": "ask"},
+			writes:    map[string]string{"mcp_github_*": "ask"},
 			effective: "allow",
 		},
 		{
-			name: "D8#8: prefix overlap — the probe matches the shorter key; nothing written for git_hub",
-			global: map[string]string{"mcp_git_*": "deny"},
+			name:    "D8#8: prefix overlap — the probe matches the shorter key; nothing written for git_hub",
+			global:  map[string]string{"mcp_git_*": "deny"},
 			service: "git_hub", tool: "mcp_git_hub_read",
 			effective: "deny",
 		},
 		{
-			name: "D8#9: repeat start after row 4 — row 4's write persisted, nothing more written",
-			global: map[string]string{"mcp_github_*": "ask"},
-			phase: "repeat",
+			name:      "D8#9: repeat start after row 4 — row 4's write persisted, nothing more written",
+			global:    map[string]string{"mcp_github_*": "ask"},
+			phase:     "repeat",
 			effective: "ask",
 		},
 		{
-			name: "D8#10: a new service after the upgrade, uncovered — write mcp_<s>_* ask (S-59)",
+			name:  "D8#10: a new service after the upgrade, uncovered — write mcp_<s>_* ask (S-59)",
 			phase: "new-service", service: "notion", tool: "mcp_notion_read",
-			writes: map[string]string{"mcp_notion_*": "ask"},
+			writes:    map[string]string{"mcp_notion_*": "ask"},
 			effective: "ask",
 		},
 		{
-			name: "D8#11: a new service covered by mcp_* deny — nothing written, deny",
+			name:  "D8#11: a new service covered by mcp_* deny — nothing written, deny",
 			phase: "new-service", service: "notion", tool: "mcp_notion_read",
-			global: map[string]string{"mcp_*": "deny"},
+			global:    map[string]string{"mcp_*": "deny"},
 			effective: "deny",
 		},
 	}
@@ -106,11 +108,9 @@ func TestMcpMigration_CoverageMatrix(t *testing.T) {
 
 	ran := 0
 	for _, r := range rows {
-		r := r
 		t.Run(r.name, func(t *testing.T) {
-			if mcpMigrationPlanOf == nil {
-				t.Fatal("BLOCKED: the C-18 external-tools migration is not implemented — the start-time migration must write exactly the D8 row's keys (and never the round-0 blanket ask over a covered key); required by S-88 and Dataset D8")
-			}
+			nativebinding.Require(t, "pkg/config", mcpMigrationPlanOf,
+				"C-18/S-88/D8: native startup MCP coverage migration; post-GREEN consumer re-audit required")
 			global := r.global
 			if global == nil {
 				global = map[string]string{}

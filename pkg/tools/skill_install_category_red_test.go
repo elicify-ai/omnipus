@@ -40,6 +40,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )
@@ -77,11 +78,8 @@ func TestInstallSkillCategoryParity(t *testing.T) {
 			"C-5/R32: the category is never written into the skill file — the installed "+
 				"SKILL.md stays byte-identical to the registry's original")
 
-		if readInstalledSkillCategory == nil {
-			t.Fatal("BLOCKED: the category metadata store (C-5: Omnipus's own data, " +
-				"outside the skill folder) is not implemented — required by S-71 " +
-				"(weather shows in the LIFESTYLE group)")
-		}
+		nativebinding.Require(t, "pkg/skills", readInstalledSkillCategory,
+			"C-5/S-71: actual persisted metadata reader; post-GREEN inventory/store re-audit required")
 		category, ok := readInstalledSkillCategory(t, globalSkills, "weather")
 		require.True(t, ok, "S-71: the installed skill carries a stored category")
 		require.Equal(t, "lifestyle", category,
