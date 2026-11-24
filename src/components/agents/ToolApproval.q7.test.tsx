@@ -74,12 +74,18 @@ for (const [name, Component] of [['Panel', ToolApprovalPanel], ['Modal', ToolApp
       })
     }
 
-    it('positive control: an ordinary connection tool retains lasting Allow and no special scope notice', async () => {
-      setApprovalReply({ approval_id: frame.approval_id, action: 'allow', status: 'ok', grant_recorded: true })
+    it('positive control: an ordinary connection tool offers a one-hour allowance and no special scope notice', async () => {
+      setApprovalReply({
+        approval_id: frame.approval_id, action: 'allow_for', status: 'ok', grant_recorded: true,
+        applied: { trust_approved: false, timed_allowance: true, call_released: true }, expires_at: '2026-11-24T04:00:00Z',
+      })
       mount({ ...ORDINARY_FRAME, tool_name: 'enable_channel' })
       expect(screen.queryByText(NOTICE, { exact: true })).not.toBeInTheDocument()
-      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Always Allow' })) })
-      await waitFor(() => expect(approvalPosts()).toEqual([{ id: frame.approval_id, body: { action: 'allow' } }]))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /1 hour/i })) })
+      await waitFor(() => expect(approvalPosts()).toEqual([
+        { id: frame.approval_id, body: { action: 'allow_for', duration: '1h' } },
+      ]))
+      expect(screen.queryByRole('button', { name: 'Always Allow' })).not.toBeInTheDocument()
     })
   })
 }
