@@ -46,6 +46,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // emitPreflightEscalation writes the FR-032(b)/FR-046 shell.preflight_
@@ -629,6 +630,7 @@ const onceEgressTokenPrefix = "once-"
 // failure — the caller treats that as "grant nothing", same fail-closed
 // posture as every token-minting path in this file.
 func newOnceEgressToken() string {
+	testseam.EgressTokenMinted(testseam.EgressTokenOnce) // no-op outside the s1seams test build
 	buf := make([]byte, 16)
 	if _, err := cryptorand.Read(buf); err != nil {
 		return ""

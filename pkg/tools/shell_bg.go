@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // --- background execution ----------------------------------------------------
@@ -164,8 +165,16 @@ func (t *ExecTool) runBackground(
 
 	var pipeWG sync.WaitGroup
 	pipeWG.Add(2)
-	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
-	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
+	// testseam.BackgroundPipeReader returns the pipe unchanged outside the
+	// s1seams test build (#1960 S1, seam H45).
+	go func() {
+		defer pipeWG.Done()
+		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stdout", stdoutReader))
+	}()
+	go func() {
+		defer pipeWG.Done()
+		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stderr", stderrReader))
+	}()
 
 	// naturalCompletionCh is closed by the completion goroutine below the
 	// instant it has recorded a terminal status for the session (whatever
