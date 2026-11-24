@@ -3,7 +3,9 @@ package programs
 // Revision-8 S07/S08/S90/S114/S115. S116/S131 use the actual edit route
 // in pkg/gateway/programs_check_edits_test.go; the requirement is relocated,
 // not removed. S90/S114 audit sequences now drive actual person routes and the
-// shared audit file in pkg/gateway. The missing S139 barrier stays loud.
+// shared audit file in pkg/gateway. S139's real delayed-launch oracle now
+// lives in gateway's TestProgramCheck_ActualDelayedLaunch; its old row below
+// remains a loud untagged/build-name guard, never a substitute runtime PASS.
 import (
 	"encoding/json"
 	"os"
@@ -126,7 +128,10 @@ func TestProgramCheck_Ordering(t *testing.T) {
 	// sequences, exact generation/result ordering and the real shared audit
 	// sink with a positive reader/outcome instrument. No synthetic product row.
 	t.Run("S139_delayed_launch_cannot_stop_the_newer_check", func(t *testing.T) {
-		t.Fatal("BLOCKED: actual S139 commit/reserve-before-launch barrier is not implemented in this fixture; Service.Publish holds its mutex through CommitProgramCredential and launchLocked, so blocking TransactHook also blocks B. Need a deterministic real-flow reservation/launch seam, not seeded reservations or scheduler sleeps; individual dispute H42 — required by S-139/FR-047")
+		// Full unchanged S139 oracle: gateway's tagged actual A/B routes,
+		// kernel process-open observer, terminal B and shared audit campaign.
+		// This row checks only mandatory build/name selection; no runtime claim.
+		requireS1TaggedLeaf(t, "H42")
 	})
 }
 

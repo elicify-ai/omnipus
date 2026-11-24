@@ -35,9 +35,11 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	// TestProgramEnv_PerModeAndTool; its oracle remains exactly octocat.
 
 	t.Run("S25_god_mode_token_available_no_egress_token", func(t *testing.T) {
-		// GREEN asserts here (spec S-25): God Mode, GitHub on for Dev →
-		// printenv is 16 and no egress token is created.
-		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting, but no actual mint/creation-history observer is established here. Empty child proxy URL or post-revocation runHosts cannot prove no token was ever created; need a creation-boundary observer with an Auto positive control; individual dispute H43 — required by S-25/FR-017")
+		// Full unchanged oracle moved to agent's tagged actual runtime
+		// TestProgramNetwork_ActualMintHistory: child16, all mint entries0,
+		// same actual observer first sees Auto's mint before real revocation.
+		// This retained row is only the mandatory build/name guard.
+		requireS1TaggedLeaf(t, "H43")
 	})
 
 	// S28_unmatched_program_word_no_grant_token_still_available migrated intact
