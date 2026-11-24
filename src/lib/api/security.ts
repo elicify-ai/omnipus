@@ -118,6 +118,12 @@ export type AuditDecision = 'allow' | 'deny' | 'error'
 // genuine envelope drift still fails loudly.
 const AuditLogEnvelopeShapeSchema = z.object({ entries: z.array(z.unknown()) }).passthrough()
 
+/** The audit log as the viewer shows it: the validated response plus how many records could not be read. */
+export type AuditLogView = AuditLogResponse & { // not-wire-format: SPA-side count of records dropped by per-entry validation
+  /** Records the gateway sent that failed AuditEntry validation and are not in `entries`. */
+  unreadableCount: number
+}
+
 /**
  * GET /api/v1/audit-log — with PER-ENTRY validation.
  *
@@ -141,9 +147,11 @@ const AuditLogEnvelopeShapeSchema = z.object({ entries: z.array(z.unknown()) }).
  * audit record is evidence: a synthesised row would need an invented
  * timestamp to satisfy the schema, and a fabricated timestamp interleaved
  * into an append-only chronological log is worse than an absent row. The
- * drop is surfaced through the counter/telemetry channel instead.
+ * drop is surfaced through the counter/telemetry channel, and the number of
+ * dropped records is returned as `unreadableCount` so the viewer can say how
+ * many records it could not show (U1-2: never a silently shorter log).
  */
-export async function fetchAuditLog(): Promise<AuditLogResponse> {
+export async function fetchAuditLog(): Promise<AuditLogView> {
   const endpoint = 'GET /api/v1/audit-log'
   // A non-object body, or `entries` that is not an array at all, is genuine
   // contract drift and still throws ApiSchemaError from request().
@@ -191,7 +199,7 @@ export async function fetchAuditLog(): Promise<AuditLogResponse> {
     )
     throw schemaErr
   }
-  return parsed.data
+  return { ...parsed.data, unreadableCount: dropped }
 }
 
 // ── Security Admin Endpoints ──────────────────────────────────────────────────
