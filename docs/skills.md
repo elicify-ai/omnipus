@@ -143,7 +143,7 @@ Every change to a skill you own is saved as a version of the whole folder. The h
 1. Open **Skills & Tools** in the sidebar. You see three tabs: **Skills**, **Omnipus tools** and **External tools**.
 2. Click **New skill**. It offers **Write with Omnipus** (opens Omnipus's chat with the write-a-skill workflow), **Upload a skill** and **Browse the catalog**.
 3. To browse, type what you are looking for. Results come from the ClawHub registry, each with its name, version, and summary. Click **Install** on the one you want. The skill appears on the Skills tab, marked Community.
-4. To use a file you already have, choose **Upload a skill**. Omnipus first shows a review: the skill's name and version, whether it is verified, what the **Unverified skills** setting does with it, and a category to choose. Click **Install** to install it. The page then checks what was actually installed and says "Installed <name>." only once the installed version matches the reviewed one. If it cannot confirm the install, it says so with **Retry**; Retry checks again and never installs twice. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
+4. To use a file you already have, choose **Upload a skill**. Omnipus first shows a review: the skill's name and version, whether it is verified, what the **Unverified skills** setting does with it, and a category to choose. Click **Install** to install it. The page then checks what was actually installed and says "Installed <name>." only once the installed version matches the reviewed one. If it cannot confirm the install, it says so with **Retry**; Retry checks again and never installs twice. **Cancel** before you click Install throws the reviewed copy away and says "Nothing was installed."; after you click Install, Cancel stays greyed out until the answer is known. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
 6. Grant the skill. Open the agent, new or existing, and tick the skill in its skills list. An agent with nothing ticked has no skills.
 7. Send the agent a task that matches the skill's description. You can also type `/` in chat and pick the skill to activate it for that one message.
 
@@ -151,7 +151,14 @@ You can also skip the screen: ask an agent in chat to find and install a skill, 
 
 Installing over a skill you already have replaces it. If you changed that skill since you installed it, Omnipus warns you that the install would replace your changes and asks you to confirm. Your changes stay in the version history. You cannot install a skill whose name is a built-in name.
 
-Each card under Installed Skills shows when the skill was last used. "Never used" on a skill you granted is the sign its description is not doing its job.
+Each skill row on the Skills tab has a **More actions** menu (the three dots):
+
+| Action | When it is offered | What it does |
+|---|---|---|
+| **Make a copy** | Always | Copies the skill under a new name you choose. A built-in skill is read-only, so a copy is how you get a version you can change. |
+| **Remove** | Skills that are not built-in | Asks first, then removes the skill. Agents that use it can no longer load it. |
+| **Choose category** | While the skill is under Uncategorised | Moves it to the category you pick. You can do this once; after that the category is fixed. |
+| **Approve this version** | Unverified skills while **Unverified skills** is Ask | Approves exactly this version, so agents stop asking about trust for it. If the skill changed since the page loaded, nothing is approved and you are asked to review it again. |
 
 ## What a skill folder contains
 
@@ -163,7 +170,7 @@ A skill you own lives in `~/.omnipus/skills/<name>/`. `SKILL.md` is required. Ev
 | `description` | Yes | One line saying when to use the skill. At most 1024 characters. |
 | Body | Yes | The instructions, in Markdown. Read only when the agent loads the skill. |
 | `name` | Yes | Must match the folder name. When Omnipus copies a skill it sets this for you. |
-| `author`, `version`, `license` | No | Shown on the skill's card in Installed Skills. |
+| `author`, `version`, `license` | No | Kept with the skill. The version shows in the install review. |
 | `compatibility` | No | Free text for the agent, up to 500 characters. |
 | `metadata` | No | Extra text values. `omnipus-requires` lists needed programs (see above). |
 | `argument-hint` | No | A hint shown next to the skill in the chat `/` menu, such as `<query>`. |

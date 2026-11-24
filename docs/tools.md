@@ -225,9 +225,11 @@ A connected server adds tools Omnipus was not born with — a company wiki, a de
 To connect one:
 
 1. Open **Skills & Tools** in the sidebar.
-2. Go to the **MCP Servers** tab and click **Add Server**.
-3. Choose **Local program** (a command that runs on your machine) or **Network address** (an https address, for hosted services). A local program asks you to confirm you trust it.
-4. Save. The server appears with its connection status, and its tools join the catalog.
+2. Go to the **External tools** tab and click **Add service**.
+3. Choose **A network address** (an https address, for hosted services) or **A local program** (a command that runs on your server). A local program first asks "This runs a program on your server", with **Use a network address instead** as the main button.
+4. Save. The service appears as its own group on the tab, and every tool it has, now or later, starts at Ask unless a broader global rule already covers it.
+
+Each service's group header has an on/off switch that acts at once, **Test** (connects and counts its tools), **Edit** and **Remove**. Remove asks "Remove this service? Agents that use it lose its tools." first. A service that cannot connect shows the reason inside its group, with **Retry** and **Edit**.
 
 Server tools carry the server's name, so you can tell where a tool came from. In an agent's **Tools & Permissions** panel, they sit in their own group under that name. One Allow, Ask or Deny control covers every tool from that server. Existing global policies still apply: the stricter-wins rule is the same as for any other tool.
 

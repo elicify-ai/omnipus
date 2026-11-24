@@ -240,7 +240,7 @@ Each worker's **Runtime** tab shows the saved program and parameters read-only, 
 
 The **Load tools on demand** switch is gone from **Settings → Limits**. What the model sees about each tool and skill is now set per item on **Skills & Tools** with the **What the model sees** level (Hidden, Name only, Name and short description, Full); see [tools](tools.md#what-the-model-sees). Searching Settings for "load tools on demand" points there. See [Loaded tools stay with the conversation](tools.md#loaded-tools-stay-with-the-conversation) for how an on-demand load is retained.
 
-For scripts, the switch is `tools_on_demand` on `GET` / `PUT /api/v1/performance` and `tools.manifest.compressed` in `config.json`: `true` means on-demand loading; `false` means the full available tool definitions.
+For scripts, the switch is gone too: `GET` / `PUT /api/v1/performance` no longer carry `tools_on_demand`, and a change to `tools.manifest.compressed` through `set_config` or `PUT /api/v1/config` is refused with "This setting was replaced by levels in Skills & Tools." An old value in `config.json` is converted once into levels at upgrade, then left in place and ignored.
 
 ## Goal timers
 
