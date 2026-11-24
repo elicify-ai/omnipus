@@ -37,6 +37,9 @@ func (p *wu19Inventory) commandEnvWriteSafe(fn *wu19Function, field *ast.Selecto
 	if kind != wu19TrackedCommand {
 		return false
 	}
+	if !partial && p.envAppendKeepsRoot(fn, field, value, before, bindings, trace) {
+		return true // ruling WU19-win 1b: the command keeps its existing root unchanged.
+	}
 	origin := p.commandEnvOrigin(fn, value, before, bindings, trace)
 	if partial {
 		// An explicit element/copy retains the command's already rooted slice.
@@ -115,4 +118,69 @@ func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before 
 		return out
 	}
 	return p.origin(fn, expr, before, bindings, map[string]bool{})
+}
+
+// envAppendKeepsRoot is the one append rule of ruling WU19-win 1b. A helper's
+// write to the traced command's Env is safe without re-deriving a root only
+// when ALL of these hold:
+//  1. the right-hand side calls the real builtin append (not shadowed by a
+//     local or package-level append);
+//  2. its first argument is exactly <c>.Env for the SAME tracked command (not
+//     a slice expression, another command or an unproved alias);
+//  3. no other argument carries environment data of any kind: its origin has
+//     none of wu19Bad, wu19MayBeNil, wu19GodException, wu19Generic or
+//     wu19Runner;
+//  4. the helper writes that command's Env nowhere else (no nil fallback or
+//     other assignment, copy or element write, reachable or not).
+//
+// Such a write keeps the command's existing root, including a caller's God
+// Mode exception; it never creates or grants one.
+func (p *wu19Inventory) envAppendKeepsRoot(fn *wu19Function, field *ast.SelectorExpr, value ast.Expr, before token.Pos, bindings map[types.Object]wu19Reference, trace wu19CommandTrace) bool {
+	call, ok := value.(*ast.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return false
+	}
+	builtin, ok := call.Fun.(*ast.Ident)
+	if !ok || builtin.Name != "append" || fn.file.object(builtin) != nil {
+		return false
+	}
+	if _, shadowed := p.funcs[fn.file.pkg+".append"]; shadowed {
+		return false
+	}
+	if _, shadowed := p.globals[fn.file.pkg+".append"]; shadowed {
+		return false
+	}
+	first, ok := call.Args[0].(*ast.SelectorExpr)
+	if !ok || first.Sel.Name != "Env" || p.commandIdentity(fn, first.X, before, bindings, trace, map[string]bool{}) != wu19TrackedCommand {
+		return false
+	}
+	const envData = wu19Bad | wu19MayBeNil | wu19GodException | wu19Generic | wu19Runner
+	for _, arg := range call.Args[1:] {
+		if p.commandEnvValue(fn, arg, before, bindings, trace, map[string]bool{})&envData != 0 {
+			return false
+		}
+	}
+	only := true
+	ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
+		var targets []ast.Expr
+		var at token.Pos
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			if len(node.Rhs) == 1 && node.Rhs[0] == value {
+				return true // the append write itself.
+			}
+			targets, at = node.Lhs, node.Pos()
+		case *ast.CallExpr:
+			if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "copy" && fn.file.object(id) == nil && len(node.Args) == 2 {
+				targets, at = node.Args[:1], node.Pos()
+			}
+		}
+		for _, target := range targets {
+			if other, _ := wu19CommandEnvTarget(target); other != nil && p.commandIdentity(fn, other.X, at, bindings, trace, map[string]bool{}) != wu19OtherValue {
+				only = false
+			}
+		}
+		return true
+	})
+	return only
 }
