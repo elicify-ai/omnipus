@@ -23,9 +23,10 @@ package agent
 // seam the fix wires to.
 
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // levelTurnPlan is the visibility authority's outcome for one tool at one

@@ -123,7 +123,6 @@ func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			gotGlobal, gotAgent := skillPermissionsUpgradePlanOf(tc.oldGlobalSkillValue, tc.oldAgentSkillValue, tc.installedSkills, tc.grantedSkills)
 			assertStringMap(t, "global skill_policies plan", gotGlobal, tc.wantGlobal)

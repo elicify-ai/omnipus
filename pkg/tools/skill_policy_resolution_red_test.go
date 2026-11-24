@@ -18,8 +18,9 @@ package tools
 // values below come from the spec's datasets, never from the implementation.
 
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // skillOutcomeInput is one Dataset D1 input row: (global, agent override,
@@ -147,7 +148,6 @@ func TestSkillPolicyResolution_Table(t *testing.T) {
 	nativebinding.Require(t, "pkg/tools", skillOutcomeOf,
 		"C-0/C-3/C-11/D1: actual per-skill resolver; post-GREEN every-consumer re-audit required")
 	for _, tc := range d1ResolutionTable {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			outcome, refusal := skillOutcomeOf(tc.granted, tc.global, tc.agentValue, tc.trust, tc.verified, tc.godMode)
 			if outcome != tc.wantOutcome {

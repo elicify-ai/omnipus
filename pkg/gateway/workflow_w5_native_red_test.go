@@ -239,7 +239,7 @@ func testWriteSkillWorkflowNative(t *testing.T) {
 		require.Len(t, frame.Card.Questions[0].Options, 2)
 		assert.Equal(t, []string{"Lifestyle", "Research"}, []string{frame.Card.Questions[0].Options[0].Label, frame.Card.Questions[0].Options[1].Label})
 		assert.Equal(t, "Publish", frame.Card.Questions[1].Header)
-		var publishChoices []string
+		publishChoices := make([]string, 0, len(frame.Card.Questions[1].Options))
 		for _, option := range frame.Card.Questions[1].Options {
 			publishChoices = append(publishChoices, option.Label)
 		}

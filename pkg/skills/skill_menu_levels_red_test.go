@@ -26,9 +26,10 @@ package skills
 // test-local seam the fix wires to.
 
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // skillsMenuLineOf is the test-local seam for the level-aware menu entry

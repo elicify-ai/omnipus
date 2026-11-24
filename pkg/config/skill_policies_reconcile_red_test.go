@@ -96,7 +96,6 @@ func TestSkillPolicyReconcile_NewSkillAsk(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			installed := make(map[string]bool, len(tc.installed))
 			for _, skill := range tc.installed {

@@ -25,9 +25,10 @@ package config
 // pins only the stored level.
 
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"reflect"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // mcpServerOldCfg is one server's pre-upgrade state.
@@ -159,7 +160,6 @@ func TestVisibilityStartingLevels_Upgrade(t *testing.T) {
 	nativebinding.Require(t, "pkg/config", visibilityConversionPlanOf,
 		"C-6/C-19/S-41/D7: native starting-level conversion; post-GREEN boot-path re-audit required")
 	for _, tc := range d7Table {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := invokeVisibilityConversionPlan(tc)
 			if !reflect.DeepEqual(got, tc.want) {

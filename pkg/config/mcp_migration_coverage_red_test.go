@@ -16,8 +16,9 @@ package config
 // that joins ReconcileToolPolicyCeiling's load path. Nil keeps the RED run
 // loud (BLOCKED), never a skip.
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // mcpMigrationRow is one D8 row's inputs and expected outputs.
@@ -107,7 +108,6 @@ func TestMcpMigration_CoverageMatrix(t *testing.T) {
 
 	ran := 0
 	for _, r := range rows {
-		r := r
 		t.Run(r.name, func(t *testing.T) {
 			nativebinding.Require(t, "pkg/config", mcpMigrationPlanOf,
 				"C-18/S-88/D8: native startup MCP coverage migration; post-GREEN consumer re-audit required")

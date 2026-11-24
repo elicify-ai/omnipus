@@ -19,8 +19,9 @@ package config
 // key rule consuming the C-19 storage). Nil keeps the RED run loud
 // (BLOCKED), never a skip.
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 func TestProjectSkillKeys(t *testing.T) {

@@ -34,13 +34,13 @@ package tools
 
 import (
 	"context"
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )

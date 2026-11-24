@@ -25,7 +25,6 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
 )

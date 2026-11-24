@@ -24,13 +24,13 @@ package tools
 // skill-outcome storage and makes resolveTurnSkillAuthority consult it, and
 // every assertion here runs against the real authority resolution.
 import (
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // seedSkillOutcomeForAgent is the test-local seam for the C-2/C-4 skill
