@@ -42,8 +42,13 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 		a.skillMarketplaceStatus(w)
 	case r.Method == http.MethodGet && sub == "search":
 		a.searchSkills(w, r)
-	case r.Method == http.MethodPost && sub == "install":
+	case r.Method == http.MethodPost && (sub == "install" || sub == "install/review"):
 		a.installSkill(w, r)
+	case (r.Method == http.MethodGet || r.Method == http.MethodDelete) && strings.HasPrefix(sub, "install/review/") &&
+		strings.Count(sub, "/") == 2:
+		a.handleInstallReview(w, r, strings.TrimPrefix(sub, "install/review/"))
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/trust-approval") && strings.Count(sub, "/") == 1:
+		a.approveSkillVersion(w, r, strings.TrimSuffix(sub, "/trust-approval"))
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/copy") && strings.Count(sub, "/") == 1:
 		a.HandleSkillCopy(w, r)
 	case r.Method == http.MethodDelete && sub != "":
@@ -106,6 +111,12 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			} else {
 				skill.HasLocalChanges = local
 			}
+		}
+
+		if revisionErr == nil {
+			a.fillSkillRecords(&skill, filepath.Dir(filepath.Dir(s.Path)), isBuiltin)
+		} else {
+			skill.Category = gen.SkillCategory(skills.CategoryUncategorised)
 		}
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
@@ -415,6 +426,15 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
 		return
 	}
+	review := strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/install/review")
+	if req.Category != nil && !skills.IsSkillCategory(string(*req.Category)) {
+		jsonErr(w, http.StatusBadRequest, skills.UnknownCategoryError(string(*req.Category)).Error())
+		return
+	}
+	if !review && req.ReviewId != nil && strings.TrimSpace(*req.ReviewId) != "" {
+		a.submitReviewedInstall(w, r, req)
+		return
+	}
 	slug := ""
 	if req.Slug != nil {
 		slug = strings.TrimSpace(*req.Slug)
@@ -495,10 +515,10 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 			slug, stageDir, err = skills.StageUploadedSkill(uploadPath, stagingRoot)
 		}
 	}
-	if stageDir != "" {
-		defer os.RemoveAll(stageDir)
-	}
 	if err != nil {
+		if stageDir != "" {
+			_ = os.RemoveAll(stageDir)
+		}
 		logsafeWarn("rest: skill install failed", "slug", slug, "version", version, "error", err)
 		if errors.Is(err, skills.ErrUploadRefused) {
 			// The uploaded file itself is at fault (UAT run 2 R2-2/R2-3):
@@ -509,18 +529,51 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		jsonServerFailure(w, http.StatusBadGateway, "could not stage skill", err)
 		return
 	}
-
+	if refusal := a.stagedInstallRefusal(result, slug, review); refusal != nil {
+		_ = os.RemoveAll(stageDir)
+		jsonErr(w, refusal.status, refusal.text)
+		return
+	}
+	if review {
+		// The staged copy now belongs to the review (C-13).
+		a.stageInstallReview(w, slug, skillsRoot, stageDir, result)
+		return
+	}
+	defer os.RemoveAll(stageDir)
 	a.publishSkillInstall(w, req, slug, skillsRoot, stageDir, result)
 }
 
-// publishSkillInstall retains the moderation check, publication and response
-// after the staging cleanup has been deferred by installSkill.
+// publishSkillInstall publishes a staged skill for a direct install and
+// answers the installed skill.
 func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstallRequest, slug, skillsRoot, stageDir string, result *skills.InstallResult) {
-	// Surface a moderation block as a hard failure: do not leave a malware-flagged
-	// skill installed.
-	if result != nil && result.IsMalwareBlocked {
-		jsonErr(w, http.StatusForbidden, fmt.Sprintf("skill %q is blocked by registry moderation", slug))
+	skill, publish, err := a.publishStagedSkill(req, slug, skillsRoot, stageDir, result)
+	if err != nil {
+		writeSkillChangeFailure(w, slug, publish, err)
 		return
+	}
+	jsonOK(w, skill)
+}
+
+// installedSkillVersion is the version label of an install result.
+func installedSkillVersion(result *skills.InstallResult) string {
+	if result != nil && result.Version != "" && result.Version != "latest" {
+		return result.Version
+	}
+	return "0.0.0"
+}
+
+// publishStagedSkill publishes a staged skill and stores its category and
+// install-time verification in Omnipus data (C-5). A failed record write
+// is reported on the skill, not hidden: it is installed but listed as
+// uncategorised and unverified.
+func (a *restAPI) publishStagedSkill(req gen.SkillInstallRequest, slug, skillsRoot, stageDir string, result *skills.InstallResult) (gen.Skill, skills.PublishOutcome, error) {
+	requested := ""
+	if req.Category != nil {
+		requested = string(*req.Category)
+	}
+	category, err := skills.InstallCategory(requested, stageDir)
+	if err != nil {
+		return gen.Skill{}, skills.PublishOutcome{Message: err.Error()}, err
 	}
 	expected := ""
 	if req.Revision != nil {
@@ -528,29 +581,33 @@ func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstal
 	}
 	replaceLocal := req.ReplaceLocalChanges != nil && *req.ReplaceLocalChanges
 	var publish skills.PublishOutcome
-	var err error
 	if publishRESTSkill != nil {
 		publish, err = publishRESTSkill(skillsRoot, slug, stageDir, expected)
 	} else {
 		slug, publish, err = publishInstall(skillsRoot, slug, stageDir, expected, replaceLocal)
 	}
 	if err != nil {
-		writeSkillChangeFailure(w, slug, publish, err)
-		return
+		return gen.Skill{}, publish, err
 	}
-
-	installedVersion := "0.0.0"
-	if result != nil && result.Version != "" && result.Version != "latest" {
-		installedVersion = result.Version
+	verified := result != nil && result.Verified
+	rec := skills.InstallRecord{Category: category}
+	if verified {
+		rec.VerifiedRevision = publish.Revision
+	}
+	if recErr := skills.WriteInstallRecord(skillsRoot, slug, rec); recErr != nil {
+		logsafeWarn("rest: skill installed but its category and verification were not saved", "slug", slug, "error", recErr)
+		publish.Warning = strings.TrimSpace(publish.Warning + " The category and verification were not saved: " + recErr.Error())
+		category, verified = skills.CategoryUncategorised, false
 	}
 
 	skill := gen.Skill{
 		Id:       slug,
 		Name:     slug,
-		Version:  installedVersion,
+		Version:  installedSkillVersion(result),
 		Status:   gen.SkillStatusActive,
-		Verified: result != nil && result.Verified,
+		Verified: verified,
 		Revision: publish.Revision,
+		Category: gen.SkillCategory(category),
 	}
 	persistence := gen.SkillPersistenceStatus(publish.PersistenceStatus)
 	activation := gen.SkillActivationStatus(publish.ActivationStatus)
@@ -568,5 +625,5 @@ func (a *restAPI) publishSkillInstall(w http.ResponseWriter, req gen.SkillInstal
 	if src, ok := skillSourceToWire("global"); ok {
 		skill.Source = &src
 	}
-	jsonOK(w, skill)
+	return skill, publish, nil
 }

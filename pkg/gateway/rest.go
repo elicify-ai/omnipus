@@ -417,6 +417,8 @@ type restAPI struct {
 	// to end (see TestCreateAgent_ReloadFailure_ReturnsWarning). Always nil
 	// in production.
 	testForceFastUpsertErr error
+	// installReviews holds the C-13 install reviews (rest_skills_review.go).
+	installReviews installReviews
 }
 
 // ssrfChk returns the SSRF checker as a providers_pkg.URLChecker interface.
@@ -656,13 +658,22 @@ func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCrea
 // operations that have been accepted and dispatched but not yet completed.
 func jsonAccepted(w http.ResponseWriter, body any) { writeJSON(w, http.StatusAccepted, body) }
 
+// errorEncoder encodes error bodies with the text as written: an
+// application/json body needs no HTML escaping, and the spec's texts
+// ("Skills & Tools") reach clients unchanged.
+func errorEncoder(w http.ResponseWriter) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
+}
+
 // jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
 // Content-Type before WriteHeader so error bodies are never served as text/plain
 // (#96). It does not call writeJSON to avoid recursion on a marshal failure.
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
+	if err := errorEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }
@@ -673,7 +684,7 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+	if err := errorEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }

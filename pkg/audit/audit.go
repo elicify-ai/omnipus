@@ -116,6 +116,10 @@ const (
 	EventSkillBuiltinUpdated     = "skill.builtin_updated"
 	EventSkillBuiltinRetired     = "skill.builtin_retired"
 	EventSkillBuiltinRetiredKept = "skill.builtin_retired_kept"
+	// EventSkillTrustApproved records a person's trust approval of one
+	// revision of an unverified skill (Skills & Tools C-24): key, revision
+	// and actor.
+	EventSkillTrustApproved = "skill.trust_approved"
 	// EventPlatformSignIn records every attempt to open a session from an
 	// omnipus.ai account (ADR-0008 ruling 5; pkg/gateway/rest_platform_auth.go).
 	// Decision is allow for a completed sign-in and deny for every refusal
@@ -304,6 +308,8 @@ var validEventNames = map[EventName]struct{}{
 	EventSkillBuiltinUpdated:     {},
 	EventSkillBuiltinRetired:     {},
 	EventSkillBuiltinRetiredKept: {},
+	EventSkillTrustApproved:      {},
+	EventApprovalAllowanceEnded:  {},
 	// AskUserQuestion default-safe auto-resolution (askuserquestion-tool-
 	// spec v3 US-3 S2/§4; emitted by the gateway's askuser.AuditSink
 	// adapter for every 30-minute timer fire).
