@@ -618,7 +618,10 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	// `git commit -m evidence` was denied 182 times in a protected evidence
 	// repo, then `git -c user.name=Jim -c user.email=… commit -m …` went
 	// straight through. Collapse "git <options…> verb" to "git verb" first.
-	lower := stripGitGlobalOptions(strings.ToLower(script))
+	// Runs of spaces or tabs collapse to one space first, so "git  commit" or
+	// "git<TAB>commit" cannot hide the verb from the "git <verb>" patterns
+	// (#1960 S1 security round 2, F1-a). This only adds refusals.
+	lower := stripGitGlobalOptions(collapseBlanks(strings.ToLower(script)))
 
 	resolvedCwd := resolvePathBestEffort(cwd, "")
 	_, cwdProtected := g.enclosingProtectedWorkdir(resolvedCwd)
@@ -630,6 +633,16 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	// refusals.
 	if !cwdProtected {
 		cwdProtected = g.scriptNamesProtectedWorkdir(script, cwd)
+	}
+	// The token check above sees literal paths judged against the starting cwd
+	// only. A script that can reach a path some other way (a variable, command
+	// substitution, glob, "~", a backslash, or a relative "cd") may still land
+	// in the protected work dir, so while any work dir is registered such a
+	// script gets check (a) as well. A plain "git push" from a mount stays
+	// allowed only when none of these forms appear (#1960 S1 security round 2,
+	// F1-a). This only adds refusals.
+	if !cwdProtected && len(g.resolvedWorkdirs()) > 0 && scriptHasIndirectPath(script) {
+		cwdProtected = true
 	}
 
 	// (a) mutating git verbs anywhere in the script, when cwd is a protected
@@ -681,7 +694,32 @@ var gitGlobalOptionRun = regexp.MustCompile(
 // gitShellWord is one shell word: runs of unquoted non-space characters and
 // balanced double/single-quoted segments (which may contain spaces), in any
 // order — so user.name="Jim Bot" is ONE token, as the shell would read it.
-const gitShellWord = `(?:[^\s"']+|"[^"]*"|'[^']*')+`
+// Backtick and unnested $(...) command substitutions count as part of the word
+// too, so "git -C `dirname $PWD`/work commit" still collapses to "git commit"
+// (#1960 S1 security round 2, F1-a).
+const gitShellWord = "(?:[^\\s\"'`$]+|\\$\\([^)]*\\)|\\$|\"[^\"]*\"|'[^']*'|`[^`]*`)+"
+
+// blankRun matches a run of spaces and tabs.
+var blankRun = regexp.MustCompile(`[ \t]+`)
+
+// collapseBlanks turns every run of spaces and tabs into one space.
+func collapseBlanks(s string) string { return blankRun.ReplaceAllString(s, " ") }
+
+// relativeCd matches a "cd" command whose target is not an absolute path:
+// "cd ..", "cd sub", or a bare "cd" (which goes to $HOME).
+var relativeCd = regexp.MustCompile(`(?:^|[\s;&|(])cd(?:\s+[^/\s;&|)]|\s*(?:$|[;&|)]))`)
+
+// scriptHasIndirectPath reports whether script contains a shell form that can
+// reach a path the literal-token check cannot see: "$" (variables, command
+// substitution), a backtick, a glob "*" or "?", "~", a backslash, or a "cd"
+// to a relative target. Not a shell parser (LIM-02): it over-matches on
+// purpose, for example a "?" inside a commit message.
+func scriptHasIndirectPath(script string) bool {
+	if strings.ContainsAny(script, "$`*?~\\") {
+		return true
+	}
+	return relativeCd.MatchString(script)
+}
 
 // stripGitGlobalOptions rewrites every "git <global options…> <verb>" in an
 // already-lowercased script to "git <verb>" so the substring patterns see
@@ -761,6 +799,21 @@ func (g *GitGuard) scriptNamesProtectedWorkdir(script, cwd string) bool {
 		}
 		return false
 	})
+	// Quote splicing (/ws/wo""rk) reads as one word to the shell, so the script
+	// is also split on separators other than quotes, with the quote characters
+	// removed from each word.
+	unquoted := strings.FieldsFunc(script, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '=':
+			return true
+		}
+		return false
+	})
+	for _, w := range unquoted {
+		if strings.ContainsAny(w, `"'`) {
+			fields = append(fields, strings.NewReplacer(`"`, "", `'`, "").Replace(w))
+		}
+	}
 	for _, f := range fields {
 		candidates := []string{f}
 		if strings.HasPrefix(f, "-C") && len(f) > 2 {
