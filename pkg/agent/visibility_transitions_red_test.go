@@ -79,7 +79,18 @@ func newTransitionsHarness(t *testing.T, basePolicies map[string]string, skills 
 	t.Helper()
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "skills"), 0o700))
+	for _, slug := range skills {
+		dir := filepath.Join(tmp, "skills", slug)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"),
+			[]byte("---\nname: "+slug+"\ndescription: Notes helper.\n---\n\nD11 notes instructions.\n"), 0o600))
+	}
 
+	// A name-only Skills list is not a usable installed grant (r15). Bind the
+	// actual fixture generation through the real entity store before boot.
+	t.Setenv(config.EnvHome, tmp)
+	t.Setenv(config.EnvConfig, filepath.Join(tmp, "config.json"))
+	granted := persistSkillGrantFixture(t, tmp, config.AgentConfig{ID: "mia", Home: tmp, Skills: skills})
 	provider := &capturingProvider{}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -89,11 +100,14 @@ func newTransitionsHarness(t *testing.T, basePolicies map[string]string, skills 
 				MaxTokens:         4096,
 				MaxToolIterations: 1,
 			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmp, Skills: skills}},
+			List: []config.AgentConfig{granted},
 		},
 	}
-	if basePolicies != nil {
-		cfg.Sandbox.ToolPolicies = basePolicies
+	// Explicit Given, not an accidental empty ceiling. write_file is the
+	// unaffected ordinary control; read_file's Deny in row 4 still wins.
+	cfg.Sandbox.ToolPolicies = map[string]string{"read_file": "allow", "write_file": "allow", "Skill": "allow"}
+	for key, value := range basePolicies {
+		cfg.Sandbox.ToolPolicies[key] = value
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	return &transitionsHarness{t: t, al: al, provider: provider, home: tmp}
@@ -197,6 +211,7 @@ func TestVisibilityTransitions(t *testing.T) {
 	t.Run("D11#6 S-43: a skill demoted to name_only shows name only in the next turn's menu", func(t *testing.T) {
 		h := newTransitionsHarness(t, nil, "notes-helper")
 
+		h.turn("chat-skill")
 		first := h.requestOf()
 		require.Contains(t, first, "notes-helper",
 			"fixture: the granted skill is listed by name")
@@ -206,6 +221,7 @@ func TestVisibilityTransitions(t *testing.T) {
 		requireVisibilitySeam(t, "required by D11 row 6 and S-43 (the menu line itself is order 11's surface)")
 		seedToolVisibility(t, h.home, "notes-helper", "name_only")
 
+		h.turn("chat-skill")
 		second := h.requestOf()
 		require.Contains(t, second, "notes-helper",
 			"D11#6: the skill is still listed — by name")
