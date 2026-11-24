@@ -8,6 +8,8 @@ import {
   SkillSearchResult as SkillSearchResultSchema,
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
   ConfigurationMutationState as ConfigurationMutationStateSchema,
+  SkillInstallReview as SkillInstallReviewSchema,
+  SkillInstallReviewStatus as SkillInstallReviewStatusSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
 } from '@/lib/api/generated/schemas'
@@ -16,6 +18,8 @@ import type {
   SkillSearchResult,
   SkillMarketplaceStatus,
   SkillInstallRequest,
+  SkillInstallReview,
+  SkillInstallReviewStatus,
   SkillCopyRequest,
   ConfigurationMutationState,
   // Slash-command harmonization (contract-first #8):
@@ -63,6 +67,37 @@ export async function installSkillFromFile(
     '/skills/install',
     { method: 'POST', body: JSON.stringify(body), signal },
     SkillSchema as ZodType<Skill>,
+  )
+}
+
+/**
+ * Skills & Tools C-13: stage a skill for review. The server downloads or
+ * unpacks it into staging (not published) and answers with what the person
+ * reviews; POST /skills/install with this review_id publishes exactly it.
+ */
+export function stageSkillInstallReview(body: Pick<SkillInstallRequest, 'slug' | 'upload_id' | 'version'>): Promise<SkillInstallReview> {
+  return request<SkillInstallReview>(
+    '/skills/install/review',
+    { method: 'POST', body: JSON.stringify(body) },
+    SkillInstallReviewSchema as ZodType<SkillInstallReview>,
+  )
+}
+
+/**
+ * C-13: publish a reviewed skill. The answer is not trusted as the outcome:
+ * the caller confirms it with fetchSkillInstallStatus, because the install
+ * answer can be lost while the publish still completes.
+ */
+export async function installReviewedSkill(body: SkillInstallRequest): Promise<void> {
+  await request<unknown>('/skills/install', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** C-13: the state of one install operation (its review id). */
+export function fetchSkillInstallStatus(reviewId: string): Promise<SkillInstallReviewStatus> {
+  return request<SkillInstallReviewStatus>(
+    `/skills/install/review/${encodeURIComponent(reviewId)}`,
+    undefined,
+    SkillInstallReviewStatusSchema as ZodType<SkillInstallReviewStatus>,
   )
 }
 

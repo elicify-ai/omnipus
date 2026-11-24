@@ -22,11 +22,11 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 
-export type OmnipusWorkflowRequest = { // not-wire-format: what a screen button asks for; turned into the generated WorkflowStart below
-  workflow: WorkflowStart['workflow']
-  workspaceId: string
-  workspaceName: string
-}
+export type OmnipusWorkflowRequest = // not-wire-format: what a screen button asks for; turned into the generated WorkflowStart below
+  | { workflow: 'W1' | 'W18'; workspaceId: string; workspaceName: string }
+  // W5 (write a skill, Skills & Tools C-8) targets no workspace: the card
+  // proposes a global skill and still lets the person pick a project shelf.
+  | { workflow: 'W5'; text: 'Write a new skill' }
 
 export type OpenOmnipusOutcome = 'opened' | 'unavailable' | 'attach-failed' // not-wire-format: in-browser result of the entry click
 
@@ -43,6 +43,7 @@ export function registerOmnipusWorkflowSender(send: WorkflowSender): void {
 
 /** The visible message text a workflow button sends (the server renders the fixed instruction from the target data, FR-012). */
 export function workflowRequestText(request: OmnipusWorkflowRequest): string {
+  if (request.workflow === 'W5') return request.text
   return request.workflow === 'W18'
     ? `Set up a team for ${request.workspaceName}`
     : `Create an agent in ${request.workspaceName}`
@@ -106,5 +107,8 @@ function sendWorkflowStart(request: OmnipusWorkflowRequest): void {
     })
     return
   }
-  workflowSender(workflowRequestText(request), { workflow: request.workflow, target_workspace_id: request.workspaceId })
+  const start: WorkflowStart = request.workflow === 'W5'
+    ? { workflow: 'W5' }
+    : { workflow: request.workflow, target_workspace_id: request.workspaceId }
+  workflowSender(workflowRequestText(request), start)
 }
