@@ -26,9 +26,35 @@
 
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 import type { Agent, Workspace, ChannelEntry, ChannelRouting } from '../../src/lib/api/generated/openapi-types';
+import { GatewayProcess } from './fixtures/gateway-process';
+import { startProbeProvider } from './fixtures/programs-s1';
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-void BASE_URL; // the playwright config's baseURL serves the app; goto is relative
+// The SPA and the person's sign-in come from this spec's own isolated gateway
+// (onboarded against the S1 loopback probe provider, no paid model), never
+// from the shared gateway: the shared global setup needs a running gateway in
+// $HOME/.omnipus and live-model keys, which S-148 does not use. Every channel,
+// routing, programs, agent and workspace read below is the stateful stub; only
+// static assets, auth and unrelated app reads reach the real gateway.
+test.use({ storageState: { cookies: [], origins: [] } });
+test.describe.configure({ retries: 0 });
+
+let gateway: GatewayProcess | undefined;
+let provider: Awaited<ReturnType<typeof startProbeProvider>> | undefined;
+
+test.beforeAll(async () => {
+  provider = await startProbeProvider();
+  gateway = await GatewayProcess.start({ apiBase: provider.url });
+});
+test.afterAll(async () => {
+  try { await gateway?.stop(); }
+  finally { await provider?.close(); }
+  expect(provider?.unexpected ?? [], 'the isolated gateway made no unexpected model call').toEqual([]);
+});
+
+function origin(): string {
+  if (!gateway) throw new Error('BLOCKED: the isolated S-148 gateway did not start');
+  return gateway.baseURL;
+}
 
 // ── Seeded state (the S-148 Given) ──────────────────────────────────────────
 
@@ -265,7 +291,11 @@ async function registerStubRoutes(page: Page, backend: Backend): Promise<void> {
 // ── Panel helpers ───────────────────────────────────────────────────────────
 
 async function openConnectors(page: Page): Promise<void> {
-  await page.goto('/#/connectors');
+  // Reuse the isolated gateway's own signed-in cookie; never log in again.
+  const base = origin();
+  await page.context().clearCookies();
+  await page.context().addCookies((await gateway!.browserStorageState()).cookies);
+  await page.goto(`${base}/#/connectors`);
   await expect(page).toHaveURL(/connectors/, { timeout: 15_000 });
 }
 

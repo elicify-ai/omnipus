@@ -42,7 +42,10 @@ function sseToolCall(name: string, args: unknown, id: string) {
     + sseChunk({}, 'tool_calls') + 'data: [DONE]\n\n';
 }
 
-async function startProbeProvider() {
+/** The loopback model provider every S1 browser gateway onboards against:
+ * answers the onboarding key probe, scripts S-12's one seeding turn, and
+ * records any other call as unexpected. Shared with connectors-programs.spec.ts. */
+export async function startProbeProvider() {
   const unexpected: string[] = [];
   let searched = false;
   let issued = false;
