@@ -378,6 +378,68 @@ test.describe('G-04 — phone layout (US-1 AS9, US-9 AS5; FR-008, FR-070)', () =
   })
 })
 
+// U1-5 proof added on the hands-on cut 5a8c4355c0. DO NOT claim browser
+// RED from the DOM-only unit checks: this exact coarse-pointer row must run
+// on the rebuilt cut. All earlier G-04 cases and helpers remain unchanged.
+test.describe('U1-5 — 390px real touch hit geometry (US-9 AS5, FR-070)', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+
+  test('switches, Settings back, Limits disclosure, Port and Sandbox remove address have non-overlapping 44x44 hit regions', async ({ page }) => {
+    await page.goto(`${SETTINGS}?tab=gateway`)
+    await expect(page.getByRole('heading', { name: 'Gateway', level: 2 })).toBeVisible()
+    expect(await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches),
+      'instrument: hasTouch must really select coarse-pointer CSS').toBe(true)
+
+    const assertTarget = async (control: ReturnType<Page['getByRole']>, name: string) => {
+      await expect(control).toBeVisible()
+      await control.scrollIntoViewIfNeeded()
+      const hit = await control.evaluate((node) => {
+        const rect = node.getBoundingClientRect()
+        const before = window.getComputedStyle(node, '::before')
+        const expanded = node.hasAttribute('data-ds-action') && before.content !== 'none'
+          && before.content !== 'normal' && before.pointerEvents !== 'none' && before.position === 'absolute'
+        const width = expanded ? Math.max(rect.width, Number.parseFloat(before.width) || 0) : rect.width
+        const height = expanded ? Math.max(rect.height, Number.parseFloat(before.height) || 0) : rect.height
+        const x = rect.x + rect.width / 2
+        const y = rect.y + rect.height / 2
+        // Corners just inside the required 44px square must hit THIS control,
+        // not its neighbour or a clipped/covered region. No rounding up.
+        const points = [[x, y], ...[-21.5, 21.5].flatMap((dx) => [-21.5, 21.5].map((dy) => [x + dx, y + dy]))]
+        const misses = points.filter(([px, py]) => {
+          const target = document.elementFromPoint(px, py)
+          return target !== node && !node.contains(target)
+        })
+        return { width, height, misses }
+      })
+      expect(hit.width, `U1-5: ${name} hit width`).toBeGreaterThanOrEqual(44)
+      expect(hit.height, `U1-5: ${name} hit height`).toBeGreaterThanOrEqual(44)
+      expect(hit.misses, `U1-5: ${name} expanded target is not clipped or stolen by adjacent controls`).toEqual([])
+    }
+
+    await assertTarget(page.getByRole('switch', { name: 'Preview server' }), 'Preview server switch')
+    await assertTarget(page.getByRole('button', { name: 'Settings', exact: true }), 'Settings back')
+    await assertTarget(page.getByRole('spinbutton', { name: 'Port' }), 'Port input')
+    await page.goto(`${SETTINGS}?tab=limits`)
+    await assertTarget(page.getByRole('button', { name: 'Context and tool results' }), 'Limits disclosure')
+
+    // Read-only HTTP fixture: make one custom-address remove control
+    // reachable without editing the server's actual network policy.
+    await page.route('**/api/v1/security/sandbox-config', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const config = await response.json()
+      await route.fulfill({ response, json: { ...config, ssrf: { ...config.ssrf, allow_internal: ['10.20.30.40'] } } })
+    })
+    await page.goto(`${SETTINGS}?tab=sandbox`)
+    const advanced = page.getByRole('button', { name: 'Advanced (custom list)' })
+    await expect(advanced).toBeVisible()
+    if (await advanced.getAttribute('aria-expanded') !== 'true') await advanced.click()
+    await assertTarget(page.getByRole('button', { name: 'Delete SSRF entry 10.20.30.40' }), 'Sandbox remove address')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      'U1-5/FR-070: no horizontal scroll at 390px').toBe(true)
+  })
+})
+
 test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075, FR-063, FR-109)', () => {
   test('FR-068: the skip link is the first Tab stop and moves focus without changing the address', async ({ page }) => {
     await openSettings(page)
