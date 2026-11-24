@@ -141,8 +141,8 @@ func TestProgramCatalog_PresetIsData(t *testing.T) {
 		// Build the real Presets embed with precisely one added JSON input.
 		// No environment-gated omission and no MapFS surrogate.
 		var probe struct { // test-build output, not a gateway wire format
-			Entries    []ProgramEntry
-			Connection Connection
+			Entries    []ProgramEntry `json:"Entries"`
+			Connection Connection     `json:"Connection"`
 		}
 		require.NoError(t, json.Unmarshal(presetbuild.Probe(t), &probe))
 		require.Len(t, probe.Entries, 3, "GitHub, Fly and the added Example are actually embedded")

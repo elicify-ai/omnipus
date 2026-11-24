@@ -25,8 +25,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/programs"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/require"
 )
@@ -43,10 +45,22 @@ type programsSentinelFixture struct {
 	svc *programs.Service
 }
 
-func newProgramsSentinelFixture(t *testing.T) *programsSentinelFixture {
+func newProgramsSentinelFixture(t *testing.T, god bool, configure ...func(*config.Config)) *programsSentinelFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Fatal("BLOCKED: S48's combined campaign needs native Windows check and command fixtures; the POSIX child scripts do not certify Windows")
+		t.Fatal("BLOCKED: S48/S106's combined campaign needs native Windows check and command fixtures; the POSIX child scripts do not certify Windows")
+	}
+	if god {
+		if !sandbox.GodModeAvailable {
+			t.Fatal("BLOCKED: this build has no God Mode support — required by S106's actual God Mode child inventory")
+		}
+		// With the switch on in this disposable config, the public active query
+		// reads the actual availability gate, not the fixture's desired mode.
+		probe := config.DefaultConfig()
+		probe.Sandbox.GodMode = true
+		previousAvailability := agent.GodModeActive(probe)
+		agent.SetGodModeAvailable(true) // Actual boot gate, before constructing tools.
+		t.Cleanup(func() { agent.SetGodModeAvailable(previousAvailability) })
 	}
 	home := t.TempDir()
 	_, source, _, callerOK := runtime.Caller(0)
@@ -84,8 +98,12 @@ func newProgramsSentinelFixture(t *testing.T) *programsSentinelFixture {
 	cfg.Sandbox.ToolPolicies["bash"] = "allow"
 	cfg.Agents.List[0].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
 	cfg.Sandbox.AuditLog = true
+	cfg.Sandbox.GodMode = god
 	cfg.Tools.FilterSensitiveData = false
 	cfg.Programs.WebChatAllowed = true
+	for _, apply := range configure {
+		apply(cfg) // Test-only configuration, before constructing the real tools.
+	}
 	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: "sales", Name: "Sales", Status: "active", CoreTeam: []string{"dev"}}))
 	_, err := agentstore.New(home).CreateState("dev", &cfg.Agents.List[0], programsSinkSoul)
 	require.NoError(t, err)
@@ -93,6 +111,17 @@ func newProgramsSentinelFixture(t *testing.T) *programsSentinelFixture {
 	b := bus.NewMessageBus()
 	t.Cleanup(b.Close)
 	al := mustAgentLoop(t, cfg, b, p)
+	closeLoop := sync.OnceFunc(al.Close)
+	t.Cleanup(closeLoop)
+	require.Equal(t, god, agent.GodModeActive(al.GetConfig()), "instrument: actual runtime God Mode activation, not merely a config flag")
+	dev, found := al.GetRegistry().GetAgent("dev")
+	require.True(t, found)
+	registered, found := dev.Tools.Get("bash")
+	require.True(t, found)
+	shell, ok := registered.(*tools.ExecTool)
+	require.True(t, ok, "instrument: inspect the actual registered child tool, not a replacement")
+	require.Equal(t, god, shell.GodModeForTest(), "instrument: actual registered shell was constructed in the requested mode")
+	t.Logf("actual child mode: runtime_god=%t registered_shell_god=%t", agent.GodModeActive(al.GetConfig()), shell.GodModeForTest())
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	require.NoError(t, store.UnlockWithKey(bytes.Repeat([]byte{0x39}, 32)))
 	t.Cleanup(store.Close)
@@ -131,7 +160,7 @@ func newProgramsSentinelFixture(t *testing.T) *programsSentinelFixture {
 				t.Fatal("S48 actual loop did not stop/join")
 			}
 			al.UnsubscribeEvents(f.events.ID)
-			al.Close()
+			closeLoop()
 			store.Close()
 			// The outer cleanup owns bus.Close: it drains pending publications.
 			// Keep those actual messages available until the sink reader finishes.

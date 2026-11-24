@@ -37,7 +37,7 @@ func (p *programsTaskProvider) Chat(ctx context.Context, messages []providers.Me
 	if sid != p.dev && sid != p.ops {
 		meta, err := p.al.GetSessionStore().GetMeta(sid)
 		if err != nil || meta == nil || meta.TaskID == "" {
-			return nil, fmt.Errorf("task provider fixture: real receiving session has no task identity: %v", err)
+			return nil, fmt.Errorf("task provider fixture: real receiving session has no task identity: %w", err)
 		}
 		p.mu.Lock()
 		if _, scripted := p.scripts[sid]; !scripted {
@@ -156,8 +156,8 @@ func (x *programsTaskFixture) runBoard(t *testing.T, id string) (string, string,
 	sid := current.SessionID
 	x.waitEnds(t, sid)
 	require.Eventually(t, func() bool {
-		latest, err := x.api.taskStore.Get(id)
-		return err == nil && task.IsTerminal(latest.Status)
+		latest, readErr := x.api.taskStore.Get(id)
+		return readErr == nil && task.IsTerminal(latest.Status)
 	}, 15*time.Second, 10*time.Millisecond, "the controlled blocked claim settles this real task; no paid Judge is required")
 	result := x.provider.result(sid, "task-count")
 	require.Contains(t, result, "PROGRAM_TASK_CHILD_RAN", "instrument: the actual task child executed; denial or missed dispatch cannot satisfy count0")

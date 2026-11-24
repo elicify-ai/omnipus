@@ -84,7 +84,6 @@ func (x *programsMixedHelperFixture) restart(t *testing.T) {
 	path := filepath.Join(old.home, "config.json")
 	entities := agentstore.New(old.home)
 	for _, actor := range old.al.GetConfig().Agents.List {
-		actor := actor
 		require.NoError(t, entities.Create(actor.ID, &actor))
 	}
 	require.NoError(t, config.SaveConfig(path, old.al.GetConfig()))

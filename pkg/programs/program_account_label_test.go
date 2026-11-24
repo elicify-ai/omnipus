@@ -57,10 +57,10 @@ func TestProgramAccountLabel(t *testing.T) {
 			require.NoError(t, err, "%s token: a 7-byte fragment (%q) is below the threshold", name, frag7)
 			require.Equal(t, frag7, label, "%s token: the 7-byte fragment is the label", name)
 			for _, frag := range []string{frag8, frag9} {
-				label, err := AccountLabel("github", frag, []string{current, retired})
-				require.Error(t, err, "%s token: an %d-byte fragment (%q) is refused", name, len(frag), frag)
-				require.Empty(t, label, "%s token: no label is stored for %q", name, frag)
-				require.NotContains(t, err.Error(), tok, "%s token: the error never quotes the token", name)
+				fragmentLabel, fragmentErr := AccountLabel("github", frag, []string{current, retired})
+				require.Error(t, fragmentErr, "%s token: an %d-byte fragment (%q) is refused", name, len(frag), frag)
+				require.Empty(t, fragmentLabel, "%s token: no label is stored for %q", name, frag)
+				require.NotContains(t, fragmentErr.Error(), tok, "%s token: the error never quotes the token", name)
 			}
 			// A fragment from the token's MIDDLE, not just its head.
 			mid := tok[4:13]

@@ -42,7 +42,6 @@ var d1Rows = []struct {
 
 func TestProgramToken_ValueRules(t *testing.T) {
 	for _, row := range d1Rows {
-		row := row
 		t.Run(row.name, func(t *testing.T) {
 			got, err := ValidateTokenValue(row.input)
 			if row.wantErr != "" {

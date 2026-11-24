@@ -161,7 +161,6 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		}
 		afterStore.Inventory = kept
 		require.Equal(t, beforeStore, afterStore, "failed paste preserves all program/private state and known receipts, not only connection text")
-
 	})
 
 	t.Run("holder_released_after_1s_paste_succeeds_generation_2", func(t *testing.T) {

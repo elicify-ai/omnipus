@@ -73,8 +73,10 @@ func TestProgramsChannel_OneWriter(t *testing.T) {
 		require.NoError(t, err)
 		var cfg map[string]any
 		require.NoError(t, json.Unmarshal(raw, &cfg))
-		channels := cfg["channels"].(map[string]any)
-		channel := channels["telegram"].(map[string]any)
+		channels, channelsOK := cfg["channels"].(map[string]any)
+		require.True(t, channelsOK, "instrument: persisted channels is a JSON object")
+		channel, channelOK := channels["telegram"].(map[string]any)
+		require.True(t, channelOK, "instrument: persisted Telegram channel is a JSON object")
 		allowed, exists := channel["programs_allowed"]
 		if exists {
 			require.Equal(t, false, allowed)

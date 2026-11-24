@@ -93,7 +93,7 @@ func TestProgramProvenance_ActualDelegatedHelper(t *testing.T) {
 		control, result := programsCountInput(t, f, parent, "s75-connected-control", programsWebInput())
 		require.Equal(t, "16", control, "instrument: this fixture's actual connected Dev child receives the token")
 		require.NotContains(t, result, "Connected programs were not used for this command:")
-		var children []string
+		children := make([]string, 0, 2)
 		for _, row := range []struct {
 			allowed  bool
 			expected string

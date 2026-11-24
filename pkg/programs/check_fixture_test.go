@@ -17,17 +17,17 @@ import (
 )
 
 type checkChildCase struct {
-	Label  string
-	Stderr string
-	Exit   int
-	Hold   bool
+	Label  string `json:"Label"`
+	Stderr string `json:"Stderr"`
+	Exit   int    `json:"Exit"`
+	Hold   bool   `json:"Hold"`
 }
 
 type checkChildObservation struct {
-	Args    []string
-	Token   string
-	Home    string
-	Ambient string
+	Args    []string `json:"Args"`
+	Token   string   `json:"Token"`
+	Home    string   `json:"Home"`
+	Ambient string   `json:"Ambient"`
 }
 
 // A copy of the test executable is the fake gh; no shell or paid provider is

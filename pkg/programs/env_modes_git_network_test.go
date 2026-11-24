@@ -23,9 +23,8 @@ package programs
 
 import "testing"
 
-// These remaining scenarios have no complete mode/grant/receiver fixture yet.
-// This is unfinished test-author work, not an accepted requirement deferral.
-const s1EnvSeam = "this row's full mode/network/child fixture is not yet implemented in the test harness; existing Attach and child tests do not prove it"
+// Each remaining scenario names its own unresolved observation/fixture boundary
+// and dated dispute. None is an accepted requirement deferral or a product PASS.
 
 func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	// S11_only_switched_on_agent_gets_the_token moved, without removing its
@@ -36,9 +35,11 @@ func TestProgramEnv_PerModeAndTool(t *testing.T) {
 	// TestProgramEnv_PerModeAndTool; its oracle remains exactly octocat.
 
 	t.Run("S25_god_mode_token_available_no_egress_token", func(t *testing.T) {
-		// GREEN asserts here (spec S-25): God Mode, GitHub on for Dev →
-		// printenv is 16 and no egress token is created.
-		t.Fatal("BLOCKED: S25's actual God Mode count16 is exercised in pkg/agent::TestProgramRuntime_OngoingOriginSetting; an independent real-proxy token-creation observation fixture is still missing for the mandatory no-egress-token clause — required by S-25")
+		// Full unchanged oracle moved to agent's tagged actual runtime
+		// TestProgramNetwork_ActualMintHistory: child16, all mint entries0,
+		// same actual observer first sees Auto's mint before real revocation.
+		// This retained row is only the mandatory build/name guard.
+		requireS1TaggedLeaf(t, "H43")
 	})
 
 	// S28_unmatched_program_word_no_grant_token_still_available migrated intact
@@ -71,7 +72,7 @@ func TestProgramGitHelper_ResetChain(t *testing.T) {
 		// that only accepts x-access-token:tok_valid_12345 → the push
 		// succeeds, the receiver recorded x-access-token, and no git config
 		// file, remote URL or observed argument list contains the token.
-		t.Fatalf("BLOCKED: %s — required by S-20's no-token-anywhere assertion", s1EnvSeam)
+		t.Fatal("BLOCKED: real local HTTPS Git receiver, actual agent-driven git push and complete config/remote-URL/argv observations are not implemented in this fixture. S19 credential fill and S88's externally faked push are not an authenticated Git transfer; S88's narrower boundary authorization does not extend to S20; individual author-fixture dispute H48 — required by S-20/FR-013")
 	})
 
 	// S88_new_git_gets_the_helper migrated intact to
@@ -80,47 +81,39 @@ func TestProgramGitHelper_ResetChain(t *testing.T) {
 	// admission. Chief-authorized boundary; the push-through-guard row is UAT.
 }
 
-func TestProgramGitVersion_ChildExecutable(t *testing.T) {
-	t.Run("S27_old_git_in_child_path_gets_the_old_git_message", func(t *testing.T) {
-		// GREEN asserts here (spec S-27): gateway git 2.43, workspace git
-		// 2.30.2 first on the child's PATH → no GIT_CONFIG_COUNT in the
-		// environment, the result contains the old-git message with 2.30.2,
-		// and the probe ran inside Dev's sandbox (recorded by the fake git).
-		t.Fatalf("BLOCKED: %s (and the version probe, FR-014) — required by S-27's old-git message", s1EnvSeam)
-	})
+// TestProgramGitVersion_ChildExecutable's scenarios are actual runtime tests:
+// S27_old_git_in_child_path_gets_the_old_git_message migrated intact to
+// pkg/agent::TestProgramGitVersion_ActualRuntimePATH/
+// S27_old_runtime_git_probe_is_confined: actual gateway2.43 and discovered
+// workspace runtime2.30.2; no managed config; complete old-git notice; actual
+// probe-before-command record and protected-file kernel-denial controls in both.
+// S87_explicit_git_path_is_the_one_probed remains in
+// pkg/agent::TestProgramGitVersion_ActualChild (explicit path, distinct PATH).
+// No empty passing wrapper is retained here.
 
-	// S87_explicit_git_path_is_the_one_probed migrated intact to
-	// pkg/agent::TestProgramGitVersion_ActualChild: distinct absolute old/git
-	// and PATH git, real recorded probe before command, exact old-git notice.
-}
+// TestProgramNetwork_AutoAsk's scenarios are mapped below to actual agent tests;
+// its now-empty marker wrapper is not retained as a false passing test.
+// S21/S22/S23/S24 migrated intact to
+// pkg/agent::TestProgramNetwork_ActualAutoAsk. The actual loop, modes,
+// approval adapter, child environment, public EgressProxy policy and
+// foreground revocation execute. Canceled upstream requests distinguish
+// allowed from denied hosts without public calls; this is not a claim of
+// a successful live network request. A separate grant/revoke instrument
+// proves that observer sees both policy outcomes. S23 retains the ordinary
+// deny control; S24 holds actual approval before admitting the real child.
 
-func TestProgramNetwork_AutoAsk(t *testing.T) {
-	// S21/S22/S23/S24 migrated intact to
-	// pkg/agent::TestProgramNetwork_ActualAutoAsk. The actual loop, modes,
-	// approval adapter, child environment, public EgressProxy policy and
-	// foreground revocation execute. Canceled upstream requests distinguish
-	// allowed from denied hosts without public calls; this is not a claim of
-	// a successful live network request. A separate grant/revoke instrument
-	// proves that observer sees both policy outcomes. S23 retains the ordinary
-	// deny control; S24 holds actual approval before admitting the real child.
+// S26_program_word_spellings migrated intact to
+// pkg/agent::TestProgramNetwork_ActualSpellingMatrix: all ten D3 spellings
+// now run under an actual enforcing boot Apply with real per-turn child
+// kernel-denial controls, exact0 approvals for matching spellings, exact
+// ordinary approval comparisons for unmatched spellings, child16/0,
+// actual proxy grant/denial and revocation. Sites, not token availability,
+// depend on program-word matching. No empty passing successor.
 
-	t.Run("S26_program_word_spellings", func(t *testing.T) {
-		// GREEN asserts here (spec S-26, dataset D-3): each row's command
-		// spelling decides the SITE GRANT — spellings that name the program
-		// word grant the entry's network sites for the run (rows 1–5, 9),
-		// spellings that do not, do not (rows 6, 7, 8, 10). CORRECTED (CHECK
-		// F17): the grant is never about token availability — GH_TOKEN is in
-		// the command's environment regardless of a word match (S-28's
-		// `aws s3 ls` carries it; S-89's script does too); only the
-		// auto-approval is gated on the matcher.
-		t.Fatalf("BLOCKED: %s (and the program-word matcher) — required by S-26's D-3 rows", s1EnvSeam)
-	})
-
-	// S84_shared_program_word_per_site_helper migrated intact to
-	// pkg/agent::TestProgramNetwork_ActualSharedGitWord: actual Auto loop and
-	// child with the exact git ls-remote command, both checked saved programs,
-	// real installed git credential fill for both hosts, actual run-token
-	// proxy grants for the union, zero approval and revocation after the run.
-	// Only the external remote executable/model edges are controlled; canceled
-	// upstream probes certify policy authorization, not successful live fetches.
-}
+// S84_shared_program_word_per_site_helper migrated intact to
+// pkg/agent::TestProgramNetwork_ActualSharedGitWord: actual Auto loop and
+// child with the exact git ls-remote command, both checked saved programs,
+// real installed git credential fill for both hosts, actual run-token
+// proxy grants for the union, zero approval and revocation after the run.
+// Only the external remote executable/model edges are controlled; canceled
+// upstream probes certify policy authorization, not successful live fetches.

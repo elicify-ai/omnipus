@@ -29,57 +29,55 @@ package bus
 
 import "testing"
 
-// These are outstanding test-author fixtures, not accepted deferrals.
-const s1HandOnSeam = "the complete actual producer/write/dispatch fixture for this chain is not yet implemented in the test harness; seeded-record and direct-carrier tests do not establish this handoff"
+// TestProgramProvenance_HandOn's scenarios are now mapped to their real
+// producer/runtime successors below. No empty passing wrapper is retained.
+// S75_telegram_to_delegated_helper migrated intact to
+// pkg/agent::TestProgramProvenance_ActualDelegatedHelper: actual input ->
+// delegate tool -> launcher -> durable child -> registered bash, exact
+// count0/Telegram notice then count16 after the channel switch is on.
+// The durable carrier is observed from the actual launch, not seeded.
 
-func TestProgramProvenance_HandOn(t *testing.T) {
-	// S75_telegram_to_delegated_helper migrated intact to
-	// pkg/agent::TestProgramProvenance_ActualDelegatedHelper: actual input ->
-	// delegate tool -> launcher -> durable child -> registered bash, exact
-	// count0/Telegram notice then count16 after the channel switch is on.
-	// The durable carrier is observed from the actual launch, not seeded.
+// S76_telegram_to_peer_request migrated intact to
+// pkg/gateway::TestProgramProvenance_ActualPeerRequest: real Dev send_message,
+// real gateway admission/router/ledger and running Ops turn, exact count0
+// and Telegram notice after the connected Ops count16 positive control.
 
-	// S76_telegram_to_peer_request migrated intact to
-	// pkg/gateway::TestProgramProvenance_ActualPeerRequest: real Dev send_message,
-	// real gateway admission/router/ledger and running Ops turn, exact count0
-	// and Telegram notice after the connected Ops count16 positive control.
+// S77_telegram_to_new_board_task_ui_task_independent migrated intact to
+// pkg/gateway::TestProgramProvenance_ActualBoardTasks: actual Telegram
+// create_task versus the person's real REST create with the same prompt,
+// actual Board start/executor/launcher/commands, exact count0/Telegram
+// notice versus count16 and exact lineage/receiving origin sets.
 
-	// S77_telegram_to_new_board_task_ui_task_independent migrated intact to
-	// pkg/gateway::TestProgramProvenance_ActualBoardTasks: actual Telegram
-	// create_task versus the person's real REST create with the same prompt,
-	// actual Board start/executor/launcher/commands, exact count0/Telegram
-	// notice versus count16 and exact lineage/receiving origin sets.
+// S78_provenance_survives_restart migrated intact, with the H49v2 lifecycle
+// ruling, to pkg/agent::TestProgramProvenance_ActualStoppedHelperBoot:
+// actual Telegram delegate/child16/question -> actual parent Stop -> persisted
+// Telegram-off config, reopened runtime/stores and next genuine boot epoch ->
+// actual boot leaves it stopped -> actual parent's delegate respond -> SAME
+// helper/generation command0 and full Telegram notice/exact receiving origin.
+// No needs_input/wait, seeded state/lineage, web helper input or auto-revival.
 
-	t.Run("S78_provenance_survives_restart", func(t *testing.T) {
-		// GREEN asserts here (spec S-78): a helper launched from a Telegram
-		// turn, parked, gateway restarted → resume runs print 0 with the
-		// telegram notice.
-		t.Fatalf("BLOCKED: %s — required by S-78's restart persistence", s1HandOnSeam)
-	})
+// S79_unresolved_chain_withholds migrated intact to
+// pkg/agent::TestProgramProvenance_ActualUnreadableParent: actual delegate
+// helper, parent-only journal corruption, readable-chain count16 control,
+// actual child and exact count0/unresolved receiving-context oracle.
+// D5 row13 is additionally real in TestProgramProvenance_ActualHelperHopBound:
+// seventeen actual delegate edges, exact 15/16 eligible and 17 unresolved
+// boundary counts. No manually constructed lineage or fake resolver.
 
-	// S79_unresolved_chain_withholds migrated intact to
-	// pkg/agent::TestProgramProvenance_ActualUnreadableParent: actual delegate
-	// helper, parent-only journal corruption, readable-chain count16 control,
-	// actual child and exact count0/unresolved receiving-context oracle.
-	// D5 row13 is additionally real in TestProgramProvenance_ActualHelperHopBound:
-	// seventeen actual delegate edges, exact 15/16 eligible and 17 unresolved
-	// boundary counts. No manually constructed lineage or fake resolver.
+// S80_mixed_provenance_through_a_peer_request migrated intact to
+// pkg/gateway::TestProgramProvenance_ActualMixedPeerRequest: separate real
+// Telegram/Discord inputs, admitted into one live Dev turn, actual peer
+// tool/router/ledger/Ops command, exact two-origin set, count0 and full
+// Discord-off notice with Telegram allowed. No manually joined carrier.
 
-	// S80_mixed_provenance_through_a_peer_request migrated intact to
-	// pkg/gateway::TestProgramProvenance_ActualMixedPeerRequest: separate real
-	// Telegram/Discord inputs, admitted into one live Dev turn, actual peer
-	// tool/router/ledger/Ops command, exact two-origin set, count0 and full
-	// Discord-off notice with Telegram allowed. No manually joined carrier.
+// S82_model_text_cannot_set_provenance migrated intact to the same actual
+// pkg/gateway peer test: body says origin:webchat, but the actual ledger
+// AND receiver turn carry exactly connector:telegram; real child count0.
 
-	// S82_model_text_cannot_set_provenance migrated intact to the same actual
-	// pkg/gateway peer test: body says origin:webchat, but the actual ledger
-	// AND receiver turn carry exactly connector:telegram; real child count0.
-
-	// S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice
-	// migrated intact to pkg/agent::TestProgramProvenance_OmittedInputRuntime:
-	// real connected positive count16, real omitted-input child count0, exact
-	// unresolved notice. A source guard alone cannot substitute for that row.
-}
+// S111_omitted_producer_dev_command_gets_no_token_and_the_unresolved_notice
+// migrated intact to pkg/agent::TestProgramProvenance_OmittedInputRuntime:
+// real connected positive count16, real omitted-input child count0, exact
+// unresolved notice. A source guard alone cannot substitute for that row.
 
 func TestProgramProvenance_Updates(t *testing.T) {
 	// S107_telegram_edits_a_web_created_task migrated intact to

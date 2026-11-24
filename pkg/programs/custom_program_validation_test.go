@@ -100,7 +100,6 @@ func TestCustomProgram_Validation(t *testing.T) {
 
 	t.Run("D2_refused_rows", func(t *testing.T) {
 		for _, row := range d2ValidationRows {
-			row := row
 			t.Run(row.name, func(t *testing.T) {
 				req := acmeBase()
 				row.mut(&req)
