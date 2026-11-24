@@ -114,11 +114,11 @@ func TestBashCWD_AbsoluteWorkDirPathStaysRefusedWhileAWriteMountExists(t *testin
 				{name: "a folder inside the work dir", cwd: f.inWorkDir},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					got, err := f.tool.resolveCWD(f.ctx, map[string]any{"cwd": tc.cwd}, f.workDir)
-					require.Error(t, err, "an absolute path inside the work dir must stay refused while a write mount exists; it was admitted as %q", got)
-					assert.Empty(t, got, "a refused cwd resolves to nothing")
-					assert.Contains(t, err.Error(), "path escapes workspace")
-					assert.Contains(t, err.Error(), "absolute path not allowed")
+					admitted, refusal := f.tool.resolveCWD(f.ctx, map[string]any{"cwd": tc.cwd}, f.workDir)
+					require.Error(t, refusal, "an absolute path inside the work dir must stay refused while a write mount exists; it was admitted as %q", admitted)
+					assert.Empty(t, admitted, "a refused cwd resolves to nothing")
+					assert.Contains(t, refusal.Error(), "path escapes workspace")
+					assert.Contains(t, refusal.Error(), "absolute path not allowed")
 				})
 			}
 
