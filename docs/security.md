@@ -736,7 +736,7 @@ So `User watching: yes` can occasionally be stale. This affects only what the ag
 
 ## Checking an external command-line program
 
-**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
+**Check** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
 
 Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. Settings then shows an error notice. The check itself never saves a program path or an agent, and **Save** works without it.
 
@@ -746,7 +746,7 @@ Before starting anything, Omnipus checks the program file with the same check th
 - the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe (the message names the check `location_unverifiable`);
 - the file is not a regular file, or — on Linux and macOS — the account running Omnipus cannot execute it. On Windows only the regular-file and extension rules are checked before launch; if Windows then refuses to start the program, the result is **handshake-failed**, not **path-not-allowed**.
 
-These program-check refusals never include a file path or operating-system error. Run refusals, command-preview errors and Check CLI notices name the program and failed check. A Settings save explains the reason in plain words; its response carries the program key and failed check separately in `details.cli` and `details.check`. The path and system details are recorded only in the server log. The runner connection check treats a program that passed these checks the same way: if it cannot start or reports no version, its result is fixed text, and the program's output stays in the server log.
+These program-check refusals never include a file path or operating-system error. Run refusals, command-preview errors and **Check** notices name the program and failed check. A Settings save explains the reason in plain words; its response carries the program key and failed check separately in `details.cli` and `details.check`. The path and system details are recorded only in the server log. The runner connection check treats a program that passed these checks the same way: if it cannot start or reports no version, its result is fixed text, and the program's output stays in the server log.
 
 The check only asks whether an agent could have planted the program. It does not check who owns the program or who else can change it: like any program you run yourself, keeping the CLI and its folders protected is your responsibility.
 

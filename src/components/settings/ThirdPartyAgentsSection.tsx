@@ -365,11 +365,12 @@ export function ThirdPartyAgentsSection() {
             <Button
               variant="outline"
               size="sm"
-              aria-label={`Check ${label} CLI`}
+              // D-9 id25 (U1-10): renamed Check. The row's heading names the
+              // program, so the action itself carries no program name.
               actionState={checkingCli === cli ? 'pending' : 'idle'}
               onClick={() => void checkCli(cli, label, pathValue)}
             >
-              Check CLI
+              Check
             </Button>
           </Card>
         )
