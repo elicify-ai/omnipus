@@ -118,7 +118,10 @@ func Store(t testing.TB, live func() *config.Config, publish func(*config.Config
 }
 
 // carried checks that sandbox, re-encoded, holds every key and entry of want.
-func carried(sandbox config.OmnipusSandboxConfig, want map[string]any, kind error) error {
+// sandbox is the product's sandbox section (a config.OmnipusSandboxConfig value
+// when called from Apply); it is any so the instrument's own tests can hand it a
+// stand-in section that does carry a key the product does not carry yet.
+func carried(sandbox any, want map[string]any, kind error) error {
 	stored, err := json.Marshal(sandbox)
 	if err != nil {
 		return fmt.Errorf("sandboxkeys: encode sandbox: %w", err)
