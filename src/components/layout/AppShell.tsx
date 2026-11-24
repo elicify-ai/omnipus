@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Outlet } from '@tanstack/react-router'
+import { Outlet, useLocation } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
@@ -34,6 +34,10 @@ export function AppShell() {
   const reconnect = useConnectionStore((s) => s.reconnect)
   const hydrateNotifications = useNotificationsStore((s) => s.hydrate)
   const username = useAuthStore((s) => s.username)
+  // FR-068 (Settings redesign, U1-3): Settings renders its own "Skip to
+  // settings content" link, which must be the first Tab stop there, so the
+  // shell's global link steps aside on that screen.
+  const screenOwnsSkipLink = useLocation().pathname === '/settings'
 
   const { data: appState, isError: appStateError } = useQuery({
     queryKey: ['app-state'],
@@ -184,14 +188,17 @@ export function AppShell() {
           This link is still the first stop document-wide — without an explicit
           positive index here, the chat screen's positive-tabIndex controls
           would win the first Tab and the skip link would never be reachable
-          (WCAG 2.4.1 functionally dead). */}
-      <a
-        href="#main-content"
-        tabIndex={1}
-        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"
-      >
-        Skip to content
-      </a>
+          (WCAG 2.4.1 functionally dead). Settings supplies its own skip link
+          as its first Tab stop (FR-068), so this one is not rendered there. */}
+      {!screenOwnsSkipLink && (
+        <a
+          href="#main-content"
+          tabIndex={1}
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"
+        >
+          Skip to content
+        </a>
+      )}
 
       {/* Keeps the cross-tab presence list live before any panel entry point
           can open a duplicate docked surface (SP-18/SP-30). */}

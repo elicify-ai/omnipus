@@ -148,8 +148,28 @@ export function SettingsScreen({
   )
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
+  // U1-9 (US-2 AS6): an address typed or pasted into the bar arrives as a new
+  // history entry with no router state. On Stay the router's history undoes a
+  // blocked move by going one entry forward, which only fits Back; for a typed
+  // address that is a no-op, the typed address would stay in the bar while
+  // the screen still shows this section. Stay therefore steps back off the
+  // typed entry itself (see the leave question below).
+  const typedAddressBlocked = useRef(false)
+  // History length as of the last render: a typed address adds an entry, a
+  // Back to an older entry does not (that one is left to the router).
+  const historyLength = useRef(typeof window === 'undefined' ? 0 : window.history.length)
+  useEffect(() => {
+    historyLength.current = window.history.length
+  })
   const blocker = useBlocker({
-    shouldBlockFn: () => draftCount > 0,
+    shouldBlockFn: () => {
+      // The router's own moves (links, Back to an entry it wrote) carry its
+      // state; an entry without it was typed or pasted into the address bar.
+      const state: unknown = window.history.state
+      typedAddressBlocked.current =
+        !(state && typeof state === 'object' && '__TSR_index' in state) && window.history.length > historyLength.current
+      return draftCount > 0
+    },
     withResolver: true,
     // useSaveBar registers the browser's own prompt while drafts exist.
     enableBeforeUnload: false,
@@ -199,8 +219,8 @@ export function SettingsScreen({
     }
   }, [section, targetRow, rowJump, phoneShowsSection])
   useEffect(() => {
-    if (requestedTab !== undefined) setPhoneShowsSection(true)
-  }, [requestedTab, section])
+    if (requestedTab !== undefined || prefillOverride) setPhoneShowsSection(true)
+  }, [requestedTab, section, prefillOverride])
 
   // ── Search (FR-006/FR-007) ─────────────────────────────────────────────
   const [query, setQuery] = useState('')
@@ -266,10 +286,29 @@ export function SettingsScreen({
     headingRef.current?.focus({ preventScroll: true })
   }, [section])
 
+  // FR-035 (U1-6): after Later or Escape, focus goes to the banner's Restart
+  // now. Right after a Save the banner is often not drawn yet (the waiting
+  // list is still being re-read), so the heading holds focus meanwhile and
+  // Restart now takes it as soon as the banner appears — unless the person
+  // has already moved focus elsewhere.
+  const [bannerFocusPending, setBannerFocusPending] = useState(false)
   const focusAfterRestartWindow = useCallback(() => {
-    // FR-035: after Later or Escape, focus goes to the banner's Restart now.
-    setTimeout(() => (bannerRestartRef.current ?? headingRef.current)?.focus(), 0)
+    setTimeout(() => {
+      if (bannerRestartRef.current) {
+        bannerRestartRef.current.focus()
+        return
+      }
+      headingRef.current?.focus()
+      setBannerFocusPending(true)
+    }, 0)
   }, [])
+  useEffect(() => {
+    if (!bannerFocusPending || !bannerRestartRef.current) return
+    setBannerFocusPending(false)
+    const active = document.activeElement
+    if (active === headingRef.current || active === document.body || active === null) bannerRestartRef.current.focus()
+  }, [bannerFocusPending, pending.entries])
+  useEffect(() => setBannerFocusPending(false), [section])
 
   const gatewayDown = about.isError
 
@@ -426,6 +465,9 @@ export function SettingsScreen({
                     ref={phoneBackRef}
                     variant="ghost"
                     size="sm"
+                    // FR-070 (U1-5): 44x44 under a coarse pointer, the
+                    // SegmentedControlItem pattern (design-system rule 12).
+                    className="pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
                     onClick={() => {
                       if (draftCount > 0) setPhoneBackAsk(true)
                       else showPhoneList()
@@ -487,6 +529,9 @@ export function SettingsScreen({
             focusAfterRestartWindow()
           }}
           onRestarted={() => setTimeout(() => headingRef.current?.focus(), 0)}
+          // onClose and onRestarted place focus (FR-035); the window's own
+          // return-to-opener would otherwise move it back to the heading.
+          onCloseAutoFocus={(e) => e.preventDefault()}
         />
 
         <ConfirmDialog
@@ -496,6 +541,10 @@ export function SettingsScreen({
             if (blocker.status === 'blocked') {
               // Stay: nothing moves; focus goes back to the control used.
               blocker.reset()
+              // The history ignores the next address change after a Stay;
+              // this step back is that change, so the section stays put.
+              if (typedAddressBlocked.current) setTimeout(() => window.history.back(), 0)
+              typedAddressBlocked.current = false
               navIntent.current = null
               const back = stayFocus.current
               stayFocus.current = null
@@ -512,6 +561,7 @@ export function SettingsScreen({
           confirmLabel="Leave"
           destructive
           onConfirm={() => {
+            typedAddressBlocked.current = false
             if (blocker.status === 'blocked') blocker.proceed()
             if (phoneBackAsk) {
               // Leave: the section's drafts are dropped and the list shows.

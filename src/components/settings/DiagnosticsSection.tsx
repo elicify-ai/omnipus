@@ -27,6 +27,16 @@ import { fetchDoctorResults, runDoctor, getErrorMessage } from '@/lib/api'
 import type { DoctorResult, DoctorIssue } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
+// D-9 id35 (U1-7): an action link is a URL or an in-app route such as
+// `/settings?tab=sandbox`. The app runs on hash routing (src/main.tsx), so a
+// bare route would load the page afresh and land on the home screen; an
+// in-app route is sent through the hash, as the router's own links are
+// (same convention as modelOverrideLink.ts::modelOverrideHref).
+function actionHref(link: string): string {
+  if (link.startsWith('/') && !link.startsWith('//') && !link.startsWith('/#')) return `/#${link}`
+  return link
+}
+
 function getSecurityLabel(score: number): string {
   if (score >= 90) return 'Excellent'
   if (score >= 67) return 'Good'
@@ -382,7 +392,7 @@ function IssueCard({
           {/* US-B4: action link links directly to the in-place fix */}
           {issue.action_link && (
             <a tabIndex={0}
-              href={issue.action_link}
+              href={actionHref(issue.action_link)}
               onClick={(e) => e.stopPropagation()}
               data-testid={`issue-action-link-${issue.id}`}
               className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2"

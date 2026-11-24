@@ -122,11 +122,17 @@ export interface GatewayRestartModalProps {
   labels?: string[]
   /** Called once a restart is proved complete (FR-035: focus to the heading). */
   onRestarted?: () => void
+  /**
+   * Replaces the default focus return on close, for a host that places focus
+   * itself in onClose/onRestarted (the Settings shell: Restart now in the
+   * banner after Later, FR-035). The handler must call preventDefault.
+   */
+  onCloseAutoFocus?: (event: Event) => void
 }
 
 type RestartPhase = 'idle' | 'restarting' | 'waiting' | 'moved' | 'success' | 'error'
 
-export function GatewayRestartModal({ open, onClose, labels, onRestarted }: GatewayRestartModalProps) {
+export function GatewayRestartModal({ open, onClose, labels, onRestarted, onCloseAutoFocus }: GatewayRestartModalProps) {
   // FR-069: focus returns to the control that opened the dialog.
   const returnFocus = useReturnFocus()
   const { addToast } = useUiStore()
@@ -233,7 +239,7 @@ export function GatewayRestartModal({ open, onClose, labels, onRestarted }: Gate
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !isRestarting) handleLater() }}>
-      <DialogContent onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={returnFocus.onCloseAutoFocus}>
+      <DialogContent onOpenAutoFocus={returnFocus.onOpenAutoFocus} onCloseAutoFocus={onCloseAutoFocus ?? returnFocus.onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Restart now?</DialogTitle>
           <DialogDescription>

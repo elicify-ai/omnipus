@@ -46,6 +46,10 @@ export function LimitsSection({ prefillOverride }: LimitsSectionProps) {
     overrides: !!prefillOverride,
     agents: false,
   })
+  // A new pre-fill request (the same link followed again) re-opens Model overrides (U1-8).
+  useEffect(() => {
+    if (prefillOverride) setOpen((o) => (o.overrides ? o : { ...o, overrides: true }))
+  }, [prefillOverride])
   const { targetRow, targetRowJump } = useSettingsShell()
   useEffect(() => {
     if (!targetRow) return
