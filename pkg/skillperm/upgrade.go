@@ -97,6 +97,11 @@ const (
 // agent loop starts any turn. It returns an error when an agent record could
 // not be written; that agent stays pending and the next start retries it.
 func Run(home string, opts Options) error {
+	if _, err := os.Stat(filepath.Join(home, "config.json")); errors.Is(err, os.ErrNotExist) {
+		// A fresh install has no old values to translate; its config is
+		// written with the new shape from the start.
+		return nil
+	}
 	entities := filepath.Join(home, "entities")
 	if done, err := finishIfDone(home, entities); err != nil || done {
 		return err

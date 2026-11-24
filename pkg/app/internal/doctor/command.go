@@ -92,7 +92,21 @@ func checkConfig(cfg *config.Config) []warning {
 	warnings = append(warnings, checkBuildIntegrity()...)
 	warnings = append(warnings, checkBrowserVideoCapability(cfg)...)
 	warnings = append(warnings, checkBrowserPackageChrome()...)
+	warnings = append(warnings, checkSkillTrust(cfg)...)
 	return warnings
+}
+
+// checkSkillTrust warns when skill trust is Allow (rider #99, S-79): the
+// check for unverified skills is off. A legacy allow_all counts as Allow
+// (C-3 maps it to allow).
+func checkSkillTrust(cfg *config.Config) []warning {
+	if cfg.Sandbox.EffectiveSkillTrust() != config.SkillTrustAllow {
+		return nil
+	}
+	return []warning{{
+		code:    "WARN-SKILL-001",
+		message: "Unverified skills are allowed without a check: skill trust is set to Allow in Skills & Tools. Set it to Ask or Deny to check skills that are not verified.",
+	}}
 }
 
 // checkBuildIntegrity warns when the running binary was built without the

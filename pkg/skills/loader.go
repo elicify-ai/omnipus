@@ -408,9 +408,24 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 //     already wins the same slug — see ResolveSkillName's identical
 //     carve-out in shelf.go), so the same slug is never emitted twice.
 func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string) bool, project ProjectShelf) string {
+	return sl.BuildSkillsMenu(allow, project, nil)
+}
+
+// SkillMenuLevel answers, for one menu candidate, its stored model-visibility
+// level (Skills & Tools C-1) and whether its outcome for this agent is deny
+// (C-11 E2). project is true for a project-shelf skill.
+type SkillMenuLevel func(s SkillInfo, project bool) (level string, denied bool)
+
+// BuildSkillsMenu is BuildSkillsSummaryFuncWithProject with per-skill levels
+// (C-1, C-11 E2): a skill whose outcome is deny is never listed; hidden is not
+// listed; name_only lists the name alone; name_and_description and full list
+// name and description (a full skill's instructions are injected separately,
+// C-14). A nil levelOf lists every eligible skill with name and description.
+func (sl *SkillsLoader) BuildSkillsMenu(allow func(name string) bool, project ProjectShelf, levelOf SkillMenuLevel) string {
 	allSkills := sl.ListSkills()
 
 	eligible := make([]SkillInfo, 0, len(allSkills)+len(project))
+	isProject := make(map[string]bool, len(project))
 	seen := make(map[string]struct{}, len(allSkills)+len(project))
 	for _, s := range allSkills {
 		if allow != nil && !allow(s.ID) {
@@ -428,6 +443,7 @@ func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string
 			continue
 		}
 		eligible = append(eligible, ps.SkillInfo)
+		isProject[key] = true
 		seen[key] = struct{}{}
 	}
 	if len(eligible) == 0 {
@@ -450,27 +466,57 @@ func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string
 
 	var lines []string
 	lines = append(lines, "<skills>")
+	listed := 0
 	for _, s := range eligible {
-		// The agent invokes a skill by the slug (ID) — that is the identifier
-		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
-		// slug. The human-readable display name is surfaced separately so the
-		// model can refer to it naturally.
-		escapedName := escapeXML(s.ID)
-		escapedDisplay := escapeXML(s.Name)
-		escapedDesc := escapeXML(s.Description)
-
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
-		if s.Name != "" && s.Name != s.ID {
-			lines = append(lines, fmt.Sprintf("    <display_name>%s</display_name>", escapedDisplay))
+		level, denied := VisibilityNameAndDescriptionLevel, false
+		if levelOf != nil {
+			level, denied = levelOf(s, isProject[strings.ToLower(s.ID)])
 		}
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		// No <location> line (ADR-072 FR-006/N1) — see the function doc above.
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
-		lines = append(lines, "  </skill>")
+		entry := SkillMenuEntry(s, level, denied)
+		if entry == "" {
+			continue
+		}
+		lines = append(lines, entry)
+		listed++
+	}
+	if listed == 0 {
+		return ""
 	}
 	lines = append(lines, "</skills>")
 
+	return strings.Join(lines, "\n")
+}
+
+// VisibilityNameAndDescriptionLevel is the menu level of a skill with no
+// stored level (today's behaviour, C-1).
+const VisibilityNameAndDescriptionLevel = "name_and_description"
+
+// SkillMenuEntry renders one skill's menu entry at its level (C-1): "" when
+// the skill's outcome is deny or its level is hidden (or unknown); the slug
+// alone at name_only; slug, display name and description at
+// name_and_description and full. No filesystem location is ever rendered
+// (ADR-072 FR-006). The agent invokes a skill by its slug (ID), the
+// identifier ResolveSkillName and LoadSkill resolve against.
+func SkillMenuEntry(s SkillInfo, level string, denied bool) string {
+	if denied {
+		return ""
+	}
+	withDescription := false
+	switch level {
+	case "name_only":
+	case "name_and_description", "full":
+		withDescription = true
+	default:
+		return ""
+	}
+	lines := []string{"  <skill>", fmt.Sprintf("    <name>%s</name>", escapeXML(s.ID))}
+	if withDescription {
+		if s.Name != "" && s.Name != s.ID {
+			lines = append(lines, fmt.Sprintf("    <display_name>%s</display_name>", escapeXML(s.Name)))
+		}
+		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)))
+	}
+	lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source), "  </skill>")
 	return strings.Join(lines, "\n")
 }
 
