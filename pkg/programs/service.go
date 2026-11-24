@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // Connection states (ProgramConnection.state).
@@ -382,7 +383,10 @@ func (s *Service) launchLocked(entry ProgramEntry, conn Connection) {
 	go func() {
 		defer s.running.Done()
 		defer cancel()
-		result := s.runCheck(ctx, entry, timeout)
+		// S-139: test-build-only pause point, outside s.mu and before any
+		// store read or process start; a no-op outside the s1seams build.
+		testseam.BeforeCheckLaunch(entry.ID, r.generation)
+		result := s.runCheck(ctx, entry, r, timeout)
 		s.finish(entry.ID, r, result)
 	}()
 }

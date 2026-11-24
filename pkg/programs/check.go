@@ -61,7 +61,12 @@ func (b *boundedBuffer) String() string {
 // gets a clean environment (PATH, a temporary HOME and the token variables
 // only), its output is masked at the source and capped, and the whole process
 // group is stopped at the timeout.
-func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time.Duration) checkResult {
+//
+// FR-047: the process starts only while r is still the entry's current
+// reservation and has not been cancelled. That is re-checked under s.mu, and
+// s.mu is held through the start and the process-group setup, so a launch
+// that was replaced while it was on its way starts no process at all.
+func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservation, timeout time.Duration) checkResult {
 	check := entry.IdentityCheck
 	store, err := s.store()
 	if err != nil {
@@ -102,16 +107,9 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	Attach(cmd, ResolvedPrograms{Tokens: []string{token}})
 	setProcessGroup(cmd)
-	if startErr := cmd.Start(); startErr != nil {
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
-	}
-	// FR-005: the check's whole process tree must be owned before it runs
-	// on; when it cannot be (Windows Job Object), the check is stopped and
-	// not trusted.
-	if groupErr := startProcessGroup(cmd); groupErr != nil {
-		slog.Warn("programs: account check stopped: its processes could not be owned", "program", entry.ID, "error", groupErr)
-		_ = cmd.Wait()
-		return checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+	started, startRes := s.startCurrentCheck(ctx, entry, r, cmd)
+	if !started {
+		return startRes
 	}
 	defer releaseProcessGroup(cmd)
 	done := make(chan error, 1)
@@ -131,7 +129,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, timeout time
 		stopProcessGroup(cmd)
 		<-done
 		awaitProcessGroupGone(cmd)
-		return checkResult{state: StateCheckFailed, message: "The account check was replaced by a newer one."}
+		return replacedCheckResult
 	}
 	if waitErr != nil {
 		var exitErr *exec.ExitError
@@ -193,3 +191,33 @@ func truncateRunes(s string, n int) string {
 }
 
 var _ io.Writer = (*boundedBuffer)(nil)
+
+// replacedCheckResult is the result of a check whose reservation was
+// replaced; finish discards it, because the reservation is no longer current.
+var replacedCheckResult = checkResult{state: StateCheckFailed, message: "The account check was replaced by a newer one."}
+
+// startCurrentCheck starts cmd only if r is still the entry's current,
+// uncancelled reservation (FR-047, S-139), holding s.mu across the check,
+// cmd.Start and the process-group setup so a newer reservation cannot slip
+// in between. It reports whether the process is running; when it is not, the
+// result to return. FR-005: when the process tree cannot be owned (Windows
+// Job Object), the started process is stopped and the check is not trusted.
+func (s *Service) startCurrentCheck(ctx context.Context, entry ProgramEntry, r *reservation, cmd *exec.Cmd) (bool, checkResult) {
+	s.mu.Lock()
+	if s.checks[entry.ID] != r || ctx.Err() != nil {
+		s.mu.Unlock()
+		return false, replacedCheckResult
+	}
+	if startErr := cmd.Start(); startErr != nil {
+		s.mu.Unlock()
+		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+	}
+	groupErr := startProcessGroup(cmd)
+	s.mu.Unlock()
+	if groupErr != nil {
+		slog.Warn("programs: account check stopped: its processes could not be owned", "program", entry.ID, "error", groupErr)
+		_ = cmd.Wait()
+		return false, checkResult{state: StateSavedNotChecked, message: "Saved, not checked: the account check could not start."}
+	}
+	return true, checkResult{}
+}
