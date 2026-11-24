@@ -10439,14 +10439,16 @@ export interface components {
              * @example gateway.god_mode
              */
             resource?: string;
-            /** @description The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
-            old_value?: {
-                [key: string]: unknown;
-            };
-            /** @description The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
-            new_value?: {
-                [key: string]: unknown;
-            };
+            /**
+             * @description The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value: pkg/audit.SecurityChangeRecord carries the writer's value as-is, and the writers send objects (gateway.god_mode), plain strings (sandbox.mode, session.dm_scope), booleans (sandbox.auto_approve), integers (max_tool_iterations), string arrays (sandbox.allowed_paths) and null (no previous paths). Audit history is append-only and HMAC-chained, so the contract follows what is on disk.
+             * @example permissive
+             */
+            old_value?: unknown;
+            /**
+             * @description The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value, with the same writer shapes as old_value.
+             * @example strict
+             */
+            new_value?: unknown;
         };
         /**
          * AuditLogResponse
