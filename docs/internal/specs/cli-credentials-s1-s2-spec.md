@@ -4,7 +4,7 @@ ADR: "Agents run command-line programs (git, gh, fly …) with stored credential
 
 # Feature Specification: Connected programs — agents run command-line programs with stored logins (slices S1 and S2)
 
-**Created**: 2026-11-22. **Revision 8** (2026-11-22): revision 6 plus the founder's answers of 22 Nov 09:02Z and his correction of 09:08Z (`/workspace/omnipus-coordination/decisions/2026-11-22-founder-cli-spec-and-export-answers.md`). Revision 7's per-agent list is withdrawn: a channel is already bound to one workspace and one main agent, so revision 6's one switch per channel is already per workspace and agent. Revisions are kept at `/workspace/logs/1960/spec-s1/spec-rev1.md` to `spec-rev7.md`. The delta against revision 6 is in `response-7.md`. **Amended 2026-11-24** (architect rulings, no scope change): S-20 wording per `ruling-D10-S20text.md`; FR-239 Windows allowlist row per `ruling-WU19-win.md`. Unamended revision 8 kept at `spec-rev8.md`; exact lines in `spec-edits-20261124.md`.
+**Created**: 2026-11-22. **Revision 8** (2026-11-22): revision 6 plus the founder's answers of 22 Nov 09:02Z and his correction of 09:08Z (`/workspace/omnipus-coordination/decisions/2026-11-22-founder-cli-spec-and-export-answers.md`). Revision 7's per-agent list is withdrawn: a channel is already bound to one workspace and one main agent, so revision 6's one switch per channel is already per workspace and agent. Revisions are kept at `/workspace/logs/1960/spec-s1/spec-rev1.md` to `spec-rev7.md`. The delta against revision 6 is in `response-7.md`. **Amended 2026-11-24** (architect rulings, no scope change): S-20 wording per `ruling-D10-S20text.md`; FR-239 Windows allowlist row per `ruling-WU19-win.md`; S-50 Then and FR-021 check-result rows per `ruling-H50.md`. Unamended revision 8 kept at `spec-rev8.md`; exact lines in `spec-edits-20261124.md`.
 **Input**: ADR revision 2 and its grill (above); founder answers Q1–Q4 of 22 Nov 2026 (Discord, quoted in the brief `/workspace/logs/1960/brief-spec-s1.md`). No interview-me output exists for this feature; the founder answers in the brief are the decision record (see Clarifications).
 **Code baseline**: `origin/release/v0.1.1` at `d5d1acdd3` (merge of PR #1966, S0), read in `/workspace/wt/a-1960-spec`. Every code citation is `file::symbol` at that commit; those used by revision 3 were re-read for it.
 **Epic**: not named in the brief. The matching open feature request is **#1045** ("Sandboxed shell tools cannot authenticate (gh, fly, ...): need a general, tool-agnostic credential mechanism"); related: **#48**. The chief confirms or creates the Epic (Stage: Spec). Not verified on GitHub in this task.
@@ -1367,7 +1367,7 @@ End states: `connected`, `expired`, `cancelled`, `denied`, `failed`, `unsupporte
 **Traces to**: US-6 AS-1 · **Category**: Happy Path
 - **Given** GitHub not connected
 - **When** the person connects, re-checks, switches on for Dev, changes the Telegram setting and disconnects
-- **Then** one audit row per action (connect, check, switch, setting, disconnect), none containing the token
+- **Then** one action row per action (connect, check, switch, setting, disconnect), named by its event, plus one check-result row for each finished check (the check after connect and the re-check), none containing the token or any part of it
 
 #### US-7 — Replace, check, disconnect [S1]
 
@@ -2113,7 +2113,7 @@ End states: `connected`, `expired`, `cancelled`, `denied`, `failed`, `unsupporte
   - replacing every maximal run covered by substrings of 8 or more bytes of any current or retired token with one `[FILTERED]`, holding back at most 7 bytes, and on any close (EOF, exit, kill, timeout, cancellation, read error) releasing only those ≤ 7 bytes, never a longer held prefix;
   - B1–B6 kept as defence in depth with the original, Latin-1-escaped and JSON-escaped spellings;
   - all of this regardless of the general switch and `filter_min_length`.
-- **FR-021** [S1]: System MUST write value-free audit rows for connect, check (including `superseded`), replace, disconnect, switch change, setting changes, custom entry change, and refused program-card submissions.
+- **FR-021** [S1]: System MUST write value-free audit rows for connect, check (including `superseded`), replace, disconnect, switch change, setting changes, custom entry change, and refused program-card submissions, and one value-free row with the outcome of each finished check (connected, failed, timed out).
 - **FR-022** [S1]: System MUST list switched-on entries under `needs_secrets` (kind `program`) on export; an imported agent's `programs` is empty.
 - **FR-023** [S1]: System MUST let a person disconnect (local copy removed, switches kept, revoke-at-vendor note), replace and re-check.
 - **FR-024** [S1]: System MUST, at run time, set neither value when two sources set one variable, and add no managed helper when two switched-on entries supply one git host. Each case adds its notice, and the result does not depend on entry order.
