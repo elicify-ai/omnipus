@@ -5,10 +5,11 @@ import { act, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import type { UserContextResponse } from '@/lib/api/generated/openapi-types'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { MAIN_ID, TestSocket } from '../../../tests/l1-room-ui/harness'
+import { json, MAIN_ID, TestSocket } from '../../../tests/l1-room-ui/harness'
 import {
   emitFromGateway, mountStage1App, resetStage1App, SETTINGS_PATH,
   Stage1Network, stopStage1App,
@@ -21,6 +22,15 @@ let openSocketsAtCreation: number[]
 beforeEach(() => {
   resetStage1App()
   network = new Stage1Network()
+  // Settings #1519 FR-003 / D-3 row10 keeps the legacy URL but redirects
+  // to the real Profile. Do not change the socket/history oracle to avoid it.
+  const userContext: UserContextResponse = { content: '' }
+  network.respond('GET', '/api/v1/user-context', () => json(userContext))
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
   openSocketsAtCreation = []
   vi.stubGlobal('WebSocket', class extends TestSocket {
     constructor(url: string) {

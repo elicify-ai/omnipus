@@ -86,14 +86,38 @@ function hasNonEmpty(obj?: Record<string, unknown>): boolean {
   return obj != null && Object.keys(obj).length > 0
 }
 
-function JsonBlock({ label, value }: { label: string; value: Record<string, unknown> }) {
+// U1-2: a security_setting_change old/new value is any JSON value the setting
+// held (contract AuditEntry.old_value/new_value): an object, an array, a plain
+// string, a number, true/false, or null for "not set". Only an absent value
+// or an empty object (the old "nothing recorded" shape) shows no block; every
+// other value is shown, an empty string, an empty list and null included.
+function isEmptyPlainObject(value: object): boolean {
+  return !Array.isArray(value) && Object.keys(value).length === 0
+}
+
+function hasChangeValue(value: unknown): boolean {
+  if (value === undefined) return false
+  if (value !== null && typeof value === 'object') return !isEmptyPlainObject(value)
+  return true
+}
+
+function formatValue(value: unknown): string {
+  if (value === null) return '(not set)'
+  if (typeof value === 'string') return value === '' ? '(empty)' : value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  // JSON carries no other kinds; anything else still shows rather than vanishing.
+  return String(value)
+}
+
+function JsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="space-y-[var(--space-1)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {label}
       </p>
       <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-32 whitespace-pre-wrap break-all">
-        {JSON.stringify(value, null, 2)}
+        {formatValue(value)}
       </pre>
     </div>
   )
@@ -113,8 +137,8 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
                     !!entry.policy_rule ||
                     !!entry.actor ||
                     !!entry.resource ||
-                    hasNonEmpty(entry.old_value) ||
-                    hasNonEmpty(entry.new_value)
+                    hasChangeValue(entry.old_value) ||
+                    hasChangeValue(entry.new_value)
 
   const detailId = useId()
 
@@ -210,11 +234,11 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
               {hasNonEmpty(entry.fields) && (
                 <JsonBlock label="Fields" value={entry.fields!} />
               )}
-              {hasNonEmpty(entry.old_value) && (
-                <JsonBlock label="Old Value" value={entry.old_value!} />
+              {hasChangeValue(entry.old_value) && (
+                <JsonBlock label="Old Value" value={entry.old_value} />
               )}
-              {hasNonEmpty(entry.new_value) && (
-                <JsonBlock label="New Value" value={entry.new_value!} />
+              {hasChangeValue(entry.new_value) && (
+                <JsonBlock label="New Value" value={entry.new_value} />
               )}
             </div>
           </TableCell>
@@ -276,6 +300,10 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
   })
 
   const entries = useMemo(() => auditLog?.entries ?? [], [auditLog])
+  // U1-2: records the gateway sent but the viewer could not read. They are
+  // counted in the total and named below the table, never silently left out.
+  const unreadable = auditLog?.unreadableCount ?? 0
+  const total = entries.length + unreadable
 
   // Live filter vocabulary: the base families plus every event name the loaded
   // records actually carry. The current selection is always retained so the
@@ -380,7 +408,9 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 {entries.length > 0
                   ? 'Try adjusting your filters'
-                  : 'Audit events will appear here as agents run'}
+                  : unreadable > 0
+                    ? 'No entry could be shown'
+                    : 'Audit events will appear here as agents run'}
               </p>
             </div>
           ) : (
@@ -405,9 +435,16 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
         </div>
 
         {/* Footer — entry count */}
-        {!isLoading && !isError && entries.length > 0 && (
-          <div className="flex-none px-[var(--space-3)] py-[var(--space-2)] border-t border-[var(--color-border)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            Showing {filtered.length} of {entries.length} {entries.length === 1 ? 'entry' : 'entries'} — auto-refreshes every 30s
+        {!isLoading && !isError && total > 0 && (
+          <div className="flex-none space-y-[var(--space-1)] px-[var(--space-3)] py-[var(--space-2)] border-t border-[var(--color-border)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            {unreadable > 0 && (
+              <p role="status" data-testid="audit-unreadable" className="text-[var(--color-text-error)]">
+                {unreadable} {unreadable === 1 ? 'entry' : 'entries'} could not be read and {unreadable === 1 ? 'is' : 'are'} not listed.
+              </p>
+            )}
+            <p>
+              Showing {filtered.length} of {total} {total === 1 ? 'entry' : 'entries'} — auto-refreshes every 30s
+            </p>
           </div>
         )}
       </DialogContent>

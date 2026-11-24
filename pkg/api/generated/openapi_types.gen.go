@@ -16134,11 +16134,11 @@ type AuditEntry struct {
 	// Fields Event-specific data of a structured audit record (pkg/audit.Record, written by audit.Emit: for example turn.cancel.*, askuser.auto_default, tool.policy.* and browser events). Those records carry their data here instead of in details; the values are redacted like details. Structure varies by event type. May be absent.
 	Fields *map[string]interface{} `json:"fields,omitempty"`
 
-	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
-	NewValue *map[string]interface{} `json:"new_value,omitempty"`
+	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value, with the same writer shapes as old_value.
+	NewValue interface{} `json:"new_value,omitempty"`
 
-	// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
-	OldValue *map[string]interface{} `json:"old_value,omitempty"`
+	// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value: pkg/audit.SecurityChangeRecord carries the writer's value as-is, and the writers send objects (gateway.god_mode), plain strings (sandbox.mode, session.dm_scope), booleans (sandbox.auto_approve), integers (max_tool_iterations), string arrays (sandbox.allowed_paths) and null (no previous paths). Audit history is append-only and HMAC-chained, so the contract follows what is on disk.
+	OldValue interface{} `json:"old_value,omitempty"`
 
 	// Parameters Tool call parameters or other event-specific key-value pairs.
 	Parameters *map[string]interface{} `json:"parameters,omitempty"`
@@ -16197,11 +16197,11 @@ type AuditLogResponse struct {
 		// Fields Event-specific data of a structured audit record (pkg/audit.Record, written by audit.Emit: for example turn.cancel.*, askuser.auto_default, tool.policy.* and browser events). Those records carry their data here instead of in details; the values are redacted like details. Structure varies by event type. May be absent.
 		Fields *map[string]interface{} `json:"fields,omitempty"`
 
-		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
-		NewValue *map[string]interface{} `json:"new_value,omitempty"`
+		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value, with the same writer shapes as old_value.
+		NewValue interface{} `json:"new_value,omitempty"`
 
-		// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
-		OldValue *map[string]interface{} `json:"old_value,omitempty"`
+		// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. Any JSON value: pkg/audit.SecurityChangeRecord carries the writer's value as-is, and the writers send objects (gateway.god_mode), plain strings (sandbox.mode, session.dm_scope), booleans (sandbox.auto_approve), integers (max_tool_iterations), string arrays (sandbox.allowed_paths) and null (no previous paths). Audit history is append-only and HMAC-chained, so the contract follows what is on disk.
+		OldValue interface{} `json:"old_value,omitempty"`
 
 		// Parameters Tool call parameters or other event-specific key-value pairs.
 		Parameters *map[string]interface{} `json:"parameters,omitempty"`

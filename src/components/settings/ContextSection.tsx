@@ -376,14 +376,26 @@ export function useContextForm({ prefillOverride }: ContextSectionProps = {}) {
 
   // Hydrate from GET; apply the X-08 pre-fill once on top of the fetched rows:
   // one new unsaved row (FR-004).
+  // A new prefillOverride object is a new request (the route gives each
+  // navigation its own object): following the same link again after Discard
+  // adds the row again without a reload (U1-8, D-3).
+  const appliedPrefill = useRef<ContextSectionProps['prefillOverride']>(undefined)
   useEffect(() => {
-    if (!data || form) return
-    const next = toForm(data)
-    if (prefillOverride) {
-      const exists = next.model_overrides.some((r) => r.provider === prefillOverride.provider && r.model === prefillOverride.model)
-      if (!exists) next.model_overrides.push({ provider: prefillOverride.provider, model: prefillOverride.model, context_window: '' })
+    if (!data) return
+    const withPrefill = (f: FormState): FormState => {
+      if (!prefillOverride) return f
+      const exists = f.model_overrides.some((r) => r.provider === prefillOverride.provider && r.model === prefillOverride.model)
+      if (exists) return f
+      return { ...f, model_overrides: [...f.model_overrides, { provider: prefillOverride.provider, model: prefillOverride.model, context_window: '' }] }
     }
-    setForm(next)
+    if (!form) {
+      appliedPrefill.current = prefillOverride
+      setForm(withPrefill(toForm(data)))
+      return
+    }
+    if (!prefillOverride || appliedPrefill.current === prefillOverride) return
+    appliedPrefill.current = prefillOverride
+    setForm((f) => (f ? withPrefill(f) : f))
   }, [data, form, prefillOverride])
 
   const { errors: localErrors } = useMemo(() => (form ? validate(form) : { errors: {} as FieldErrors }), [form])

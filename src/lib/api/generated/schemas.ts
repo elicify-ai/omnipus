@@ -1952,8 +1952,8 @@ type AuditEntry = {
   fields?: {} | undefined;
   actor?: string | undefined;
   resource?: string | undefined;
-  old_value?: {} | undefined;
-  new_value?: {} | undefined;
+  old_value?: unknown | undefined;
+  new_value?: unknown | undefined;
 };
 type PerformanceSettings = Partial<{
   max_parallel_agents: number;
@@ -5360,8 +5360,8 @@ export const AuditEntry: z.ZodType<AuditEntry> = z
     fields: z.object({}).partial().passthrough().optional(),
     actor: z.string().optional(),
     resource: z.string().optional(),
-    old_value: z.object({}).partial().passthrough().optional(),
-    new_value: z.object({}).partial().passthrough().optional(),
+    old_value: z.unknown().optional(),
+    new_value: z.unknown().optional(),
   })
   .passthrough();
 export const AuditLogResponse: z.ZodType<AuditLogResponse> = z.object({

@@ -1,13 +1,17 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router'
+import { transportG1 } from '../../tests/helpers/settings-gate-g1'
 import * as React from 'react'
 import type { JSX } from 'react'
 
 // jsdom doesn't implement scrollTo — mock it globally so ChatScreen useEffect doesn't throw
 beforeEach(() => {
   HTMLElement.prototype.scrollTo = vi.fn()
+  transportG1()
 })
+afterEach(() => { vi.unstubAllGlobals() })
 
 // test_screen_empty_states (integration)
 // Traces to: wave0-brand-design-spec.md Scenario: Each non-chat screen renders empty state (US-4 AC2, FR-009)
@@ -28,20 +32,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
   }
 })
-
-// Mock TanStack Router — all route components use createFileRoute
-vi.mock('@tanstack/react-router', () => ({
-  createRootRoute: (opts: Record<string, unknown>) => ({ options: opts }),
-  createFileRoute: () => (opts: Record<string, unknown>) => ({ options: opts }),
-  Outlet: () => null,
-  Link: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string }) => (
-    <a href={to} className={className}>{children}</a>
-  ),
-  useLocation: () => ({ pathname: '/' }),
-  useNavigate: () => vi.fn(),
-  useParams: () => ({}),
-  useSearch: () => ({}),
-}))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
@@ -134,11 +124,17 @@ vi.mock('@assistant-ui/react', async () => {
 })
 
 function makeClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
 }
 
-function wrapper({ children }: { children: React.ReactNode }) {
-  return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
+// Settings FR-014 needs the real leave-blocker registration. A real memory
+// router provides that context for every screen, including real NotFound links.
+async function renderScreen(ui: React.ReactElement) {
+  const client = makeClient()
+  const root = createRootRoute({ component: () => ui })
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/'] }) })
+  await act(async () => { await router.load() })
+  return render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>)
 }
 
 // The "Agents screen — empty state" describe was removed with the screen
@@ -156,8 +152,8 @@ describe('Skills screen — empty state', () => {
     SkillsScreen = mod.SkillsScreen as () => JSX.Element
   }, 60_000)
 
-  it('renders "Skills & Tools" as h1 heading', () => {
-    render(<SkillsScreen />, { wrapper })
+  it('renders "Skills & Tools" as h1 heading', async () => {
+    await renderScreen(<SkillsScreen />)
     const heading = screen.getByRole('heading', { name: /Skills/i })
     expect(heading.textContent).toContain('Skills')
   })
@@ -173,9 +169,12 @@ describe('Settings screen — empty state', () => {
     SettingsScreen = mod.SettingsScreen as () => JSX.Element
   }, 60_000)
 
-  it('renders "Settings" as h1 heading', () => {
-    render(<SettingsScreen />, { wrapper })
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Settings')
+  // Oracle ruling: team-lead, 2026-11-24, part 34 Q1 A — exact accessible
+  // title, no heading level. Neither current Settings spec nor wave0 FR-009
+  // specifies H1; the shared header's level is outside Settings #1519 scope.
+  it('renders the exact accessible "Settings" heading', async () => {
+    await renderScreen(<SettingsScreen />)
+    expect(screen.getByRole('heading', { name: 'Settings' })).toHaveTextContent(/^Settings$/)
   })
 })
 
@@ -193,8 +192,8 @@ describe('Chat screen — empty state', () => {
     ChatScreen = mod.ChatScreen as unknown as () => JSX.Element
   }, 60_000)
 
-  it('renders "Welcome to omnipus.ai" heading (gold .ai split into its own span)', () => {
-    render(<ChatScreen />, { wrapper })
+  it('renders "Welcome to omnipus.ai" heading (gold .ai split into its own span)', async () => {
+    await renderScreen(<ChatScreen />)
     // M4: the heading now composes "Welcome to " with the shared <Wordmark>
     // component, which nests "omnipus" one level deeper (inside its own
     // <span>) than the old hand-rolled markup did — getByText's default
@@ -209,15 +208,15 @@ describe('Chat screen — empty state', () => {
     expect(heading.querySelector('span')).not.toBeNull()
   })
 
-  it('renders prompt to select an agent (no active agent in empty state)', () => {
+  it('renders prompt to select an agent (no active agent in empty state)', async () => {
     // Note: Spec says "Your agents are standing by" but implementation intentionally shows
     // "Select an agent in the sidebar list to get started." — the agent list is in the sidebar.
-    render(<ChatScreen />, { wrapper })
+    await renderScreen(<ChatScreen />)
     expect(screen.getByText(/Select an agent/i)).toBeTruthy()
   })
 
-  it('renders the brand mark image with alt text', () => {
-    render(<ChatScreen />, { wrapper })
+  it('renders the brand mark image with alt text', async () => {
+    await renderScreen(<ChatScreen />)
     const img = screen.queryByRole('img', { name: /omnipus\.ai mark/i })
     expect(img).not.toBeNull()
   })
@@ -233,18 +232,18 @@ describe('404 NotFound page — branded empty state', () => {
     NotFoundPage = mod.Route.options.notFoundComponent as () => JSX.Element
   }, 60_000)
 
-  it('renders 404 heading', () => {
-    render(<NotFoundPage />)
+  it('renders 404 heading', async () => {
+    await renderScreen(<NotFoundPage />)
     expect(screen.getByText('404')).toBeTruthy()
   })
 
-  it('renders "drifted into the deep" copy', () => {
-    render(<NotFoundPage />)
+  it('renders "drifted into the deep" copy', async () => {
+    await renderScreen(<NotFoundPage />)
     expect(screen.getByText(/drifted into the deep/i)).toBeTruthy()
   })
 
-  it('renders a link back to Chat (/)', () => {
-    render(<NotFoundPage />)
+  it('renders a link back to Chat (/)', async () => {
+    await renderScreen(<NotFoundPage />)
     const link = screen.queryByText(/Back to Chat/i)
     expect(link).not.toBeNull()
   })

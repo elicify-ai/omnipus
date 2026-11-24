@@ -134,7 +134,8 @@ export function SsrfEditor({
                     type="button"
                     aria-label={`Delete SSRF entry ${entry}`}
                     aria-describedby={entryErrorId}
-                    className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
+                    // FR-070 (U1-5): 44x44 under a coarse pointer (design-system rule 12).
+                    className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
                     onClick={() => handleDeleteAdvanced(i)}
                   >
                     <Trash size={12} />

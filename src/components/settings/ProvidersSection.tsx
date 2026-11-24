@@ -707,7 +707,7 @@ function ProviderConfigSheet({
                   title="Re-test the connection"
                   className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                 >
-                  Test
+                  Test connection
                 </Button>
               )}
               {/* ADR-068 US-3 — destructive, so text tier and far from Save. */}
@@ -1476,6 +1476,8 @@ export function ProvidersSection() {
               onProviderConfirm={handleProviderConfirm}
               onSignIn={handlePickerSignIn}
               autoFocus={false}
+              // D-9 id3: the Settings picker opens with its groups collapsed.
+              recentStartsCollapsed
             />
             {/* FR-014: brand marks are rendered above, so the disclaimer rides
                 with them. */}

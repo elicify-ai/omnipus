@@ -146,6 +146,12 @@ export interface ProviderPickerProps {
   onVirtualScrollToIndex?: (index: number) => void
   /** Focus the search field on mount. Default true. */
   autoFocus?: boolean
+  /**
+   * Settings D-9 id3 (U1-10): Recent starts as a collapsed group with its own
+   * toggle, like All providers. Default false: Recent is listed open
+   * (onboarding, ADR-068 FR-022).
+   */
+  recentStartsCollapsed?: boolean
   'data-testid'?: string
 }
 
@@ -171,9 +177,11 @@ export function ProviderPicker({
   rowHeight = PICKER_ROW_HEIGHT,
   onVirtualScrollToIndex,
   autoFocus = true,
+  recentStartsCollapsed = false,
   'data-testid': testId = 'provider-picker',
 }: ProviderPickerProps) {
   const [query, setQuery] = React.useState('')
+  const [recentOpen, setRecentOpen] = React.useState(!recentStartsCollapsed)
   const [expandedByOperator, setExpandedByOperator] = React.useState(false)
   const [customOpen, setCustomOpen] = React.useState(false)
   const [detailCompany, setDetailCompany] = React.useState<PickerCompanyRow | null>(null)
@@ -199,7 +207,12 @@ export function ProviderPicker({
     [catalog, configured, query, expandedByOperator],
   )
 
-  const sequence = React.useMemo(() => pickerRowSequence(model), [model])
+  // A collapsed Recent group's rows are out of the keyboard order, as the
+  // collapsed All providers list's rows are.
+  const sequence = React.useMemo(
+    () => pickerRowSequence(model).filter((ref) => recentOpen || ref.kind !== 'recent'),
+    [model, recentOpen],
+  )
 
   // #1700: a custom endpoint may not be named after a listed provider. Only a
   // loaded catalog can say which ids those are; while it is loading or failed
@@ -424,14 +437,28 @@ export function ProviderPicker({
           // list. The heading stays OUTSIDE that listbox for the mirror-image
           // rule, aria-required-children.
           <div data-testid="picker-recent" className="flex flex-col">
+            {recentStartsCollapsed ? (
+              <Button
+                type="button"
+                variant="ghost"
+                data-testid="picker-recent-toggle"
+                aria-expanded={recentOpen}
+                aria-controls={`${testId}-recent-list`}
+                onClick={() => setRecentOpen((v) => !v)}
+                className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+              >
+                Recent ({model.recent.length})
+              </Button>
+            ) : null}
             <span
               id={`${testId}-recent-label`}
+              hidden={recentStartsCollapsed}
               className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] uppercase"
               style={{ color: 'var(--color-muted)' }}
             >
               Recent
             </span>
-            <div role="listbox" aria-labelledby={`${testId}-recent-label`} className="flex flex-col">
+            <div id={`${testId}-recent-list`} role="listbox" aria-labelledby={`${testId}-recent-label`} hidden={!recentOpen} className="flex flex-col">
               {model.recent.map((recent) => {
                 const key = refKey({ kind: 'recent', key: recent.provider.id })
                 return (

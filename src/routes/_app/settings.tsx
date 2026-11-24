@@ -1,4 +1,5 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { useMemo } from 'react'
+import { createFileRoute, redirect, useLocation } from '@tanstack/react-router'
 import { z } from 'zod'
 import { SettingsScreen } from '@/components/screens/SettingsScreen'
 import { resolveSettingsLink } from '@/components/settings/settingsSections'
@@ -44,11 +45,23 @@ export const Route = createFileRoute('/_app/settings')({
 function SettingsRoute() {
   const search = Route.useSearch()
   const link = resolveSettingsLink(search)
+  // FR-004/D-3 (U1-8): every navigation to a pre-fill link is a new request,
+  // even with the same provider and model (for example the same link followed
+  // again after Discard). The object keeps one identity per history entry, so
+  // the Limits form can tell a new request from a re-render.
+  const navigationKey = useLocation({ select: (l) => l.state.__TSR_key ?? l.state.key })
+  const provider = link.prefillOverride?.provider
+  const model = link.prefillOverride?.model
+  const prefillOverride = useMemo(
+    () => (provider && model ? { provider, model } : undefined),
+    // navigationKey is the point: a new history entry is a new request.
+    [provider, model, navigationKey],
+  )
   return (
     <SettingsScreen
       section={link.section}
       requestedTab={search.tab}
-      prefillOverride={link.prefillOverride}
+      prefillOverride={prefillOverride}
       focusGodMode={link.focusGodMode}
       backupRemoved={link.backupRemoved}
       restarted={search.restarted !== undefined}

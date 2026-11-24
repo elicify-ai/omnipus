@@ -682,7 +682,7 @@ If any entry cannot be authenticated during credential-file format conversion, t
 3. Filter entries by event or decision to narrow the list.
 4. Check the chain status. **Chain verified** means the displayed log passed its integrity check.
 
-The viewer refreshes every 30 seconds. The log includes security events, policy decisions, and tool executions. It can show security-setting changes with their previous and new values.
+The viewer refreshes every 30 seconds. The log includes security events, policy decisions, and tool executions. It can show security-setting changes with their previous and new values, whether the value is text, a number, on/off, a list or a group of settings; a value that was not set shows as **(not set)**, and an empty text value as **(empty)**. If the viewer cannot read an entry, it does not list it, but it says how many entries it could not read, for example **1 entry could not be read and is not listed.**, and counts them in the total under the list.
 
 Before an entry is written, Omnipus replaces recognised credentials with `[REDACTED]` in the command, tool parameters and event details. Recognised formats: `sk-…` and `key-…` keys, `Bearer …` tokens (in any letter case), GitHub `ghp_…`/`gho_…` tokens, Slack `xoxb-…`/`xoxp-…` tokens, AWS access-key IDs (`AKIA…`/`ASIA…`), Google `ya29.…` access tokens, JSON Web Tokens, and the password in a web address, such as `https://user:PASSWORD@host` or `redis://:PASSWORD@host` (only the password is replaced). A value is also replaced when its field is named exactly like a secret (`password`, `token`, `api_key`, `authorization` and a few similar names). This is always on and cannot be switched off. Email addresses are kept, so mail recipients and message IDs appear in full. Anything else is not caught: a plain password typed as a command argument, a raw `/` or `@` inside a web-address password, a scheme-less `user:pw@tcp(…)` connection string, an AWS secret access key, a GitHub fine-grained token (`github_pat_…`) or a Google API key (`AIza…`).
 
@@ -736,7 +736,7 @@ So `User watching: yes` can occasionally be stale. This affects only what the ag
 
 ## Checking an external command-line program
 
-**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
+**Check** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
 
 Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. Settings then shows an error notice. The check itself never saves a program path or an agent, and **Save** works without it.
 
@@ -746,7 +746,7 @@ Before starting anything, Omnipus checks the program file with the same check th
 - the list of those places cannot be read completely — for example a workspace's mount record is unreadable — because then the check cannot tell what is safe (the message names the check `location_unverifiable`);
 - the file is not a regular file, or — on Linux and macOS — the account running Omnipus cannot execute it. On Windows only the regular-file and extension rules are checked before launch; if Windows then refuses to start the program, the result is **handshake-failed**, not **path-not-allowed**.
 
-These program-check refusals never include a file path or operating-system error. Run refusals, command-preview errors and Check CLI notices name the program and failed check. A Settings save explains the reason in plain words; its response carries the program key and failed check separately in `details.cli` and `details.check`. The path and system details are recorded only in the server log. The runner connection check treats a program that passed these checks the same way: if it cannot start or reports no version, its result is fixed text, and the program's output stays in the server log.
+These program-check refusals never include a file path or operating-system error. Run refusals, command-preview errors and **Check** notices name the program and failed check. A Settings save explains the reason in plain words; its response carries the program key and failed check separately in `details.cli` and `details.check`. The path and system details are recorded only in the server log. The runner connection check treats a program that passed these checks the same way: if it cannot start or reports no version, its result is fixed text, and the program's output stays in the server log.
 
 The check only asks whether an agent could have planted the program. It does not check who owns the program or who else can change it: like any program you run yourself, keeping the CLI and its folders protected is your responsibility.
 

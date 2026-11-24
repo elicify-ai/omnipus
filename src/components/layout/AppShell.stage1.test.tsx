@@ -19,7 +19,7 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { SecretRequestState, ToolApprovalActionRequest, ToolApprovalResponse } from '@/lib/api/generated/openapi-types'
+import type { SecretRequestState, ToolApprovalActionRequest, ToolApprovalResponse, UserContextResponse } from '@/lib/api/generated/openapi-types'
 import type { RoomRef, SecretRequestFrame, SessionStateFrame, SessionStateSecretRequest, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
@@ -34,7 +34,19 @@ import {
 } from '../../../tests/l1-room-ui/stage1-harness'
 
 let net: Stage1Network
-beforeEach(() => { resetStage1App(); net = new Stage1Network() })
+beforeEach(() => {
+  resetStage1App()
+  net = new Stage1Network()
+  // Settings #1519 FR-003 / D-3 row10: the unchanged legacy chat URL
+  // now mounts the real Profile. Supply only its HTTP/browser edges.
+  const userContext: UserContextResponse = { content: '' }
+  net.respond('GET', '/api/v1/user-context', () => json(userContext))
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
+})
 afterEach(async () => {
   try {
     expect(net.unexpected, 'the real app must not fail its setup or hide an unexpected network error').toEqual([])
@@ -94,7 +106,8 @@ describe('stage 1 — rooms switched on through the real application shell', () 
     expect(within(workspaces).getByRole('button', { name: 'Mia' })).toBeVisible()
     expect(within(workspaces).getByRole('button', { name: 'Jim' })).toBeVisible()
     await settledReads()
-    expect(router.state.location.pathname).toBe('/settings')
+    // Keep the legacy URL input: FR-003 sends tab=chat to Profile → Chat display.
+    expect(router.state.location.pathname).toBe('/profile')
     const groupChats = screen.getByTestId(`group-chats-${WS}`)
     expect(groupChats).toBeVisible()
     expect(within(groupChats).getByText('Group chats', { exact: true })).toBeVisible()
