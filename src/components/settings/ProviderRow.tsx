@@ -10,8 +10,16 @@ import {
   Globe,
   Question,
   SpinnerGap,
+  DotsThree,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { IconButton } from '@/components/ui/icon-button'
 import { Badge } from '@/components/ui/badge'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { Card } from '@/components/ui/card'
@@ -459,28 +467,37 @@ export function ProviderRow({
         </div>
 
         <div className="flex items-center gap-[var(--space-2)] shrink-0">
-          {onCheckEntitlement && (
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={onCheckEntitlement}
-              actionState={checkingEntitlement ? 'pending' : 'idle'}
-              className="h-auto w-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
-              data-testid={`check-entitlement-btn-${provider.id}`}
-            >
-              Check with my account
-            </Button>
-          )}
-          {onSetAsDefault && (
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={onSetAsDefault}
-              className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
-              data-testid={`set-default-btn-${provider.id}`}
-            >
-              Set as default model…
-            </Button>
+          {/* D-9 ids 6/7 (U1-10): the two secondary row actions live in the
+              row's More actions menu; the main action stays inline. */}
+          {(onCheckEntitlement || onSetAsDefault) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton
+                  size="sm"
+                  aria-label={`More actions for ${title}`}
+                  data-testid={`provider-row-more-${provider.id}`}
+                  className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
+                >
+                  <DotsThree size={14} weight="bold" aria-hidden="true" />
+                </IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {onCheckEntitlement && (
+                  <DropdownMenuItem
+                    onSelect={onCheckEntitlement}
+                    disabled={checkingEntitlement}
+                    data-testid={`check-entitlement-btn-${provider.id}`}
+                  >
+                    Check with my account
+                  </DropdownMenuItem>
+                )}
+                {onSetAsDefault && (
+                  <DropdownMenuItem onSelect={onSetAsDefault} data-testid={`set-default-btn-${provider.id}`}>
+                    Set as default model…
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           {/* WU-24 (founder 2026-10-14): a sign-in row whose id the server no
               longer recognises (a removed provider left configured) keeps its
