@@ -87,6 +87,12 @@ export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, o
           {item.description && (
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] wrap-anywhere">{item.description}</p>
           )}
+          {item.loadError && (
+            <p className="text-[length:var(--type-caption-size)] wrap-anywhere">
+              <span className="font-medium text-[var(--color-error)]">Cannot load</span>
+              <span className="text-[var(--color-muted)]">{`: ${item.loadError}`}</span>
+            </p>
+          )}
         </div>
         {item.fixedSentence ? (
           <p className="max-w-[28rem] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{item.fixedSentence}</p>

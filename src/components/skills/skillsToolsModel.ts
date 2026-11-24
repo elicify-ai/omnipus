@@ -86,6 +86,8 @@ export interface CatalogItem {
   defaultLevel: ModelVisibility
   /** Values this row may not take (always-ask tools never Allow). */
   refused: readonly ToolPolicy[]
+  /** Why the server could not read this skill (S-80, FR-063). */
+  loadError?: string
 }
 
 export function toolItems(tools: readonly ToolRegistryEntry[]): CatalogItem[] {
@@ -123,6 +125,7 @@ export function skillItems(skills: readonly Skill[]): CatalogItem[] {
       levelLocked: false,
       defaultLevel: 'name_and_description',
       refused: [],
+      ...(skill.load_error ? { loadError: skill.load_error } : {}),
     }
   })
 }

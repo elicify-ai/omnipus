@@ -263,6 +263,13 @@ export function SkillsScreen() {
                       </Badge>
                     </div>
                     <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">{skill.description}</p>
+                    {/* S-80 / FR-063: an unreadable skill stays listed with its reason. */}
+                    {skill.load_error && (
+                      <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)]">
+                        <span className="font-medium text-[var(--color-error)]">Cannot load</span>
+                        <span className="text-[var(--color-muted)]">{`: ${skill.load_error}`}</span>
+                      </p>
+                    )}
                     <div className="flex items-center gap-[var(--space-2-5)] mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       {skill.author && <span>by {skill.author}</span>}
                       {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
