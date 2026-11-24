@@ -1,8 +1,12 @@
 package agent
 
-// S20/FR013: actual Dev turn pushes a real pack over authenticated HTTPS.
-// The project is a normal approved mount. The engine's evidence repo remains
-// protected and is tested denied, never unprotected or used as the push source.
+// S20/FR013, founder Q1 A / architect H48 B1: Given GitHub connected and on
+// for Dev, with an operator-approved WRITE mount holding a Git project whose
+// origin is the local HTTPS receiver accepting only the spec account/token.
+// When Dev pushes through bash with that mount as cwd, Then the actual transfer
+// succeeds as x-access-token without the token in config, remote URL or argv.
+// And the same push from the workspace remains refused by the evidence guard.
+// ADR-063 D4's no-write-grant control is separate from a real write mount.
 import (
 	"net/http"
 	"os"
@@ -12,11 +16,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/require"
 )
 
-func TestProgramGitHelper_HTTPSPush(t *testing.T) {
+func TestProgramGitHelper_ResetChain(t *testing.T) {
 	t.Run("S20_no_token_in_config_or_arguments", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Fatal("BLOCKED: native Windows HTTPS Git/argv-observer fixture is not implemented; this POSIX wrapper does not certify S20/FR013 on Windows")
@@ -24,7 +29,9 @@ func TestProgramGitHelper_HTTPSPush(t *testing.T) {
 		programsIsolateGit(t)
 		git, err := exec.LookPath("git")
 		require.NoError(t, err, "real installed Git is required, not a fake push executable")
-		f := newProgramsTurnFixture(t)
+		f := newProgramsTurnFixtureFor(t, func(cfg *config.Config) {
+			cfg.Sandbox.ToolPolicies["read_file"] = "allow"
+		})
 		childHome := programsForeground(t, f, "s20-home", "printf '%s' \"$HOME\"")
 		rel, err := filepath.Rel(f.home, childHome)
 		require.NoError(t, err)
@@ -80,12 +87,19 @@ func TestProgramGitHelper_HTTPSPush(t *testing.T) {
 		blocked := programsForeground(t, f, "s20-evidence-denial", "git push origin HEAD:refs/heads/s20 && printf 'S20_PUSH_DONE'")
 		require.Contains(t, blocked, "protected evidence repo")
 		require.NotContains(t, blocked, "S20_PUSH_DONE")
+		users, packs, rejected := receiver.state.snapshot()
+		require.Empty(t, users, "workspace refusal must not authenticate")
+		require.Zero(t, packs, "workspace refusal must not transfer a pack")
+		require.Equal(t, 2, rejected, "workspace refusal must not reach HTTP beyond the two direct401 controls")
+		require.Empty(t, programsGitSetup(t, git, childHome, "", "--git-dir", receiver.repo, "for-each-ref", "--format=%(objectname)", "refs/heads/s20"))
+		t.Log("S20 workspace/evidence control: actual-loop push refused; no HTTP/account/pack/ref effect")
+		programsGitNoWriteGrant(t, f, git, childHome, project, receiver)
 		push := "git push origin HEAD:refs/heads/s20 && printf 'S20_PUSH_DONE'"
 		f.al.GetConfig().Agents.List[0].Programs = nil
 		off := programsGitMountedTurn(t, f, "s20-programs-off", mount.Name, push)
-		require.NotContains(t, off, "path escapes workspace", "BLOCKED: actual S20 project-push admission is unresolved; an approved write mount is not an admitted execution cwd. Do not disable or evade the evidence/path guard. Result: %s", off)
+		require.NotContains(t, off, "path escapes workspace", "S20/H48 B1: an operator-approved write mount must be admitted as bash cwd; the unchanged evidence/path guards must still refuse the two negative controls. Actual refusal: %s", off)
 		require.NotContains(t, off, "S20_PUSH_DONE")
-		users, packs, rejected := receiver.state.snapshot()
+		users, packs, rejected = receiver.state.snapshot()
 		require.Empty(t, users, "off control must not authenticate using an ambient saved login")
 		require.Zero(t, packs)
 		require.Greater(t, rejected, 2, "instrument: actual off child reached the receiver after two direct401 controls")
@@ -104,6 +118,6 @@ func TestProgramGitHelper_HTTPSPush(t *testing.T) {
 		require.Equal(t, 1, packs, "one actual authenticated receive-pack POST, not a credential-fill surrogate")
 		programsGitObserveArguments(t, observed)
 		programsGitObserveConfig(t, observed, f.home, project, filepath.Dir(receiver.repo))
-		t.Log("actual Dev loop: protected evidence push denied; approved-mount off control401; managed helper authenticated x-access-token; HTTPS receive-pack updated exact source ref/content; positive config/URL/argv controls contain no token")
+		t.Log("actual Dev loop: protected workspace push denied; no-write-grant project read succeeds but cwd/push refused; approved-write-mount off control401; managed helper authenticated x-access-token; HTTPS receive-pack updated exact source ref/content; positive config/URL/argv controls contain no token")
 	})
 }
