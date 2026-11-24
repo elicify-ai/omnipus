@@ -1,7 +1,7 @@
 /**
  * S1 rev 8, order 36: S01/S12/S33/S53/S81 browser surfaces.
  * Each test/retry imports an owned gateway, fake gh, account and clean home.
- * S12's selected-private publication is explicitly BLOCKED, not assumed seeded.
+ * S12's selected private GH_TOKEN is seeded through Dev's real request_secret card.
  * This file complements (does not replace) the complete D8/body/store Go rows.
  */
 import type { Page } from '@playwright/test';
@@ -62,7 +62,7 @@ test.describe('Programs — private real gateway', () => {
   });
 
   test('S12: real selected private GH_TOKEN refuses switch-on in Dev profile', async ({ page, programsS1: f }) => {
-    await f.seedPrivateGH_TOKEN(); // loud BLOCKED until real selected metadata exists
+    await f.seedPrivateGH_TOKEN(); // Given: Dev's own card stores and selects GH_TOKEN in W
     const profile = await openProfile(page, f.gateway.baseURL, f.workspaceId, f.devId);
     const toggle = profile.getByRole('switch', { name: /github/i });
     await expect(toggle).not.toBeChecked();
