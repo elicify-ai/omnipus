@@ -8,6 +8,7 @@ package programs
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 	"time"
@@ -27,32 +28,32 @@ func setProcessGroup(cmd *exec.Cmd) {
 func startProcessGroup(_ *exec.Cmd) error { return nil }
 
 // releaseProcessGroup has nothing to release on Unix.
-func releaseProcessGroup(_ *exec.Cmd) {}
+func releaseProcessGroup(_ *os.Process) {}
 
 // stopProcessGroup kills the check's whole process group.
-func stopProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
+func stopProcessGroup(proc *os.Process) {
+	if proc == nil {
 		return
 	}
 	// The group id is the child's pid (Setpgid). ESRCH means it already
 	// ended; the child itself is killed too in case the group kill failed.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	_ = cmd.Process.Kill()
+	_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
+	_ = proc.Kill()
 }
 
 // awaitProcessGroupGone waits (bounded) until no process of the stopped
 // check's group is left, so a stopped check is reported only once its whole
 // group is gone. Call it after cmd.Wait has reaped the direct child.
-func awaitProcessGroupGone(cmd *exec.Cmd) {
-	if cmd.Process == nil {
+func awaitProcessGroupGone(proc *os.Process) {
+	if proc == nil {
 		return
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-cmd.Process.Pid, 0); errors.Is(err, syscall.ESRCH) {
+		if err := syscall.Kill(-proc.Pid, 0); errors.Is(err, syscall.ESRCH) {
 			return
 		}
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
 		time.Sleep(20 * time.Millisecond)
 	}
 }

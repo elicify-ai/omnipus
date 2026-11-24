@@ -8,6 +8,7 @@ package programs
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -29,8 +30,8 @@ const checkWaitDelay = 5 * time.Second
 // token.
 var checkJobs = struct {
 	sync.Mutex
-	byCmd map[*exec.Cmd]windows.Handle
-}{byCmd: map[*exec.Cmd]windows.Handle{}}
+	byProcess map[*os.Process]windows.Handle
+}{byProcess: map[*os.Process]windows.Handle{}}
 
 // setProcessGroup starts the check in a new process group (FR-005) and bounds
 // the pipe wait.
@@ -68,7 +69,7 @@ func startProcessGroup(cmd *exec.Cmd) error {
 		return fmt.Errorf("programs: assign account check to its job: %w", err)
 	}
 	checkJobs.Lock()
-	checkJobs.byCmd[cmd] = job
+	checkJobs.byProcess[cmd.Process] = job
 	checkJobs.Unlock()
 	return nil
 }
@@ -93,17 +94,17 @@ func newKillOnCloseJob() (windows.Handle, error) {
 
 // stopProcessGroup terminates every process in the check's job, then the
 // check itself.
-func stopProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
+func stopProcessGroup(proc *os.Process) {
+	if proc == nil {
 		return
 	}
 	checkJobs.Lock()
-	job, ok := checkJobs.byCmd[cmd]
+	job, ok := checkJobs.byProcess[proc]
 	checkJobs.Unlock()
 	if ok {
 		_ = windows.TerminateJobObject(job, 1)
 	}
-	_ = cmd.Process.Kill()
+	_ = proc.Kill()
 }
 
 // jobAccounting mirrors JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.
@@ -121,9 +122,9 @@ type jobAccounting struct {
 // awaitProcessGroupGone waits (bounded) until no process of the stopped
 // check's job is left, terminating it again while any is, then releases the
 // job. Call it after cmd.Wait returned.
-func awaitProcessGroupGone(cmd *exec.Cmd) {
+func awaitProcessGroupGone(proc *os.Process) {
 	checkJobs.Lock()
-	job, ok := checkJobs.byCmd[cmd]
+	job, ok := checkJobs.byProcess[proc]
 	checkJobs.Unlock()
 	if !ok {
 		return
@@ -139,16 +140,16 @@ func awaitProcessGroupGone(cmd *exec.Cmd) {
 		_ = windows.TerminateJobObject(job, 1)
 		time.Sleep(20 * time.Millisecond)
 	}
-	releaseProcessGroup(cmd)
+	releaseProcessGroup(proc)
 }
 
 // releaseProcessGroup closes the check's job. KILL_ON_JOB_CLOSE stops any
 // process the check left behind, so no helper outlives its check with the
 // token.
-func releaseProcessGroup(cmd *exec.Cmd) {
+func releaseProcessGroup(proc *os.Process) {
 	checkJobs.Lock()
-	job, ok := checkJobs.byCmd[cmd]
-	delete(checkJobs.byCmd, cmd)
+	job, ok := checkJobs.byProcess[proc]
+	delete(checkJobs.byProcess, proc)
 	checkJobs.Unlock()
 	if ok {
 		_ = windows.CloseHandle(job)

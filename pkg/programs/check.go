@@ -114,7 +114,7 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	if !started {
 		return startRes
 	}
-	defer releaseProcessGroup(cmd)
+	defer releaseProcessGroup(cmd.Process)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	timer := time.NewTimer(timeout)
@@ -123,15 +123,15 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 	select {
 	case waitErr = <-done:
 	case <-timer.C:
-		stopProcessGroup(cmd)
+		stopProcessGroup(cmd.Process)
 		<-done
-		awaitProcessGroupGone(cmd)
+		awaitProcessGroupGone(cmd.Process)
 		return checkResult{state: StateCheckFailed,
 			message: fmt.Sprintf("The account check did not finish in %d s.", int(timeout/time.Second))}
 	case <-ctx.Done():
-		stopProcessGroup(cmd)
+		stopProcessGroup(cmd.Process)
 		<-done
-		awaitProcessGroupGone(cmd)
+		awaitProcessGroupGone(cmd.Process)
 		return replacedCheckResult
 	}
 	if waitErr != nil {
