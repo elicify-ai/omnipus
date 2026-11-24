@@ -714,6 +714,17 @@ type AgentType string
 type AgentToolsCfg struct {
 	Builtin AgentBuiltinToolsCfg `json:"builtin,omitempty"`
 	MCP     AgentMCPToolsCfg     `json:"mcp,omitempty"`
+	// Skills holds the agent's sparse per-skill overrides (Skills & Tools
+	// C-4). nil = none stored; every writer that does not name skills keeps
+	// the stored value (C-21).
+	Skills *AgentSkillsCfg `json:"skills,omitempty"`
+}
+
+// AgentSkillsCfg is the agent's own skill permissions: sparse overrides
+// keyed by C-23 skill key, only ever tightening below the global value at
+// run time (strictest wins). No backfill (Hard Constraint 6).
+type AgentSkillsCfg struct {
+	Policies map[string]ToolPolicy `json:"policies"`
 }
 
 // ToolPolicy defines the access policy for a tool on a specific agent.
