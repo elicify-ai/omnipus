@@ -192,6 +192,28 @@ html {
   outline: none !important;
 }
 
+/* Switch hit region (FR-070, U1-5; design-system rule 12). The kit's shared
+   [data-ds-action] expander from library.css, shipped in the app for the
+   Switch only: the visible track stays 36x20 while the tap area grows to the
+   touch minimum under a coarse pointer. Other kit controls size themselves
+   explicitly in the app, so the expander is not applied to them here. */
+[role='switch'][data-ds-action]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, var(--icon-target-pointer));
+  height: max(100%, var(--icon-target-pointer));
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+@media (pointer: coarse) {
+  [role='switch'][data-ds-action]::before {
+    width: max(100%, var(--icon-target-touch));
+    height: max(100%, var(--icon-target-touch));
+  }
+}
+
 body {
   margin: 0;
   background-color: var(--color-primary);

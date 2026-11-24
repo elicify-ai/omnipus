@@ -520,7 +520,7 @@ export function IntegrationsSection() {
           {[1, 2, 3].map((i) => (
             <Card
               key={i}
-              className="h-14 animate-pulse"
+              className="h-14 animate-pulse motion-reduce:animate-none"
             />
           ))}
         </div>
