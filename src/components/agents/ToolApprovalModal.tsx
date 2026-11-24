@@ -8,40 +8,26 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons — wire action values renamed by ADR-092 D4:
-//   Approve Once → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
-//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow", scope}
-//   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
-//   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
-// "Approve" was relabelled "Approve Once" (review finding, post-D4) — as a
-// backend lane makes allow_once record NO grant, "Approve" alone read as
-// ambiguous next to "Always Allow"; the label must say one-time on its face.
-// The action mapping itself (Approve Once → allow_once, Always Allow →
-// allow) was already correct and is unchanged.
+// Buttons — exactly the server's offered choices (Skills & Tools C-24/C-26,
+// rendered by ApprovalCard.tsx::ApprovalChoices), each a
+// POST /api/v1/tool-approvals/{id}:
+//   Approve Once            → {action:"allow_once"}
+//   Allow for 1h / 3h / 1d  → {action:"allow_for", duration[, scope for bash]}
+//   Approve this version…   → {action:"approve_version"} / "approve_version_allow_for"
+//   Deny                    → {action:"deny"}
+//   Cancel                  → {action:"cancel"}
+// No card offers a lasting allow: that exists only as stored policy. The five
+// exact-action tools and always-ask tools never get a time choice. After a
+// timed choice the toast reports what the server stored (expires_at), never
+// what was asked.
 //
-// ADR-092 D4 status: the wire-value rename (L0: approve→allow_once,
-// always→allow) landed first so the component compiled against the current
-// ToolApprovalActionRequest enum. This pass adds the two pieces that were
-// still open:
-//   - Grant scope (FR-024): for a shell (`bash`) command only, a RadioGroup
-//     ("Allow this exact command" / "Allow commands starting with <server-
-//     suggested prefix>") appears above the buttons whenever Always Allow is
-//     offered; the selected scope is sent on `allow` only (omitted for every
-//     other action/tool, matching the contract's default). The "prefix"
-//     option only ever appears once the server has actually supplied a
-//     suggested prefix (CommandSegmentInfo.suggested_prefix) — never guessed
-//     client-side.
-//   - Per-segment display (FR-025/FR-027): when the frame carried
-//     ToolApprovalRequiredFrame.segments (a chained command the D3 matcher
-//     could not fully resolve), each segment's command text is shown
-//     separately with its resolved binary highlighted, in the generic
-//     (non-`replace`-mode) tool-info area.
-// The four-button layout (including the rendered Cancel button) is
-// UNCHANGED by this pass — D4's UI-presentation note describing a
-// [Deny][Allow once][Allow]-only layout with no rendered Cancel button is
-// not implemented here; `cancel` already behaves as a distinct wire value
-// from `deny` per FR-023, which is the part of that note this modal's own
-// resolution test (ToolApprovalModal.resolution.test.tsx) depends on.
+// Grant scope (FR-024): for a shell (`bash`) command with time choices on
+// offer, a RadioGroup ("Allow this exact command" / "Allow commands starting
+// with <server-suggested prefix>") says what the time limit covers; the
+// selected scope is sent on timed actions only. The "prefix" option appears
+// only once the server supplied CommandSegmentInfo.suggested_prefix.
+// Per-segment display (FR-025/FR-027): when the frame carried segments, each
+// segment's command text is shown separately with its binary highlighted.
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -87,18 +73,11 @@
 //     'additive' entry — rendered whenever toolName is "bash" and
 //     args.command is a string, in addition to (not instead of) the generic
 //     Arguments JSON dump. See the per-tool preview registry note below.
-//   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
-//     Allow") is now fully available here too — the Allow button posts
-//     {action:"allow"}, which the gateway resolves by approving the call AND
-//     recording a session-scoped grant via ApprovalGrantStore.Record
-//     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
-//     (ToolApprovalActionRequest.action) carries "allow" for every tool, not
-//     just bash — closing the gap that used to make grant-inheritance
-//     (agent-delegation-spec.md FR-D8) reachable only via the retired
-//     exec-only flow.
+//   - The exec flow's lasting "Always Allow" is retired (C-24): a card now
+//     offers only one-request and time-limited choices.
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { ArrowSquareOut, CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { ArrowSquareOut, XCircle, ProhibitInset, Shield, WarningCircle } from '@phosphor-icons/react'
 import { useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -124,6 +103,14 @@ import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
 import { highlightBinaryInText } from './approvalPreviews/BashApprovalPreview'
+import {
+  ApprovalChoices,
+  resolveOfferedActions,
+  timedChoiceResult,
+  type ApprovalAction,
+  type ApprovalChoice,
+  type ApprovalDuration,
+} from './ApprovalCard'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
@@ -224,6 +211,13 @@ interface ToolApprovalCardProps {
   segments?: CommandSegmentInfo[]
   /** K7 / FR-251: server-derived turn origin, retained across reconnects. */
   originLabel?: string
+  /** K7: display name of the acting agent (a helper names itself). */
+  actingAgentName?: string
+  /** C-24/C-26: the server-computed choices of this card. */
+  offeredActions?: readonly ApprovalAction[]
+  allowDurations?: readonly ApprovalDuration[]
+  /** C-9: an unverified skill install under Ask has one install choice. */
+  skillUnverifiedInstall?: boolean
 }
 
 function ToolApprovalCard({
@@ -236,6 +230,10 @@ function ToolApprovalCard({
   sessionId,
   segments,
   originLabel,
+  actingAgentName,
+  offeredActions,
+  allowDurations,
+  skillUnverifiedInstall,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -290,65 +288,65 @@ function ToolApprovalCard({
     if (!prefixScopeAvailable && scope === 'prefix') setScope('exact')
   }, [prefixScopeAvailable, scope])
 
+  // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
+  // Agent display name (D-87): a permission prompt is exactly where the human
+  // needs to know WHICH agent is asking, and a raw UUID is not that. The
+  // ['agents'] cache is usually warm (the sidebar and chat both populate it);
+  // when it is not — this dialog can open on any screen — fetch it once and
+  // re-render. The id remains the fallback so the prompt is never blank.
+  const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    // K7: a server-supplied acting_agent_name already names the actor.
+    if (cachedAgentName || actingAgentName) return
+    let cancelled = false
+    queryClient
+      .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
+      .then((agents) => {
+        if (cancelled) return
+        const name = agents.find((a) => a.id === agentId)?.name
+        if (name) setFetchedAgentName(name)
+      })
+      .catch(() => {
+        /* the id fallback below stands */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentId, cachedAgentName, actingAgentName])
+  const resolvedAgentName = actingAgentName || cachedAgentName || fetchedAgentName || agentId
+
+  // dismissFirst: take the card off THIS tab before the request goes out.
+  // Cancel and Close/Escape/overlay pass it — they must dismiss locally
+  // whatever the server answers. If the server still holds the approval
+  // open, the next session_state snapshot restores it (the agent is still
+  // waiting), so nothing is lost by dismissing early.
   const handleAction = useCallback(
-    // Action union sourced from submitToolApproval's own signature (which in
-    // turn is the generated ToolApprovalActionRequest['action']) rather than
-    // a hand-rolled literal, per Constraint #8.
-    //
-    // dismissFirst: take the card off THIS tab before the request goes out.
-    // Cancel and Close/Escape/overlay pass it — they must dismiss locally
-    // whatever the server answers. If the server still holds the approval
-    // open, the next session_state snapshot restores it (the agent is still
-    // waiting), so nothing is lost by dismissing early.
-    async (action: Parameters<typeof submitToolApproval>[1], opts?: { dismissFirst?: boolean }) => {
+    async (choice: ApprovalChoice, opts?: { dismissFirst?: boolean }) => {
       if (submitting) return
       setSubmitting(true)
       if (opts?.dismissFirst) dequeue(approvalId)
+      const { action, duration } = choice
+      const timed = action === 'allow_for' || action === 'approve_version_allow_for'
       try {
-        // ADR-092 D4/FR-024: scope is only meaningful (and only sent) when
-        // this action IS the grant-recording "allow" AND the approval is a
-        // shell command — every other action/tool combination calls
-        // submitToolApproval with its two-argument signature (no `scope` at
-        // all, not even an explicit `undefined` third argument) so the wire
-        // body has no `scope` key, matching the contract's own "ignored
-        // otherwise" note without relying on the server to ignore a stray
-        // value.
-        const resp =
-          action === 'allow' && isShellCommand
-            ? await submitToolApproval(approvalId, action, scope)
-            : await submitToolApproval(approvalId, action)
-        if (action === 'allow') {
-          if (resp.grant_recorded !== true) {
-            addToast({
-              message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
-              variant: 'warning',
-            })
-          } else if (resp.scope) {
-            // ADR-092 D4/FR-024: resp.scope is the scope the server actually
-            // RECORDED, not a passthrough of the local `scope` selection —
-            // show that, not the client's own request, so a server-side
-            // downgrade (e.g. no prefix suggestion survived a race) is never
-            // silently different from what the operator is told stuck.
-            addToast({
-              message:
-                resp.scope === 'prefix'
-                  ? 'Always allowed — every command starting with that prefix is now allowed for this session.'
-                  : 'Always allowed — this exact command is now allowed for this session.',
-              variant: 'success',
-            })
-          }
+        // ADR-092 D4/FR-024: a bash card's time limit keeps its narrow scope;
+        // every other body carries only the action and, when timed, its
+        // duration.
+        const resp = await submitToolApproval(approvalId, action, {
+          ...(timed && duration ? { duration } : {}),
+          ...(timed && isShellCommand ? { scope } : {}),
+        })
+        if (timed) {
+          // C-24/C-26: report what the server stored, never what was asked.
+          addToast(timedChoiceResult(resp, resolvedAgentName))
         }
         // The server resolved it: remember that, rather than only hiding it.
         markResolved(approvalId)
       } catch (err) {
         if (isApiError(err)) {
           if (err.status === 401) {
-            // D9 fix: this POST bypasses React Query entirely (raw await), so
-            // queryClient.ts's global 401 subscriber never saw it — the rest
-            // of the app (Sidebar's "logged in as X", every other open
-            // screen) kept looking logged-in while this modal alone knew the
-            // session was dead. Route through the same forced-logout path
-            // every other 401 uses instead of a toast-only dead end.
+            // D9 fix: this POST bypasses React Query entirely, so route
+            // through the same forced-logout path every other 401 uses.
             addToast({
               message: 'Session expired — please log in again to approve tool calls.',
               variant: 'error',
@@ -360,16 +358,9 @@ function ToolApprovalCard({
               variant: 'error',
             })
           } else if (err.status === 404 || err.status === 410) {
-            // No longer pending on the server. 410 = resolved within the
-            // registry's terminal-retention window; 404 = resolved longer
-            // ago than that (the entry was purged) or never existed. Nothing
-            // is left to decide, so the card must go and stay gone — before
-            // this, a 404 only toasted and left a dialog whose every button
-            // (Close included) re-sent a request that could only 404 again.
+            // No longer pending on the server: the card goes and stays gone.
             markResolved(approvalId)
-            if (action === 'allow_once' || action === 'allow') {
-              // Deny/cancel stay silent (what the user asked for holds or no
-              // longer matters). An approval that did not land deserves a word.
+            if (action !== 'deny' && action !== 'cancel') {
               addToast({
                 message: 'This request was already closed before your approval arrived, so your approval was not applied.',
                 variant: 'warning',
@@ -392,7 +383,7 @@ function ToolApprovalCard({
         setSubmitting(false)
       }
     },
-    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
+    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope, resolvedAgentName],
   )
 
   // Safe-default handler for Escape / overlay-click / X close. The Dialog
@@ -408,49 +399,20 @@ function ToolApprovalCard({
     if (hasExpired) {
       dequeue(approvalId)
     } else {
-      void handleAction('deny', { dismissFirst: true })
+      void handleAction({ action: 'deny' }, { dismissFirst: true })
     }
   }, [submitting, hasExpired, dequeue, approvalId, handleAction])
 
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
-  const mountPath =
-    typeof args.host_path === 'string' ? args.host_path.trim()
-    : typeof args.path === 'string' ? args.path.trim()
-    : ''
-  // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button. An always-ask
-  // tool's approval is never remembered (channels FR-038): no Always Allow.
+  // C-24/C-26: the card offers exactly the server's choices. An always-ask
+  // tool answers one request (channels FR-038); exact-action tools
+  // (request_mount among them) never get a time choice.
   const alwaysAsk = isAlwaysAskTool(toolName)
-  const hideAlwaysAllow = alwaysAsk || (toolName === 'request_mount' && !mountPath)
+  const offered = resolveOfferedActions(toolName, offeredActions)
+  const timeChoicesOffered = offered.includes('allow_for') || offered.includes('approve_version_allow_for')
 
-  // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
-  // Agent display name (D-87): a permission prompt is exactly where the human
-  // needs to know WHICH agent is asking, and a raw UUID is not that. The
-  // ['agents'] cache is usually warm (the sidebar and chat both populate it);
-  // when it is not — this dialog can open on any screen — fetch it once and
-  // re-render. The id remains the fallback so the prompt is never blank.
-  const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
-  const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
-  useEffect(() => {
-    if (cachedAgentName) return
-    let cancelled = false
-    queryClient
-      .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
-      .then((agents) => {
-        if (cancelled) return
-        const name = agents.find((a) => a.id === agentId)?.name
-        if (name) setFetchedAgentName(name)
-      })
-      .catch(() => {
-        /* the id fallback below stands */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [agentId, cachedAgentName])
-  const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
   // The card shows only the entry's redacted copy (summary and raw dump alike).
@@ -688,17 +650,13 @@ function ToolApprovalCard({
           )}
         </div>
 
-        {/* ADR-092 D4/FR-024: grant scope choice — only for a shell command
-            with an Always Allow button on offer. "exact" (command text + cwd)
-            is always available and is the default; "prefix" ({binary,
-            arg_prefix}, ignores cwd, token-boundary matched) only appears
-            once the server has actually suggested one (prefixScopeAvailable)
-            — never a client-guessed prefix. Applies to every currently
-            unmatched segment shown above (one choice, not one per segment). */}
-        {!hasExpired && !hideAlwaysAllow && isShellCommand && (
+        {/* ADR-092 D4/FR-024: what a bash card's time limit covers — only
+            for a shell command with time choices on offer. "exact" is the
+            default; "prefix" appears only once the server suggested one. */}
+        {!hasExpired && timeChoicesOffered && isShellCommand && (
           <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
             <RadioGroup
-              aria-label="Grant scope for Always Allow"
+              aria-label="What a time limit covers"
               value={scope}
               onValueChange={(next) => setScope(next as NonNullable<ToolApprovalActionRequest['scope']>)}
               orientation="vertical"
@@ -721,57 +679,28 @@ function ToolApprovalCard({
           </div>
         )}
 
-        {/* Action buttons.
-            Approve/Deny carry equal visual weight as the primary decision.
-            Always Allow is a de-emphasized (ghost) secondary action — it
-            approves this call AND records a session-scoped grant, mirroring
-            the retired ExecApprovalBlock's "Always Allow" ghost button (same
-            Lock icon + muted styling) — see the ADR-036 note atop this file.
-            Cancel stays last and right-aligned (ml-auto) as the least common
-            action. flex-wrap keeps all four usable at phone widths (<768px)
-            without any button clipping. */}
+        {/* Action buttons: exactly the server's offered choices (C-24).
+            Cancel stays last and right-aligned (ml-auto). flex-wrap keeps
+            every choice usable at phone widths. */}
         {!hasExpired && (
           <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <>
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={() => handleAction('allow_once')}
+                <ApprovalChoices
+                  offered={offered}
+                  durations={allowDurations}
+                  agentName={resolvedAgentName}
+                  onceLabel={primaryLabel}
+                  denyLabel={secondaryLabel}
+                  installApproval={skillUnverifiedInstall}
                   disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
-                >
-                  <CheckCircle size={14} weight="bold" aria-hidden="true" />
-                  {primaryLabel}
-                </Button>
-                <Button
-                  ref={denyButtonRef}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleAction('deny')}
-                  disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
-                >
-                  <XCircle size={14} weight="bold" aria-hidden="true" />
-                  {secondaryLabel}
-                </Button>
-                {!hideAlwaysAllow && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid="always-allow-toggle"
-                  onClick={() => handleAction('allow')}
-                  disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
-                >
-                  <Lock size={14} aria-hidden="true" />
-                  Always Allow
-                </Button>
-                )}
+                  denyRef={denyButtonRef}
+                  onChoose={(choice) => void handleAction(choice)}
+                />
                 {showCancelButton && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleAction('cancel', { dismissFirst: true })}
+                    onClick={() => void handleAction({ action: 'cancel' }, { dismissFirst: true })}
                     disabled={submitting}
                     className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
                   >
@@ -826,6 +755,10 @@ export function ToolApprovalModal() {
       sessionId={first.sessionId}
       segments={first.segments}
       originLabel={first.originLabel}
+      actingAgentName={first.actingAgentName}
+      offeredActions={first.offeredActions}
+      allowDurations={first.allowDurations}
+      skillUnverifiedInstall={first.toolName === 'install_skill' && first.skill?.unverified === true}
     />
   )
 }

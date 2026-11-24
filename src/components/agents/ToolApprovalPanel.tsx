@@ -18,20 +18,21 @@
 //     server's deny (shown as expired here).
 //   - The composer stays unlocked.
 //
-// Actions — wire values from ADR-092 D4:
-//   Approve Once → {action:"allow_once"}; Always Allow → {action:"allow", scope}
-//   (bash: exact or the server-suggested prefix); Deny → {action:"deny"};
-//   Cancel → {action:"cancel"}.
+// Actions — the server's offered_actions (Skills & Tools C-24/C-26):
+//   Approve Once → {action:"allow_once"}; Allow for 1 hour / 3 hours / 1 day →
+//   {action:"allow_for", duration, scope?} (bash: exact or the server-suggested
+//   prefix); skill cards add approve_version and approve_version_allow_for;
+//   Deny → {action:"deny"}; Cancel → {action:"cancel"}.
 //
 // Error handling: 401 → forced logout; 403 → admin-only toast; 404/410 → the
-// approval is no longer pending (markResolved; allow/allow_once also warns
-// that it was not applied).
+// approval is no longer pending (markResolved; an approval also warns that it
+// was not applied).
 //
 // Reload: the session_state snapshot carries the full request (bundle B3), so
 // a restored entry is as complete and approvable as a live one.
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { ArrowSquareOut, CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { useEffect, useState, useMemo } from 'react'
+import { ArrowSquareOut, XCircle, ProhibitInset, Shield, WarningCircle } from '@phosphor-icons/react'
 import { useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -50,6 +51,14 @@ import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
 import { highlightBinaryInText } from './approvalPreviews/BashApprovalPreview'
+import {
+  ApprovalChoices,
+  resolveOfferedActions,
+  timedChoiceResult,
+  type ApprovalAction,
+  type ApprovalChoice,
+  type ApprovalDuration,
+} from './ApprovalCard'
 
 function useCountdown(expiresAt: number): { remainingMs: number; progressPct: number; totalMs: number } {
   const [remainingMs, setRemainingMs] = useState(() => Math.max(0, expiresAt - Date.now()))
@@ -152,6 +161,11 @@ interface ToolApprovalCardProps {
   actingAgentName?: string
   /** K7 / §6.18: server-derived turn origin, shown for a non-web origin. */
   originLabel?: string
+  /** C-24/C-26: the server-computed choices of this card. */
+  offeredActions?: readonly ApprovalAction[]
+  allowDurations?: readonly ApprovalDuration[]
+  /** C-9: an unverified skill install under Ask has one install choice. */
+  skillUnverifiedInstall?: boolean
 }
 
 function ToolApprovalCard({
@@ -165,6 +179,9 @@ function ToolApprovalCard({
   segments,
   actingAgentName,
   originLabel,
+  offeredActions,
+  allowDurations,
+  skillUnverifiedInstall,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -216,123 +233,85 @@ function ToolApprovalCard({
     if (!prefixScopeAvailable && scope === 'prefix') setScope('exact')
   }, [prefixScopeAvailable, scope])
 
-  const handleAction = useCallback(
-    // Action union sourced from submitToolApproval's own signature (which in
-    // turn is the generated ToolApprovalActionRequest['action']) rather than
-    // a hand-rolled literal, per Constraint #8.
-    //
-    // dismissFirst: take the card off THIS tab before the request goes out.
-    // Cancel and Close/Escape/overlay pass it — they must dismiss locally
-    // whatever the server answers. If the server still holds the approval
-    // open, the next session_state snapshot restores it (the agent is still
-    // waiting), so nothing is lost by dismissing early.
-    async (action: Parameters<typeof submitToolApproval>[1], opts?: { dismissFirst?: boolean }) => {
-      if (submitting) return
-      setSubmitting(true)
-      if (opts?.dismissFirst) dequeue(approvalId)
-      try {
-        // ADR-092 D4/FR-024: scope is only meaningful (and only sent) when
-        // this action IS the grant-recording "allow" AND the approval is a
-        // shell command — every other action/tool combination calls
-        // submitToolApproval with its two-argument signature (no `scope` at
-        // all, not even an explicit `undefined` third argument) so the wire
-        // body has no `scope` key, matching the contract's own "ignored
-        // otherwise" note without relying on the server to ignore a stray
-        // value.
-        const resp =
-          action === 'allow' && isShellCommand
-            ? await submitToolApproval(approvalId, action, scope)
-            : await submitToolApproval(approvalId, action)
-        if (action === 'allow') {
-          if (resp.grant_recorded !== true) {
+  // dismissFirst: take the card off THIS tab before the request goes out.
+  // Cancel passes it — it must dismiss locally whatever the server answers.
+  // If the server still holds the approval open, the next session_state
+  // snapshot restores it (the agent is still waiting), so nothing is lost.
+  const handleAction = async (choice: ApprovalChoice, opts?: { dismissFirst?: boolean }) => {
+    if (submitting) return
+    setSubmitting(true)
+    if (opts?.dismissFirst) dequeue(approvalId)
+    const { action, duration } = choice
+    const timed = action === 'allow_for' || action === 'approve_version_allow_for'
+    try {
+      // ADR-092 D4/FR-024: a bash card's time limit keeps its narrow scope
+      // (exact command or the server-suggested prefix). Every other body
+      // carries only the action and, for a timed choice, its duration.
+      const resp = await submitToolApproval(approvalId, action, {
+        ...(timed && duration ? { duration } : {}),
+        ...(timed && isShellCommand ? { scope } : {}),
+      })
+      if (timed) {
+        // C-24/C-26: report what the server stored, never what was asked.
+        addToast(timedChoiceResult(resp, resolvedAgentName))
+      }
+      // The server resolved it: remember that, rather than only hiding it.
+      markResolved(approvalId)
+    } catch (err) {
+      if (isApiError(err)) {
+        if (err.status === 401) {
+          // D9 fix: this POST bypasses React Query entirely (raw await), so
+          // queryClient.ts's global 401 subscriber never saw it. Route through
+          // the same forced-logout path every other 401 uses.
+          addToast({
+            message: 'Session expired — please log in again to approve tool calls.',
+            variant: 'error',
+          })
+          forceLogout()
+        } else if (err.status === 403) {
+          addToast({
+            message: 'You must be an admin to approve this tool.',
+            variant: 'error',
+          })
+        } else if (err.status === 404 || err.status === 410) {
+          // No longer pending on the server (410 = resolved within the
+          // registry's retention window; 404 = purged or never existed).
+          // Nothing is left to decide, so the card goes and stays gone.
+          markResolved(approvalId)
+          if (action !== 'deny' && action !== 'cancel') {
+            // Deny/cancel stay silent; an approval that did not land deserves a word.
             addToast({
-              message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+              message: 'This request was already closed before your approval arrived, so your approval was not applied.',
               variant: 'warning',
-            })
-          } else if (resp.scope) {
-            // ADR-092 D4/FR-024: resp.scope is the scope the server actually
-            // RECORDED, not a passthrough of the local `scope` selection —
-            // show that, not the client's own request, so a server-side
-            // downgrade (e.g. no prefix suggestion survived a race) is never
-            // silently different from what the operator is told stuck.
-            addToast({
-              message:
-                resp.scope === 'prefix'
-                  ? 'Always allowed — every command starting with that prefix is now allowed for this session.'
-                  : 'Always allowed — this exact command is now allowed for this session.',
-              variant: 'success',
-            })
-          }
-        }
-        // The server resolved it: remember that, rather than only hiding it.
-        markResolved(approvalId)
-      } catch (err) {
-        if (isApiError(err)) {
-          if (err.status === 401) {
-            // D9 fix: this POST bypasses React Query entirely (raw await), so
-            // queryClient.ts's global 401 subscriber never saw it — the rest
-            // of the app (Sidebar's "logged in as X", every other open
-            // screen) kept looking logged-in while this modal alone knew the
-            // session was dead. Route through the same forced-logout path
-            // every other 401 uses instead of a toast-only dead end.
-            addToast({
-              message: 'Session expired — please log in again to approve tool calls.',
-              variant: 'error',
-            })
-            forceLogout()
-          } else if (err.status === 403) {
-            addToast({
-              message: 'You must be an admin to approve this tool.',
-              variant: 'error',
-            })
-          } else if (err.status === 404 || err.status === 410) {
-            // No longer pending on the server. 410 = resolved within the
-            // registry's terminal-retention window; 404 = resolved longer
-            // ago than that (the entry was purged) or never existed. Nothing
-            // is left to decide, so the card must go and stay gone — before
-            // this, a 404 only toasted and left a dialog whose every button
-            // (Close included) re-sent a request that could only 404 again.
-            markResolved(approvalId)
-            if (action === 'allow_once' || action === 'allow') {
-              // Deny/cancel stay silent (what the user asked for holds or no
-              // longer matters). An approval that did not land deserves a word.
-              addToast({
-                message: 'This request was already closed before your approval arrived, so your approval was not applied.',
-                variant: 'warning',
-              })
-            }
-          } else {
-            addToast({
-              message: `Failed to submit approval: ${err.userMessage}`,
-              variant: 'error',
             })
           }
         } else {
-          const message = err instanceof Error ? err.message : String(err)
           addToast({
-            message: `Failed to submit approval: ${message}`,
+            message: `Failed to submit approval: ${err.userMessage}`,
             variant: 'error',
           })
         }
-      } finally {
-        setSubmitting(false)
+      } else {
+        const message = err instanceof Error ? err.message : String(err)
+        addToast({
+          message: `Failed to submit approval: ${message}`,
+          variant: 'error',
+        })
       }
-    },
-    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
-  )
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
-  const mountPath =
-    typeof args.host_path === 'string' ? args.host_path.trim()
-    : typeof args.path === 'string' ? args.path.trim()
-    : ''
-  // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button. An always-ask
-  // tool's approval is never remembered (channels FR-038): no Always Allow.
+  // C-24/C-26: the card offers exactly the server's choices. An always-ask
+  // tool answers one request (channels FR-038); exact-action tools
+  // (request_mount among them) never get a time choice.
   const alwaysAsk = isAlwaysAskTool(toolName)
-  const hideAlwaysAllow = alwaysAsk || (toolName === 'request_mount' && !mountPath)
+  const offered = resolveOfferedActions(toolName, offeredActions)
+  const timeChoicesOffered = offered.includes('allow_for') || offered.includes('approve_version_allow_for')
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   // Agent display name (D-87): a permission prompt is exactly where the human
@@ -584,17 +563,16 @@ function ToolApprovalCard({
           )}
         </div>
 
-        {/* ADR-092 D4/FR-024: grant scope choice — only for a shell command
-            with an Always Allow button on offer. "exact" (command text + cwd)
-            is always available and is the default; "prefix" ({binary,
-            arg_prefix}, ignores cwd, token-boundary matched) only appears
-            once the server has actually suggested one (prefixScopeAvailable)
-            — never a client-guessed prefix. Applies to every currently
-            unmatched segment shown above (one choice, not one per segment). */}
-        {!hasExpired && !hideAlwaysAllow && isShellCommand && (
+        {/* ADR-092 D4/FR-024: what a bash card's time limit covers — only
+            for a shell command with time choices on offer. "exact" (command
+            text + cwd) is always available and is the default; "prefix"
+            ({binary, arg_prefix}) appears only once the server has suggested
+            one — never a client-guessed prefix. One choice covers every
+            unmatched segment shown above. */}
+        {!hasExpired && timeChoicesOffered && isShellCommand && (
           <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
             <RadioGroup
-              aria-label="Grant scope for Always Allow"
+              aria-label="What a time limit covers"
               value={scope}
               onValueChange={(next) => setScope(next as NonNullable<ToolApprovalActionRequest['scope']>)}
               orientation="vertical"
@@ -618,56 +596,27 @@ function ToolApprovalCard({
         )}
         </div>
 
-        {/* Action buttons.
-            Approve/Deny carry equal visual weight as the primary decision.
-            Always Allow is a de-emphasized (ghost) secondary action — it
-            approves this call AND records a session-scoped grant, mirroring
-            the retired ExecApprovalBlock's "Always Allow" ghost button (same
-            Lock icon + muted styling) — see the ADR-036 note atop this file.
+        {/* Action buttons: exactly the server's offered choices (C-24).
             Cancel stays last and right-aligned (ml-auto) as the least common
-            action. flex-wrap keeps all four usable at phone widths (<768px)
-            without any button clipping. */}
+            action. flex-wrap keeps every choice usable at phone widths. */}
         {!hasExpired && (
           <div className="flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <>
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={() => handleAction('allow_once')}
+                <ApprovalChoices
+                  offered={offered}
+                  durations={allowDurations}
+                  agentName={resolvedAgentName}
+                  onceLabel={primaryLabel}
+                  denyLabel={secondaryLabel}
+                  installApproval={skillUnverifiedInstall}
                   disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
-                >
-                  <CheckCircle size={14} weight="bold" aria-hidden="true" />
-                  {primaryLabel}
-                </Button>
-                <Button
-                    size="sm"
-                  variant="outline"
-                  onClick={() => handleAction('deny')}
-                  disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
-                >
-                  <XCircle size={14} weight="bold" aria-hidden="true" />
-                  {secondaryLabel}
-                </Button>
-                {!hideAlwaysAllow && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  data-testid="always-allow-toggle"
-                  onClick={() => handleAction('allow')}
-                  disabled={submitting}
-                  className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
-                >
-                  <Lock size={14} aria-hidden="true" />
-                  Always Allow
-                </Button>
-                )}
+                  onChoose={(choice) => void handleAction(choice)}
+                />
                 {showCancelButton && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleAction('cancel', { dismissFirst: true })}
+                    onClick={() => void handleAction({ action: 'cancel' }, { dismissFirst: true })}
                     disabled={submitting}
                     className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
                   >
@@ -726,6 +675,9 @@ export function ToolApprovalPanel({ roomId }: { roomId?: string } = {}) {
       segments={first.segments}
       actingAgentName={first.actingAgentName}
       originLabel={first.originLabel}
+      offeredActions={first.offeredActions}
+      allowDurations={first.allowDurations}
+      skillUnverifiedInstall={first.toolName === 'install_skill' && first.skill?.unverified === true}
     />
   )
 }

@@ -3,7 +3,7 @@
  * pkg/tools/always_ask.go's AlwaysAskTools: these tools ask for a fresh
  * approval on every call, also in God Mode, and an approval of one is never
  * remembered — the approval card offers Approve Once, Deny and Cancel, never
- * Always Allow (the server refuses that action for them).
+ * a time choice (the server refuses allow_for for them).
  */
 export const ALWAYS_ASK_TOOLS: readonly string[] = ['set_channel_outbound']
 

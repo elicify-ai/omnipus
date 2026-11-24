@@ -121,29 +121,29 @@ export function updateAgentTools(
 
 /**
  * POST /api/v1/tool-approvals/{approvalId} — resolve a pending tool approval.
- * FR-011, FR-082. Throws with status code prefix on non-2xx (e.g. "403: ...").
+ * FR-011, FR-082. Throws ApiError on non-2xx (e.g. 403, 404, 409).
  *
- * action is the generated ToolApprovalActionRequest['action'] union — includes
- * "allow" (approve this call AND record a session-scoped grant via
- * ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
- * On "allow", grant_recorded is present: true if the standing grant stuck,
- * false if this call was approved once but the next identical call will ask
- * again.
+ * action is the generated ToolApprovalActionRequest['action'] union. Skills &
+ * Tools C-26 replaced the retired lasting "allow" with "allow_for", which
+ * needs a duration (1h / 3h / 1d); the server records a timed allowance for
+ * the approval's agent and reports what it stored in `applied` and
+ * `expires_at` (C-24).
  *
- * scope (ADR-092 D4/FR-024) — the generated ToolApprovalActionRequest['scope']
- * union, "exact" | "prefix". Meaningful only when action is "allow"; the
- * caller (ToolApprovalModal.tsx) omits it entirely for every other action so
- * the wire body has no `scope` key at all, matching the contract's "ignored
- * otherwise" note without relying on the server to ignore a stray value.
+ * scope (ADR-092 D4/FR-024) — "exact" | "prefix" — narrows a bash card's
+ * timed allowance. Only the members the caller supplies are sent, so the
+ * wire body never carries an empty `duration` or `scope` key.
  */
 export function submitToolApproval(
   approvalId: string,
   action: ToolApprovalActionRequest['action'],
-  scope?: ToolApprovalActionRequest['scope'],
+  options?: Pick<ToolApprovalActionRequest, 'duration' | 'scope'>,
 ): Promise<ToolApprovalResponse> {
+  const body: ToolApprovalActionRequest = { action }
+  if (options?.duration) body.duration = options.duration
+  if (options?.scope) body.scope = options.scope
   return request<ToolApprovalResponse>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
-    body: JSON.stringify(scope ? { action, scope } : { action }),
+    body: JSON.stringify(body),
   }, ToolApprovalResponseSchema as ZodType<ToolApprovalResponse>)
 }
 
