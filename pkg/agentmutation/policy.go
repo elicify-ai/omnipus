@@ -323,5 +323,13 @@ func ExcludedRows() []FieldExclusion {
 	for _, leaf := range []string{"mcp_servers[].id", "mcp_servers[].tools[]", "tool_policy_changes.remove[]", "tool_policy_changes.set{}"} {
 		rows = append(rows, FieldExclusion{Side: "REST", Path: leaf, Ops: OpUpdate, Reason: agentPermissionsReason})
 	}
+	// Skills & Tools C-21: REST carries the per-agent skill permissions as
+	// the complete map tools_cfg.skills.policies; the agent tools carry the
+	// sparse patch skill_policy_changes ({set} on create).
+	rows = append(rows,
+		FieldExclusion{Side: "REST", Path: "tools_cfg.skills.policies{}", Ops: OpCreate, Reason: "C-21: the tool's creation skill input is skill_policy_changes.set"},
+		FieldExclusion{Side: "REST", Path: "tools_cfg.skills.policies{}", Ops: OpUpdate, Reason: agentPermissionsReason},
+		FieldExclusion{Side: "tool", Path: "skill_policy_changes.set{}", Ops: OpCreate, Reason: "C-21: REST create sets the same values as the complete map tools_cfg.skills.policies"},
+	)
 	return rows
 }

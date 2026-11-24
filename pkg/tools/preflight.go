@@ -805,7 +805,9 @@ func EvaluateNetworkPreflight(command string, granted bool, approvedHosts []stri
 			PolicyRule: "command classified as network-capable with no extractable host (blind network need) and no network grant recorded — Auto escalation required (FR-042/FR-043), ports only",
 		}
 	}
-	if granted && allHostsApproved(hosts, approvedHosts) {
+	// Skills & Tools C-26: an allowance for named addresses covers exactly
+	// those addresses; it no longer needs (or grants) the any-address one.
+	if allHostsApproved(hosts, approvedHosts) {
 		return NetworkPreflightVerdict{
 			Flagged: true, Contained: true, Hosts: hosts,
 			PolicyRule: "command classified as network-capable, and every named host is already approved for this session (FR-044/D-13) — no re-prompt",

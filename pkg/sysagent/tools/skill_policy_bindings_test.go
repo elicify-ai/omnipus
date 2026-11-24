@@ -41,8 +41,8 @@ func seedS74SkillSettings(t testing.TB, home, agentID string) {
 	}
 	setLiveGlobalSkillPolicy(cfg, "plan", "ask")
 	setLiveGlobalSkillPolicy(cfg, "deep-research", "allow")
-	if err := config.SaveConfig(path, cfg); err != nil {
-		t.Fatalf("seed: save config: %v", err)
+	if saveErr := config.SaveConfig(path, cfg); saveErr != nil {
+		t.Fatalf("seed: save config: %v", saveErr)
 	}
 	_, err = agentstore.New(home).Update(agentID, func(a *config.AgentConfig) error {
 		if a.Tools == nil {
