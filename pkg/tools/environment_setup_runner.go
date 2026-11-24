@@ -313,10 +313,13 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 	stdoutReader, stdoutWriter := io.Pipe()
 	stderrReader, stderrWriter := io.Pipe()
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	programs.Attach(cmd, plan.programs)
 	closePipes := func() {
 		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
 		_ = stderrWriter.Close()
+	}
+	if err := programs.Attach(cmd, plan.programs); err != nil {
+		closePipes()
+		return setupStartAbortResult(plan.area, fmt.Sprintf("failed to start command: %v", err))
 	}
 
 	var startErr error

@@ -113,10 +113,13 @@ func (t *ExecTool) runBackground(
 	stdoutReader, stdoutWriter := io.Pipe()
 	stderrReader, stderrWriter := io.Pipe()
 	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
-	programs.Attach(cmd, set)
 	closePipes := func() {
 		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
 		_ = stderrWriter.Close()
+	}
+	if err := programs.Attach(cmd, set); err != nil {
+		closePipes()
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
 	session.outputBuffer = &bytes.Buffer{}

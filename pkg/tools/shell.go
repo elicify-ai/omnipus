@@ -1253,7 +1253,9 @@ func (t *ExecTool) runUnconstrained(
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	// I-1: program variables and the masking writers, before the launch.
-	programs.Attach(cmd, set)
+	if err := programs.Attach(cmd, set); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+	}
 
 	// The floor: profile first (macOS), then the locked-thread spawn that
 	// carries the policy to the child on Linux. A nil policy — sandbox off,

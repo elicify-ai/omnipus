@@ -557,7 +557,9 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// /dev/null without traversing the device tree.
 	cmd.Stdin = bytes.NewReader(nil)
 	if lim.Programs != nil {
-		programs.Attach(cmd, *lim.Programs)
+		if err := programs.Attach(cmd, *lim.Programs); err != nil {
+			return Result{}, fmt.Errorf("hardened_exec: attach program variables: %w", err)
+		}
 	}
 
 	// Apply platform-specific hardening (Setpgid+Pdeathsig+prlimit on
