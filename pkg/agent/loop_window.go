@@ -12,7 +12,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -124,7 +123,7 @@ func (al *AgentLoop) assembleMessages(
 	}
 	// Read before the build: a skill change committed during it makes the
 	// next turn refreeze the menu once more instead of missing the change.
-	ts.skillsMenuGeneration = skills.Generation()
+	ts.skillsMenuGeneration = ts.agent.ContextBuilder.skillMenuGeneration(ts.opts.WorkspaceID)
 	base := ts.agent.ContextBuilder.BuildMessagesForSession(ts.transcriptSessionID, ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)
@@ -183,17 +182,18 @@ func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, transcriptID, s
 	all := agent.Tools.GetAll()
 
 	cfg := al.GetConfig()
-	if cfg == nil || !cfg.Tools.Manifest.Compressed {
+	surface := al.readTurnToolSurface()
+	if cfg == nil || (!surface.Leveled() && !cfg.Tools.Manifest.Compressed) {
 		// Uncompressed: every tool is sent as a full def.
 		return estimateToolDefsTokens(agent.Tools.ToProviderDefs())
 	}
 
 	bucket := manifestBucketKey(agent.ID, transcriptID, sessionKey)
-	loaded := al.sessionLoadedTools(bucket)
+	loaded := al.bucketLoadedTools(surface, bucket)
 
 	sent := make([]tools.Tool, 0, len(all))
 	for _, t := range all {
-		switch tools.ToolManifestTier(t.Name()) {
+		switch surface.TierOf(t.Name()) {
 		case tools.ManifestFull, tools.ManifestInfra:
 			sent = append(sent, t)
 		case tools.ManifestLazy:
@@ -206,7 +206,7 @@ func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, transcriptID, s
 	total := estimateToolDefsTokens(tools.ToolsToProviderDefs(sent))
 	// The compact block for the lazy tools that are NOT loaded. Measured with
 	// the real builder: same input shape the turn passes, same filtering.
-	if note := tools.BuildCompressedManifest(all, loaded); note != "" {
+	if note := surface.BuildManifest(all, loaded); note != "" {
 		total += estimateMessageTokens(providers.Message{Role: "system", Content: note})
 	}
 

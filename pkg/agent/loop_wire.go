@@ -1388,7 +1388,7 @@ func (rw *registerSharedToolsWire3) registerToolSearch(agentID string, agent *Ag
 					// If policy allows a full-tier tool, return the sentinel
 					// "already available — just call it directly" reason so execLoad can
 					// treat it as a no-op success rather than a load.
-					if tools.ToolManifestTier(name) != tools.ManifestLazy {
+					if rw.rs.al.readTurnToolSurface().TierOf(name) != tools.ManifestLazy {
 						for _, t := range policyFiltered {
 							if t.Name() == name {
 								// Policy-allowed full-tier: signal as "already available"

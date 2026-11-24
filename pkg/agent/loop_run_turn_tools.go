@@ -42,6 +42,10 @@ type agentLoopRunTurnToolsExecute struct {
 	// composition step; it rides the tool's context as the backstop marker
 	// (tools.WithSkillWriteApproval). Reset for every call.
 	skillWriteKey string
+	// skillTrustOpen marks a Skill load whose trust check is open (C-12):
+	// only a person's trust approval settles it, never Auto-approve or a
+	// standing allowance. Reset for every call.
+	skillTrustOpen bool
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
@@ -406,7 +410,7 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 	// denies at filter time is left to the exec-time deny path below
 	// (see toolNotOfferedRefusal).
 	if refusal, notOffered := ex.rx.rr.rq.ri.rf.rt.al.toolNotOfferedRefusal(
-		ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.offeredTools, tc.Name, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap, ex.rx.rr.rq.goalForce, ex.rx.rr.rq.ri.cfg.Tools.Manifest.Compressed,
+		ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.offeredTools, tc.Name, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap, ex.rx.rr.rq.goalForce, ex.rx.rr.rq.ri.rf.rt.ts.manifestCompressed(ex.rx.rr.rq.ri.cfg),
 	); notOffered {
 		logger.WarnCF("agent", "Tool call refused: the tool was not offered in this request",
 			map[string]any{
@@ -754,6 +758,11 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 			}
 		}
 	}
+	if ex.toctouPolicy != "deny" {
+		if refusal := ex.composeSkillLoadPolicy(); refusal != "" {
+			return ex.denySkillLoad(tc, refusal)
+		}
+	}
 	if ex.toctouPolicy == "deny" {
 		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
 			return ex.refuseRetiredToolName(tc, canonical)
@@ -845,6 +854,9 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	// §3.4), so it must NOT write a pending placeholder — that would render
 	// an "awaiting approval" card for a call nobody was asked about.
 	ex.autoPin = ex.autoApproveFor()
+	if ex.skillTrustOpen {
+		ex.autoPin = tools.AutoVerdict{Class: tools.AutoVerdictClassAsks, Reason: "an unapproved skill version needs a person's trust approval"}
+	}
 	rules := bashCommandRuleVerdict(rt.ts, ex.toolName, ex.toolArgs)
 	ruleSettled := rules.settlesPrompt()
 	// §5.7 fix: the standing-grant lookup MUST fingerprint against the same
@@ -869,7 +881,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	approved := ex.shellModePin == tools.ShellModeAuto ||
 		ex.autoPin.Run ||
 		ruleSettled ||
-		rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs)
+		(!ex.skillTrustOpen && rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs))
 	if rules.fullyAllowedSettlesPrompt() {
 		// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW rule
 		// fully settled left no audit trail before this fix —

@@ -41,6 +41,10 @@ type AgentInstance struct {
 	Name      string
 	Model     string
 	Fallbacks []string
+	// fullSkillTokens is the Full skills charge of the agent's latest turn
+	// (Skills & Tools C-14), part of the pinned overhead every budget site
+	// subtracts (agentContextBudget).
+	fullSkillTokens atomic.Int64
 	// FallbackModels is the provider-aware fallback chain (FR-005 / FR-007).
 	// Each entry carries its own Provider so a fallback can route through a
 	// different provider than the primary — when set, Fallbacks (the legacy
@@ -409,7 +413,7 @@ func (nai *newAgentInstance) prepareIdentity() {
 	// #657: a default install has the manifest system active but MCP
 	// discovery off, so the old gate rendered no discovery guidance at all.
 	nai.contextBuilder = NewContextBuilder(nai.workspace).
-		WithToolDiscovery(nai.cfg.Tools.Manifest.Compressed).
+		WithToolDiscovery(nai.cfg.Tools.Manifest.Compressed || nai.cfg.Sandbox.ToolVisibility != nil).
 		WithSplitOnMarker(nai.cfg.Agents.Defaults.SplitOnMarker)
 
 	if nai.agentCfg != nil {

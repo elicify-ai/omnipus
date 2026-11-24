@@ -794,7 +794,7 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, w
 	// (FR-9.4): the prompt advertises only the skills this agent is permitted
 	// to use. The menu is uncapped (D1.1) and lists every currently-available
 	// skill, so there is no "search find_skills for the rest" caveat to make.
-	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFuncWithProject(cb.grantedPredicate(cb.skillsLoader.ListSkills()), shelf)
+	skillsSummary := cb.skillsLoader.BuildSkillsMenu(cb.grantedPredicate(cb.skillsLoader.ListSkills()), shelf, cb.skillMenuLevel(workspaceID))
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
@@ -1022,7 +1022,7 @@ func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant,
 	if v.cachedAt.IsZero() {
 		return true
 	}
-	if v.skillsGeneration != skills.Generation() {
+	if v.skillsGeneration != cb.skillMenuGeneration(workspaceID) {
 		return true
 	}
 	if slices.ContainsFunc(cb.sourcePaths(), func(p string) bool {
@@ -1275,7 +1275,7 @@ type cacheBaseline struct {
 // detects its recap; the legacy ("" form) baseline tracks no carry-forward
 // path at all. Called under write lock when the cache is built.
 func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
-	generation := skills.Generation()
+	generation := cb.skillMenuGeneration(workspaceID)
 	skillRoots := cb.skillRoots()
 	srcPaths := cb.sourcePaths()
 
@@ -1350,7 +1350,7 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 	if cb.cachedAt.IsZero() {
 		return true
 	}
-	if cb.cachedSkillsGeneration != skills.Generation() {
+	if cb.cachedSkillsGeneration != cb.skillMenuGeneration("") {
 		return true
 	}
 
@@ -1655,6 +1655,11 @@ func (cb *ContextBuilder) BuildMessagesForSession(
 	if skillsText := cb.buildActiveSkillsContext(activeSkills); skillsText != "" {
 		stringParts = append(stringParts, skillsText)
 		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: skillsText})
+	}
+	// C-14: Full skills whose outcome is allowed, charged with the pinned core.
+	if fullText := cb.fullSkillsContext(workspaceID); fullText != "" {
+		stringParts = append(stringParts, fullText)
+		contentBlocks = append(contentBlocks, providers.ContentBlock{Type: "text", Text: fullText})
 	}
 
 	// FR-007: breadcrumb block — placed AFTER skills, BEFORE the sliding

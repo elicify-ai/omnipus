@@ -190,15 +190,14 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) ([]providers.ToolDefinition, error) {
-	bucket := ts.manifestBucket()
-	loaded := al.pruneLoadedTools(bucket, policyFiltered)
+	loaded := al.retainedTools(ts, policyFiltered)
 
 	// Track which infra tools are already present in policyFiltered so we don't
 	// double-add them. Build the sent list in one pass.
 	infraInFiltered := make(map[string]bool)
 	sent := make([]tools.Tool, 0, len(policyFiltered))
 	for _, t := range policyFiltered {
-		switch tools.ToolManifestTier(t.Name()) {
+		switch ts.toolSurface.TierOf(t.Name()) {
 		case tools.ManifestFull:
 			sent = append(sent, t)
 		case tools.ManifestInfra:
@@ -286,8 +285,7 @@ func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, s
 //
 // The returned string is ephemeral — rebuilt every turn, never persisted.
 func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools.Tool) string {
-	bucket := ts.manifestBucket()
-	loaded := al.sessionLoadedTools(bucket)
+	loaded := al.manifestLoadedTools(ts)
 
 	// ADR-071 §4.3.1(b)/FR-042: read the live PreviewAllLazy revert flag from
 	// the current config and push it into tools.ToolManifestVisibility's
@@ -297,10 +295,9 @@ func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools
 		tools.SetPreviewAllLazy(cfg.Tools.Manifest.PreviewAllLazy)
 	}
 
-	// Collect only the lazy tier tools; BuildCompressedManifest filters further
-	// (infra/full are excluded inside it, but we pass all policyFiltered to keep
-	// the helper self-contained as per its contract).
-	return tools.BuildCompressedManifest(policyFiltered, loaded)
+	// Collect only the lazy tier tools; the surface filters further (infra
+	// and full are excluded inside it, and stored levels pick each line).
+	return ts.toolSurface.BuildManifest(policyFiltered, loaded)
 }
 
 // injectManifestNote appends request-only user text. The send seam combines it

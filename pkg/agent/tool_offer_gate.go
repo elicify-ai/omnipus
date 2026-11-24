@@ -7,6 +7,7 @@ package agent
 import (
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -84,15 +85,37 @@ func (al *AgentLoop) toolNotOfferedRefusal(
 	if _, allowedAtFilter := filterTimePolicyMap[toolName]; !allowedAtFilter {
 		return "", false
 	}
-	lazy := compressed && tools.ToolManifestTier(toolName) == tools.ManifestLazy
+	lazy := compressed && ts.toolSurface.TierOf(toolName) == tools.ManifestLazy
 	if lazy && !goalForce.layer1 && al.sessionLoadedTools(ts.manifestBucket())[toolName] {
 		return "", false
+	}
+	if ts.toolSurface.Leveled() {
+		listed := lazy && listedUnderMoreTools(ts.toolSurface, toolName)
+		return toolNotOfferedMessageListed(toolName, goalForce, lazy, listed), true
 	}
 	return toolNotOfferedMessage(toolName, goalForce, lazy), true
 }
 
-// toolNotOfferedMessage is the tool result a refused not-offered call gets.
+// listedUnderMoreTools reports whether the stored level of name gives it a
+// line in the "More tools" block (name_only or name_and_description).
+func listedUnderMoreTools(surface tools.ToolSurface, name string) bool {
+	switch surface.LevelOf(name) {
+	case config.VisibilityNameOnly, config.VisibilityNameAndDescription:
+		return true
+	}
+	return false
+}
+
+// toolNotOfferedMessage is the tool result a refused not-offered call gets
+// before the tool-loading conversion (pre-conversion tiers).
 func toolNotOfferedMessage(toolName string, goalForce goalForcingDecision, lazy bool) string {
+	listed := lazy && tools.ToolManifestVisibility(toolName) == tools.ManifestPreviewed
+	return toolNotOfferedMessageListed(toolName, goalForce, lazy, listed)
+}
+
+// toolNotOfferedMessageListed builds the refusal text; listed says whether
+// the tool has a line in the "More tools" block.
+func toolNotOfferedMessageListed(toolName string, goalForce goalForcingDecision, lazy, listed bool) string {
 	msg := fmt.Sprintf(
 		"tool %q is not available in this request: it was not among the tools offered to you, so it was not run.",
 		toolName)
@@ -103,7 +126,7 @@ func toolNotOfferedMessage(toolName string, goalForce goalForcingDecision, lazy 
 	case goalForce.layer1:
 		msg += " Right now only set_goal can be called: register the goal with set_goal first. " +
 			"Your full tool set comes back once the goal record is registered."
-	case lazy && tools.ToolManifestVisibility(toolName) == tools.ManifestPreviewed:
+	case listed:
 		// ManifestPreviewed (Tier 2) tools get a real "  - <name> — ..." line
 		// in the compressed manifest's "More tools" block (BuildCompressedManifest,
 		// pkg/tools/manifest.go) — "listed under More tools" is literally true here.
