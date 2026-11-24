@@ -13,7 +13,7 @@
  */
 import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentType } from 'react'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import type {
@@ -84,6 +84,10 @@ const checkCalls = () => calls.filter((c) => c.method === 'POST' && c.path === c
 const codexPathInput = () => screen.getByRole('textbox', { name: 'Codex program path' }) as HTMLInputElement
 const codexParams = () => screen.getByRole('textbox', { name: 'Codex parameters' }) as HTMLInputElement
 const saveButton = () => screen.getByRole('button', { name: /save changes/i })
+// Settings #1519 D-9 id25: each program row names the action exactly Check.
+// Scope by the real row so the three identical labels cannot check the wrong CLI.
+const checkButton = (cli: 'claude-code' | 'codex' | 'opencode') =>
+  within(screen.getByTestId(`third-party-agent-row-${cli}`)).getByRole('button', { name: 'Check' })
 
 function renderSection() {
   return render(<QueryClientProvider client={client}><Section /></QueryClientProvider>)
@@ -166,10 +170,10 @@ afterEach(() => {
 describe('FR-6: rows, pre-fill and free parameters', () => {
   it('renders exactly three CLI-qualified path/parameter/Check rows; the Save bar appears on the first draft (FR-010, FR-011)', async () => {
     renderSection(); await loaded()
-    for (const name of ['Claude Code', 'Codex', 'opencode']) {
+    for (const [cli, name] of [['claude-code', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'opencode']] as const) {
       expect(screen.getByRole('textbox', { name: `${name} program path` })).toBeEnabled()
       expect(screen.getByRole('textbox', { name: `${name} parameters` })).toBeEnabled()
-      expect(screen.getByRole('button', { name: `Check ${name} CLI` })).toBeEnabled()
+      expect(checkButton(cli)).toBeEnabled()
     }
     expect(screen.getAllByRole('textbox')).toHaveLength(6)
     // FR-011: with zero drafts the bar is hidden; the old per-section "Save"
@@ -477,7 +481,7 @@ describe('§4: optional Check CLI', () => {
   it('checks the typed path, publishes its exact version with success/default polarity, and saves nothing', async () => {
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: '/Users/me/bin/typed-codex' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
+    fireEvent.click(checkButton('codex'))
     await waitFor(() => expect(checkCalls()).toHaveLength(1))
     const expected: CliValidateRequest = { cli: 'codex', cli_path: '/Users/me/bin/typed-codex' }
     expect(JSON.parse(checkCalls()[0].body ?? '')).toEqual(expected)
@@ -490,7 +494,7 @@ describe('§4: optional Check CLI', () => {
     checkCLI = async () => json({ ok: false, reason: 'missing-binary', resolved_path: null, version: null, detail: 'Program not found' })
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: '/missing/codex' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
+    fireEvent.click(checkButton('codex'))
     await waitFor(() => expectCheckToast('Program not found', ['default', 'warning', 'success']))
     expect(codexPathInput()).toHaveValue('/missing/codex')
     expect(putCalls()).toEqual([])
@@ -504,7 +508,7 @@ describe('§4: optional Check CLI', () => {
     const typedPath = '/Users/me/bin/person-check-codex'
     renderSection(); await loaded()
     fireEvent.change(codexPathInput(), { target: { value: typedPath } })
-    fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
+    fireEvent.click(checkButton('codex'))
     await waitFor(() => {
       const notices = useUiStore.getState().toasts
       expect(notices).toHaveLength(1)
@@ -521,7 +525,7 @@ describe('§4: optional Check CLI', () => {
   it('shows a failed Check request instead of a version or saved announcement', async () => {
     checkCLI = async () => json({ error: 'The server is unavailable. Please try again in a moment.' }, 503)
     renderSection(); await loaded()
-    fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
+    fireEvent.click(checkButton('codex'))
     await waitFor(() => expectFailureNotice(/unavailable/i))
     expect(publishedMessages().some((message) => /1\.2\.3|saved/i.test(message))).toBe(false)
     expect(putCalls()).toEqual([])
