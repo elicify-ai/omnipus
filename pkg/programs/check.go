@@ -160,8 +160,18 @@ func (s *Service) runCheck(ctx context.Context, entry ProgramEntry, r *reservati
 // checkEnv is the check child's clean environment: the gateway PATH, a
 // temporary HOME (and its Windows equivalents) and the entry's token
 // variables. Nothing else from the gateway's environment is passed.
-// checkEnvKeys are the only parent-environment keys the account check keeps.
-var checkEnvKeys = map[string]bool{"PATH": true, "SystemRoot": true, "ComSpec": true, "PATHEXT": true, "TEMP": true, "TMP": true}
+// checkEnvKeys are the only parent-environment keys the account check keeps
+// (matched with childenv.SameKey: case-insensitively on Windows).
+var checkEnvKeys = []string{"PATH", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP"}
+
+func isCheckEnvKey(key string) bool {
+	for _, k := range checkEnvKeys {
+		if childenv.SameKey(k, key) {
+			return true
+		}
+	}
+	return false
+}
 
 // checkEnv builds the account check environment (FR-239, ruling D10 A2). It
 // starts from the scrubbed child environment (childenv.Filter), never from
@@ -174,10 +184,10 @@ func checkEnv(entry ProgramEntry, token, home string) []string {
 	hasUserProfile := false
 	for _, kv := range scrubbed {
 		key, _, _ := strings.Cut(kv, "=")
-		if key == "USERPROFILE" {
+		if childenv.SameKey(key, "USERPROFILE") {
 			hasUserProfile = true
 		}
-		if checkEnvKeys[key] {
+		if isCheckEnvKey(key) {
 			env = append(env, kv)
 		}
 	}

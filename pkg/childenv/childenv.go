@@ -199,7 +199,9 @@ var runnerCredentialEnvKeys = map[string]struct{}{
 
 // AllowedKey reports whether name passes the child-environment allowlist.
 // Applied to every entry of os.Environ() by Filter, and usable by tests that
-// exercise the boundary directly.
+// exercise the boundary directly. On Windows it also admits the Windows
+// system variables and matches case-insensitively (allow_windows.go); other
+// platforms keep the exact-case list.
 func AllowedKey(name string) bool {
 	if _, ok := allowedEnvKeys[name]; ok {
 		return true
@@ -209,7 +211,7 @@ func AllowedKey(name string) bool {
 			return true
 		}
 	}
-	return false
+	return platformAllowedKey(name)
 }
 
 // Filter returns a copy of os.Environ() filtered through the child process
