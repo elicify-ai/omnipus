@@ -160,10 +160,20 @@ export function isPersistedPolicyActivationError(error: unknown): error is ApiEr
   return isApiError(error) && persistedPolicyActivationErrors.has(error)
 }
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: the agent Tools tab and
+ * Skills & Tools read GET /security/permissions (fetchPermissionSettings). No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: global values are written with
+ * PATCH /security/permissions through the permission save queue. No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 // updateGlobalToolPolicies persists the global tool-policy grant. It is re-auth
 // gated (Spec-3 FR-3.3 / Spec-6 FR-12.2): the server rejects the PUT with 403
 // unless a single-use consent token (from reAuth) is replayed in the

@@ -156,10 +156,10 @@ function transportToMode(transport: 'stdio' | 'sse' | 'http' | undefined): Conne
  */
 function invalidateMcpToolCaches(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-  queryClient.invalidateQueries({ queryKey: ['tools-builtin'] }) // SecuritySection global editor
+  queryClient.invalidateQueries({ queryKey: ['tools-builtin'] }) // tool lists keyed by the builtin catalog
   queryClient.invalidateQueries({ queryKey: ['registry-tools'] }) // ToolsAndPermissions per-agent editor
   queryClient.invalidateQueries({ queryKey: ['agent-tools'] }) // prefix match — every agent
-  queryClient.invalidateQueries({ queryKey: ['tools'] }) // SkillsScreen's own tools tab
+  queryClient.invalidateQueries({ queryKey: ['tools'] }) // the plain tool list (GET /tools)
 }
 
 export function McpServerModal({ open, onOpenChange, initialServer }: McpServerModalProps) {

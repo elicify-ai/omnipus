@@ -272,10 +272,20 @@ export function setGodMode(enabled: boolean, reAuthToken?: string): Promise<GodM
 // SkillTrustUpdateResponse — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/SkillTrustUpdateResponse.yaml.
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: the "Unverified skills" answer is
+ * skill_trust in GET /security/permissions. No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 export function fetchSkillTrust(): Promise<SkillTrustResponse> {
   return request<SkillTrustResponse>('/security/skill-trust', undefined, SkillTrustResponseSchema)
 }
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: the "Unverified skills" answer is
+ * written with PATCH /security/permissions (TrustBlock on Skills & Tools). No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 export function updateSkillTrust(level: SkillTrustLevel): Promise<SkillTrustUpdateResponse> {
   return request<SkillTrustUpdateResponse>('/security/skill-trust', {
     method: 'PUT',

@@ -50,6 +50,11 @@ import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { CATEGORY_LABELS } from '@/lib/toolCategories'
 import { formatDateTime } from '@/lib/dateFormat'
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: SkillsToolsPage is the /skills
+ * screen; skill More actions and service management moved there. No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 export function SkillsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()

@@ -56,6 +56,11 @@ function Skeleton() {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+/**
+ * @deprecated Retired by Skills & Tools spec C-22 row 6: the trust block on Skills & Tools
+ * (TrustBlock) replaces this Settings card. No production
+ * caller is left; only tests still import this, and they are retired with it.
+ */
 export function SkillTrustSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
