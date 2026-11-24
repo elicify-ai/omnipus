@@ -1,15 +1,15 @@
 /**
- * ToolPolicyEditor — THE shared role-preset + collapsed-category tool editor.
+ * ToolPolicyEditor — THE shared collapsed-category tool editor.
  *
  * Replaces the duplicated logic in:
  *   - ToolsAndPermissions.tsx (per-agent)
  *   - GlobalToolPoliciesSection in SecuritySection.tsx (global)
  *
  * Layout (top to bottom):
- * 1. Role preset selector (Cautious / Balanced / Full access) via toolPolicyPresets.
- * 2. Single de-duplicated category grid — ALL builtin tools appear exactly once,
+ * (The role presets are gone: Skills & Tools FR-022, founder T-Q6 A.)
+ * 1. Single de-duplicated category grid — ALL builtin tools appear exactly once,
  *    grouped by their human-readable category label. MCP tools are NOT here.
- * 3. MCP tools — grouped per-server with a source badge.
+ * 2. MCP tools — grouped per-server with a source badge.
  *
  * There is no "Customize defaults (advanced)" section anymore — there is no
  * default-policy concept left on the wire. Every tool's policy is set (or
@@ -53,19 +53,16 @@ import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { cn } from '@/lib/utils'
 import { CATEGORY_LABELS, groupByCategory, resolvePolicy } from '@/lib/toolCategories'
-import {
-  POLICY_PRESETS,
-  applyRolePreset,
-  type RolePreset,
-  type ToolPolicyValue,
-} from '@/lib/toolPolicyPresets'
+import type { AgentToolsCfg } from '@/lib/api'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-// ToolPolicyValue is the single canonical type (HC#8) — re-exported so callers
-// that only import from this component get the same type.
-export type { ToolPolicyValue }
+/**
+ * The complete per-tool policy map the editor edits: the generated
+ * AgentToolsCfg['builtin'] shape (HC#8) — no hand-forked wire type.
+ */
+export type ToolPolicyValue = Required<NonNullable<AgentToolsCfg['builtin']>>
 
 export const DISCOVERY_TOOL_NAME = 'ToolSearch'
 
@@ -91,13 +88,6 @@ export interface ToolPolicyEditorProps {
   overrideNames?: string[]
   /** Remove a local override so the tool inherits the global ceiling. */
   onInherit?: (toolName: string) => void
-  /**
-   * Disable role presets until the global ceiling is loaded. Per-tool badges
-   * stay available. An empty ceiling looks like a diff for every tool, so
-   * applying Cautious/Balanced/Full access before the ceiling arrives would
-   * densify override_names.
-   */
-  presetsDisabled?: boolean
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -227,24 +217,6 @@ function categorySummaryPolicy(
 }
 
 /**
- * Detect which preset (if any) the current value matches, by comparing the
- * value's complete policy map against what applying each preset to the
- * current tool list would produce. There is no `default_policy` to compare —
- * a preset only "matches" when its expanded map is byte-identical to `value`.
- */
-function detectActivePreset(value: ToolPolicyValue, tools: RegistryTool[]): RolePreset | null {
-  for (const role of Object.keys(POLICY_PRESETS) as RolePreset[]) {
-    const expected = applyRolePreset(role, tools).policies
-    const expectedKeys = Object.keys(expected)
-    const currentKeys = Object.keys(value.policies)
-    if (expectedKeys.length !== currentKeys.length) continue
-    const matches = expectedKeys.every((k) => value.policies[k] === expected[k])
-    if (matches) return role
-  }
-  return null
-}
-
-/**
  * Extract the MCP server name from a registered MCP tool name.
  *
  * Fallback only — used when a tool has no server_id field (older payloads).
@@ -356,13 +328,16 @@ function CategoryToolRow({
   const runtimeEffective = trueEffectivePolicy(effective, floor)
   const isUnconfigured = floor === 'unconfigured'
   const floorLabel = floor === 'deny' ? 'Deny' : floor === 'ask' ? 'Ask' : isUnconfigured ? 'Unset' : ''
-  const lockTitle = isUnconfigured
-    ? 'This tool has no explicit global policy configured — check Settings → Security.'
-    : floor
-      ? `Locked by a global "${floorLabel}" policy in Settings → Security. ` +
-        `The effective policy is the most restrictive of the global and per-agent values (deny > ask > allow), ` +
-        `so it cannot be relaxed here.`
+  const lockSentence = floor === 'ask'
+    ? 'The global setting is Ask. Set it to Allow on Skills & Tools first.'
+    : floor === 'deny'
+      ? 'The global setting is Deny. Change it on Skills & Tools first.'
       : undefined
+  const lockTitle = isUnconfigured
+    ? 'This tool has no explicit global policy configured — check Skills & Tools.'
+    : lockSentence
+  const lockId = `tool-lock-${tool.name}`
+  const globalHref = `/skills?tool=${encodeURIComponent(tool.name)}`
   const isDiscovery = tool.name === DISCOVERY_TOOL_NAME
   return (
     <div className="flex items-center justify-between py-[var(--space-1)] gap-[var(--space-2)]" data-testid={`tool-row-${tool.name}`}>
@@ -383,7 +358,7 @@ function CategoryToolRow({
           // policy is managed. Plain anchor (not router Link) so the editor
           // renders without a RouterProvider in any context/test.
           <a tabIndex={0}
-            href="/#/settings"
+            href={globalHref}
             title={lockTitle}
             data-testid={`global-override-${tool.name}`}
             className="inline-flex items-center gap-[var(--space-0-5)] shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
@@ -417,7 +392,7 @@ function CategoryToolRow({
             data-testid="toolsearch-always-available"
             className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] max-w-[220px] text-right leading-snug"
           >
-            Always available for discovery. Target tool permissions still apply.
+            Always available for discovery. The tools it finds still follow their own permissions.
           </span>
         ) : (
           <>
@@ -427,13 +402,25 @@ function CategoryToolRow({
                 <PolicyBadge
                   key={p}
                   policy={p}
-                  active={effective === p}
+                  active={(runtimeEffective ?? effective) === p}
                   disabled={disabled || locked}
                   title={locked ? lockTitle : undefined}
+                  describedBy={locked && lockSentence ? lockId : undefined}
                   onClick={() => onChange(tool.name, p)}
                 />
               )
             })}
+            {lockSentence && <span id={lockId} className="sr-only">{lockSentence}</span>}
+            {globalPolicies && (
+              // FR-023: every row says where its global value is changed. A
+              // plain anchor, so the editor renders without a RouterProvider.
+              <a
+                href={globalHref}
+                className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] underline-offset-2 hover:underline"
+              >
+                Change the global setting
+              </a>
+            )}
             {onInherit && isOverridden && (
               <Button
                 type="button"
@@ -696,14 +683,12 @@ function McpServerSection({
 
 /**
  * A tool-policy edit awaiting the FR-021 confirmation before it is applied —
- * either a single per-tool badge click or a role-preset click, whichever
- * would make `execute_plan` resolve to "allow".
+ * a per-tool badge click that would make `execute_plan` resolve to "allow".
  */
 type PendingExecutePlanGrant =
-  | { kind: 'tool'; toolId: string; policy: ToolPolicy }
-  | { kind: 'preset'; role: RolePreset }
+  { kind: 'tool'; toolId: string; policy: ToolPolicy }
 
-export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies, overrideNames, onInherit, presetsDisabled = false }: ToolPolicyEditorProps) {
+export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies, overrideNames, onInherit }: ToolPolicyEditorProps) {
   const { policies } = value
   const [pendingGrant, setPendingGrant] = useState<PendingExecutePlanGrant | null>(null)
 
@@ -738,38 +723,9 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
   // Group MCP tools by server name.
   const groupedMcp = useMemo(() => groupMcpByServer(mcpTools), [mcpTools])
 
-  // Detect active preset.
-  const activePreset = useMemo(() => detectActivePreset(value, tools), [value, tools])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  /**
-   * True when applying `role` would set `execute_plan` to "allow" — either
-   * as the preset's explicit override for that tool, or (no override) its
-   * `defaultPolicy` — AND that would actually resolve (not floored by a
-   * stricter global ceiling entry — see `resolvesExecutePlanAllow`). Only
-   * relevant when `execute_plan` is actually a tool in this registry.
-   */
-  function presetGrantsExecutePlanAllow(role: RolePreset): boolean {
-    if (!tools.some((t) => t.name === EXECUTE_PLAN_TOOL_NAME)) return false
-    const preset = POLICY_PRESETS[role]
-    const resolvedByPreset = preset.overrides[EXECUTE_PLAN_TOOL_NAME] ?? preset.defaultPolicy
-    return resolvesExecutePlanAllow(EXECUTE_PLAN_TOOL_NAME, resolvedByPreset, globalPolicies)
-  }
-
-  /** The actual role-preset write — bypasses the FR-021 gate (already cleared by the caller). */
-  function commitPreset(role: RolePreset) {
-    onChange(applyRolePreset(role, tools))
-  }
-
-  function handlePresetClick(role: RolePreset) {
-    if (disabled || presetsDisabled) return
-    if (presetGrantsExecutePlanAllow(role)) {
-      setPendingGrant({ kind: 'preset', role })
-      return
-    }
-    commitPreset(role)
-  }
 
   /**
    * The actual per-tool write — always writes an explicit entry for the tool
@@ -797,11 +753,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
 
   function confirmPendingGrant() {
     if (!pendingGrant) return
-    if (pendingGrant.kind === 'tool') {
-      commitToolPolicy(pendingGrant.toolId, pendingGrant.policy)
-    } else {
-      commitPreset(pendingGrant.role)
-    }
+    commitToolPolicy(pendingGrant.toolId, pendingGrant.policy)
     setPendingGrant(null)
   }
 
@@ -818,40 +770,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
 
   return (
     <div className="space-y-[var(--space-3)]" data-testid="tool-policy-editor">
-      {/* 1. Role preset selector */}
-      <div className="space-y-[var(--space-2)]">
-        <p id="tool-policy-role-preset-label" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Role preset</p>
-        <SegmentedControl
-          aria-labelledby="tool-policy-role-preset-label"
-          value={activePreset ?? ''}
-          onValueChange={(role) => handlePresetClick(role as RolePreset)}
-          disabled={disabled}
-          className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
-        >
-          {(Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]).map(([role, preset]) => (
-            <SegmentedControlItem
-              key={role}
-              value={role}
-              disabled={disabled || presetsDisabled}
-              data-testid={`preset-${role}`}
-              title={presetsDisabled ? 'Waiting for the global permission ceiling.' : preset.description}
-              className={cn(
-                'h-auto min-w-0 rounded-md px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium shadow-none',
-                activePreset === role
-                  ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
-                  : 'border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-              )}
-            >
-              {preset.label}
-            </SegmentedControlItem>
-          ))}
-        </SegmentedControl>
-        {/* Preset description */}
-        {activePreset && (
-          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{POLICY_PRESETS[activePreset].description}</p>
-        )}
-      </div>
-
       {/* 2. Single de-duplicated category grid — ALL builtin tools exactly once.
               system.* tools appear here under "System"; general builtins under
               "General" (core category). No tool appears twice. */}
@@ -915,9 +833,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
         }
         description={
           <>
-            {pendingGrant?.kind === 'preset'
-              ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
-              : ''}
             Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
             {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
             with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,

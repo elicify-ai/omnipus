@@ -32,13 +32,15 @@ import { isExternalType } from '@/lib/agentKind'
 import {
   fetchRegistryTools,
   fetchAgentTools,
-  fetchGlobalToolPolicies,
+  fetchGodMode,
   fetchMcpServersForAgent,
+  fetchPermissionSettings,
   updateAgentTools,
   type AgentKind,
   type AgentToolsCfg,
 } from '@/lib/api'
 import { MCPServerPicker } from './MCPServerPicker'
+import { AgentSkillsGroup } from './AgentSkillsGroup'
 import { Button } from '@/components/ui/button'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
@@ -142,20 +144,34 @@ export function ToolsAndPermissions({
     enabled: isMcpEditable && !!agentId,
   })
 
-  // Global (Settings → Security) tool policy — locks per-agent controls that
-  // would contradict a global deny/ask (most-restrictive-wins; no contradictions).
+  // The global permissions (Skills & Tools, GET /security/permissions) — they
+  // lock per-agent controls that would contradict a global deny/ask
+  // (most-restrictive-wins; no contradictions).
   const {
     data: globalPolicies,
     isError: globalPoliciesError,
     refetch: refetchGlobalPolicies,
   } = useQuery({
-    queryKey: ['global-tool-policies'],
-    queryFn: fetchGlobalToolPolicies,
+    queryKey: ['permission-settings'],
+    queryFn: fetchPermissionSettings,
   })
   const globalPolicyValue: ToolPolicyValue | undefined = globalPolicies
     ? { policies: globalPolicies.policies ?? {} }
     : undefined
   const ceilingReady = globalPolicyValue !== undefined
+  // God Mode floors the global side only (rider #1297, S-76): a global Ask
+  // reads as Allow, a global Deny and the agent's own values stay. The
+  // displayed row is what the run does: strictest(God-adjusted global, own).
+  const { data: godMode } = useQuery({ queryKey: ['god-mode'], queryFn: fetchGodMode })
+  const godOn = godMode?.enabled === true
+  const displayedGlobal = useMemo<ToolPolicyValue | undefined>(() => {
+    if (!globalPolicyValue || !godOn) return globalPolicyValue
+    return {
+      policies: Object.fromEntries(
+        Object.entries(globalPolicyValue.policies).map(([name, policy]) => [name, policy === 'ask' ? 'allow' : policy]),
+      ) as Record<string, ToolPolicy>,
+    }
+  }, [globalPolicyValue, godOn])
 
   // Local copy for ToolPolicyEditor (controlled).
   const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
@@ -163,6 +179,9 @@ export function ToolsAndPermissions({
   // undefined = GET omitted mcp (preserve on policy-only save).
   // { servers: [] } = operator explicitly assigned none.
   const [mcpConfig, setMcpConfig] = useState<AgentToolsCfg['mcp']>(undefined)
+  // The agent's own skill overrides once edited here; undefined = not
+  // touched, so a save does not name skills and the stored ones stay (C-21).
+  const [skillOverrides, setSkillOverrides] = useState<Record<string, ToolPolicy> | undefined>(undefined)
 
   // isDraftReady gates useAutoSave: stays false until the server data has
   // arrived and hydrated editorValue. This prevents a spurious save on open
@@ -225,6 +244,7 @@ export function ToolsAndPermissions({
       // Agent switched — reset so the incoming agentToolsData hydrates fresh.
       prevAgentIdRef.current = agentId
       setIsDraftReady(false)
+      setSkillOverrides(undefined)
       setEditorValue(cfgToValue(tools))
     }
      
@@ -246,8 +266,9 @@ export function ToolsAndPermissions({
       policies: editorValue.policies,
       overrideNames,
       mcp: mcpConfig,
+      skills: skillOverrides,
     }),
-    [editorValue.policies, overrideNames, mcpConfig],
+    [editorValue.policies, overrideNames, mcpConfig, skillOverrides],
   )
   const mcpEditable = isMcpEditable && !isExternal
 
@@ -265,6 +286,8 @@ export function ToolsAndPermissions({
         if (value.mcp !== undefined) cfg.mcp = { servers: value.mcp.servers ?? [] }
         else delete cfg.mcp
       }
+      // The complete set of the agent's skill overrides, only once edited.
+      if (value.skills !== undefined) cfg.skills = { policies: value.skills }
       const revision = revisionRef.current
       if (!revision) throw new Error('Tool settings have no reviewed revision. Reload before saving.')
       const nextOverrideNames = [...value.overrideNames]
@@ -533,7 +556,6 @@ export function ToolsAndPermissions({
 
       {/* #333 (US-D2) / B-1 (#331) / US-E5 (#337):
           ToolPolicyEditor handles:
-          - Cautious / Balanced / Full access role preset selector
           - category==='system' tools in the Advanced disclosure (NOT scope-based)
           - MCP tools grouped per-server with a source badge
           - Summary pill per category
@@ -560,11 +582,29 @@ export function ToolsAndPermissions({
         value={editorValue}
         onChange={handleEditorChange}
         disabled={!toolsEditable || isExternal || !ceilingReady || !isDraftReady}
-        presetsDisabled={!ceilingReady}
-        globalPolicies={globalPolicyValue}
+        globalPolicies={displayedGlobal}
         overrideNames={overrideNames}
         onInherit={handleInherit}
       />
+
+      {agentId && agentToolsData && (
+        <AgentSkillsGroup
+          agentId={agentId}
+          skills={agentToolsData.skills ?? []}
+          overrides={skillOverrides ?? Object.fromEntries(
+            (agentToolsData.skills ?? []).flatMap((skill) => (skill.configured_policy ? [[skill.key, skill.configured_policy]] : [])),
+          )}
+          godMode={godOn}
+          disabled={!toolsEditable || isExternal || !isDraftReady}
+          onChange={(key, policy) => {
+            if (!toolsEditable || isExternal || !isDraftReady) return
+            const stored = Object.fromEntries(
+              (agentToolsData.skills ?? []).flatMap((skill) => (skill.configured_policy ? [[skill.key, skill.configured_policy]] : [])),
+            ) as Record<string, ToolPolicy>
+            setSkillOverrides({ ...(skillOverrides ?? stored), [key]: policy })
+          }}
+        />
+      )}
 
       {mcpEditable && (
         <section className="space-y-[var(--space-2)]" data-testid="mcp-assignment-section">
