@@ -178,49 +178,65 @@ func applyConfigReload(t *testing.T, api *restAPI, mutate func(*config.Config)) 
 	require.NoError(t, api.refreshConfigAndRewireServices(path), "native config reload, not a test callback returning success")
 }
 
-// Instrument, not timed RED: legacy session records are only a stand-in for live
-// store state, so that EVERY observer branch (exact, named-host, command-family)
-// and the next-call gate (no card, card) are shown against both outcomes and
-// against another agent. A helper that always expected active, always expected
-// ended, ignored the agent key or skipped the gate would fail here.
-func TestPermissionChangeObservers_Fixture(t *testing.T) {
-	api := newPermissionChangeAPI(t)
-	store := api.agentLoop.ApprovalGrants()
-	sessions := []string{permissionChangeSession, "permission-change-next-chat"}
-	subjects := []string{"delete_task", "plan", "serve_web", "bash addresses example.com", "bash family npm run test"}
-	for _, sid := range sessions {
-		for _, subject := range subjects {
+// The two chats whose records the observers read, and every subject they cover:
+// exact tools, one named address, one command family.
+var (
+	permissionChangeSessions = []string{permissionChangeSession, "permission-change-next-chat"}
+	permissionChangeSubjects = []string{"delete_task", "plan", "serve_web", "bash addresses example.com", "bash family npm run test"}
+)
+
+// permissionChangeUnanswered is an exact tool no seed ever records. An allowance
+// for the other subjects must not cover it: a never-answered subject of the SAME
+// agent is real state that is inactive under every lifetime rule.
+const permissionChangeUnanswered = "create_task"
+
+// seedLegacySessionAllowances records every subject in both chats for agentID
+// through the store's current API. Those records are only a stand-in for live
+// store state; this is the one place that changes when the actual duration-bearing
+// recording API lands (the same author reconciles it with seedNativePermissionAllowance).
+func seedLegacySessionAllowances(t *testing.T, store *security.ApprovalGrantStore, agentID string) {
+	t.Helper()
+	for _, sid := range permissionChangeSessions {
+		for _, subject := range permissionChangeSubjects {
 			switch subject {
 			case "bash addresses example.com":
-				require.True(t, store.RecordNetworkGrantWithHosts(sid, "mia", []string{"example.com"}))
+				require.True(t, store.RecordNetworkGrantWithHosts(sid, agentID, []string{"example.com"}))
 			case "bash family npm run test":
-				require.True(t, store.RecordPrefixGrant(sid, "mia", "bash", security.ShellPrefixGrant{Binary: "/usr/bin/npm", ArgPrefix: "run test"}))
+				require.True(t, store.RecordPrefixGrant(sid, agentID, "bash", security.ShellPrefixGrant{Binary: "/usr/bin/npm", ArgPrefix: "run test"}))
 			default:
 				tool, args := permissionChangeCall(subject)
-				require.True(t, store.Record(sid, "mia", tool, args))
+				require.True(t, store.Record(sid, agentID, tool, args))
 			}
 		}
 	}
-	for _, subject := range subjects {
+}
+
+// Instrument, not timed RED: legacy session records are only a stand-in for live
+// store state, so that EVERY observer branch (exact, named-host, command-family)
+// and the next-call gate (no card, card) are shown against both outcomes. The
+// inactive half is real state that was never seeded — another agent, and a subject
+// the same agent never answered — and never a chat close: C-26 says closing a chat
+// no longer ends an agent's allowance (TestPermissionChangeObservers_ChatCloseKeepsTheAgentAllowance
+// requires that). A helper that always expected active, always expected ended,
+// ignored the agent key or the subject, or skipped the gate would fail here.
+func TestPermissionChangeObservers_Fixture(t *testing.T) {
+	api := newPermissionChangeAPI(t)
+	store := api.agentLoop.ApprovalGrants()
+	seedLegacySessionAllowances(t, store, "mia")
+	for _, subject := range permissionChangeSubjects {
 		assertPermissionAllowance(t, api, "mia", subject, true, "instrument positive: "+subject)
 		assertPermissionAllowance(t, api, "jim", subject, false, "instrument other-agent negative: "+subject)
 	}
-	for _, sid := range sessions {
-		store.ClearSession(sid)
-	}
-	for _, subject := range subjects {
-		assertPermissionAllowance(t, api, "mia", subject, false, "instrument cleared negative: "+subject)
-	}
+	assertPermissionAllowance(t, api, "mia", permissionChangeUnanswered, false, "instrument unanswered-subject negative: "+permissionChangeUnanswered)
 
 	// The next-call gate, both outcomes, on one real chat of the agent.
 	meta, err := api.agentLoop.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
 	tool, args := permissionChangeCall("delete_task")
 	require.True(t, store.Record(meta.ID, "mia", tool, args))
-	assertPermissionNextGateIn(t, api, meta.ID, "mia", "delete_task", true) // a standing grant settles it: no card
-	store.ClearSession(meta.ID)
-	assertPermissionNextGateIn(t, api, meta.ID, "mia", "delete_task", false) // grant gone: the card returns
-	assertPermissionNextGate(t, api, "jim", "plan", false)                   // a fresh chat holding nothing: a card
+	assertPermissionNextGateIn(t, api, meta.ID, "mia", "delete_task", true)               // a standing allowance settles it: no card
+	assertPermissionNextGateIn(t, api, meta.ID, "mia", permissionChangeUnanswered, false) // the same chat, a subject never answered: the card
+	assertPermissionNextGate(t, api, "jim", "plan", false)                                // a fresh chat of an agent holding nothing: a card
 
 	// A real token witness uses a fresh connection and complete upstream bytes,
 	// so transport errors and a merely changed boolean cannot imitate revocation.
@@ -231,4 +247,62 @@ func TestPermissionChangeObservers_Fixture(t *testing.T) {
 	request(token, true)
 	proxy.RevokeRunToken(token)
 	request(token, false)
+}
+
+// C-26, "Lifetime and scope" (End): an allowance ends at its time, at a restart,
+// when the agent is deleted or when the permission it answers changes — closing a
+// chat is not on that list — and the ClearSession impact row: "no longer clears
+// allowances (they belong to the agent)". This closes a real chat through the
+// product's own path (AgentLoop.CloseSession, which calls the store's ClearSession),
+// then reads the allowance through the same real-store observers and next-call gate
+// the ending rows use. Only the closed chat's own egress tokens stay session-specific
+// (pkg/security's token test requires that). RED today: the close wipes the chat's
+// records, so the observer finds the allowance gone.
+func TestPermissionChangeObservers_ChatCloseKeepsTheAgentAllowance(t *testing.T) {
+	api := newPermissionChangeAPI(t)
+	store := api.agentLoop.ApprovalGrants()
+	seedLegacySessionAllowances(t, store, "mia")
+	for _, subject := range permissionChangeSubjects {
+		assertPermissionAllowance(t, api, "mia", subject, true, "precondition, before the chat closes: "+subject)
+	}
+
+	api.agentLoop.CloseSession(permissionChangeSession, "test-chat-close")
+
+	for _, subject := range permissionChangeSubjects {
+		assertPermissionAllowance(t, api, "mia", subject, true, "C-26: closing a chat does not end the agent's allowance: "+subject)
+		assertPermissionAllowance(t, api, "jim", subject, false, "closing Mia's chat gives another agent nothing: "+subject)
+	}
+	assertPermissionAllowance(t, api, "mia", permissionChangeUnanswered, false, "closing a chat widens nothing: "+permissionChangeUnanswered)
+	assertPermissionNextGate(t, api, "mia", "delete_task", true)               // a brand-new chat of the agent after the close: no card
+	assertPermissionNextGate(t, api, "mia", permissionChangeUnanswered, false) // a subject never answered still asks
+}
+
+// C-26, the same ClearSession impact row, second half: the close "still revokes the
+// session's egress tokens (NetworkTokensForSession -> RevokeRunToken)". A token
+// authorises one chat's running shell, not the agent, so it is the one thing that
+// stays per chat. This is the control that keeps the survival test above from being
+// satisfied by dropping the whole close-time cleanup: it runs on a real egress
+// proxy wired into the loop, through the loop's own CloseSession, with a fresh
+// connection and complete upstream bytes as the witness, and it shows another chat's
+// token is untouched. It holds on today's product and must keep holding.
+func TestPermissionChangeObservers_ChatCloseRevokesOnlyThatChatsEgressToken(t *testing.T) {
+	api := newPermissionChangeAPI(t)
+	store := api.agentLoop.ApprovalGrants()
+	proxy, request, host := newLifecycleProxy(t)
+	api.agentLoop.WireTier13Deps(agent.Tier13Deps{EgressProxy: proxy})
+
+	closing := store.SessionEgressToken(permissionChangeSession, "mia")
+	otherChat := store.SessionEgressToken("permission-change-next-chat", "mia")
+	require.NotEmpty(t, closing, "actual issued token, never a test-owned revoked verdict")
+	require.NotEmpty(t, otherChat, "actual issued token for another chat")
+	require.NotEqual(t, closing, otherChat, "one token per chat")
+	for _, token := range []string{closing, otherChat} {
+		proxy.GrantRunHosts(token, []string{host})
+		request(token, true)
+	}
+
+	api.agentLoop.CloseSession(permissionChangeSession, "test-chat-close")
+
+	request(closing, false)  // the closed chat's exact token opens no new connection
+	request(otherChat, true) // another chat's token is not the closed chat's
 }
