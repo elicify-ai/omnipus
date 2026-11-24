@@ -7838,6 +7838,57 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	}
 }
 
+// Defines values for PackageExportPlanElementsKind.
+const (
+	PackageExportPlanElementsKindExternalWorker PackageExportPlanElementsKind = "external_worker"
+	PackageExportPlanElementsKindMain           PackageExportPlanElementsKind = "main"
+	PackageExportPlanElementsKindWorker         PackageExportPlanElementsKind = "worker"
+)
+
+// Valid indicates whether the value is a known member of the PackageExportPlanElementsKind enum.
+func (e PackageExportPlanElementsKind) Valid() bool {
+	switch e {
+	case PackageExportPlanElementsKindExternalWorker:
+		return true
+	case PackageExportPlanElementsKindMain:
+		return true
+	case PackageExportPlanElementsKindWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageExportPlanScope.
+const (
+	PackageExportPlanScopeAgents PackageExportPlanScope = "agents"
+)
+
+// Valid indicates whether the value is a known member of the PackageExportPlanScope enum.
+func (e PackageExportPlanScope) Valid() bool {
+	switch e {
+	case PackageExportPlanScopeAgents:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PackageExportPlanRequestScope.
+const (
+	PackageExportPlanRequestScopeAgents PackageExportPlanRequestScope = "agents"
+)
+
+// Valid indicates whether the value is a known member of the PackageExportPlanRequestScope enum.
+func (e PackageExportPlanRequestScope) Valid() bool {
+	switch e {
+	case PackageExportPlanRequestScopeAgents:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PackageImportApplyRequestMode.
 const (
 	PackageImportApplyRequestModeMerge   PackageImportApplyRequestMode = "merge"
@@ -23261,6 +23312,108 @@ type OperationResult struct {
 // OperationResultValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type OperationResultValidationOutcome string
 
+// PackageExportPlan The export review ("plan") of POST /api/v1/packages/export/plan (201) and GET /api/v1/packages/export/plan/{plan_id} (200), epic #1094 slice B1. It says what a bundle exported now would contain and leave out, using the same capture, cleaning and refusals as the export itself. It is held in memory for 30 minutes (expires_at = created_at + 30 minutes) and never carries a removed value: names only. The export itself is not bound to the review.
+type PackageExportPlan struct {
+	// CreatedAt When the review was made (UTC).
+	CreatedAt time.Time `json:"created_at"`
+
+	// Disclosures Notices the person must see before downloading. B1 always carries exactly one, free_text_copied.
+	Disclosures []struct {
+		// Code Disclosure code.
+		Code string `json:"code"`
+
+		// Message Plain-English text of the disclosure.
+		Message string `json:"message"`
+	} `json:"disclosures"`
+
+	// Elements The reviewed elements (exactly one agent in B1).
+	Elements []struct {
+		// Bytes Sum of the element's file sizes in bytes.
+		Bytes int64 `json:"bytes"`
+
+		// Files The files that go into the bundle for this element, in bundle order.
+		Files []struct {
+			// Path Path of the file inside the bundle.
+			Path string `json:"path"`
+
+			// Size Size in bytes.
+			Size int64 `json:"size"`
+		} `json:"files"`
+
+		// Kind Agent kind.
+		Kind PackageExportPlanElementsKind `json:"kind"`
+
+		// Name The element's name.
+		Name string `json:"name"`
+
+		// SourceId The element's ID on this install.
+		SourceId string `json:"source_id"`
+
+		// Type Element type (agent in B1).
+		Type string `json:"type"`
+	} `json:"elements"`
+
+	// ExpiresAt created_at plus 30 minutes; the review is readable while now is before it.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// FileName The download file name the export will use (same rule as the export's Content-Disposition).
+	FileName string `json:"file_name"`
+
+	// LeftOut What does not travel, and why, in a fixed order. type and reason are open strings because later slices add values. B1 types: skill, connector, agent_memory, session, work_files, team, agent_setting. B1 reasons: type_not_exportable, host_path, secret_value, not_carried, not_restored.
+	LeftOut []struct {
+		// Items Names concerned (skill names, connector IDs, environment variable names). Never values.
+		Items *[]string `json:"items,omitempty"`
+
+		// Message Plain-English explanation. Never contains a value.
+		Message string `json:"message"`
+
+		// Reason Why it is left out.
+		Reason string `json:"reason"`
+
+		// Type What is left out.
+		Type string `json:"type"`
+	} `json:"left_out"`
+
+	// NeedsSecrets Secrets the importer must enter again (same item shape as the manifest's needs_secrets; names only).
+	NeedsSecrets []struct {
+		// Kind Kind of secret.
+		Kind string `json:"kind"`
+
+		// Name Secret name, for example an environment variable name.
+		Name string `json:"name"`
+
+		// UsedBy Source ID of the element that uses the secret.
+		UsedBy string `json:"used_by"`
+	} `json:"needs_secrets"`
+
+	// PlanId Handle for reading this review back (UUID v4).
+	PlanId openapi_types.UUID `json:"plan_id"`
+
+	// Scope Echo of the request's scope.
+	Scope PackageExportPlanScope `json:"scope"`
+
+	// SizeBytes Byte length of the bundle as it would be built at review time.
+	SizeBytes int64 `json:"size_bytes"`
+}
+
+// PackageExportPlanElementsKind Agent kind.
+type PackageExportPlanElementsKind string
+
+// PackageExportPlanScope Echo of the request's scope.
+type PackageExportPlanScope string
+
+// PackageExportPlanRequest Request body of POST /api/v1/packages/export/plan (the export review, epic #1094 slice B1). B1 accepts scope "agents" and exactly one agent ID; any other count is refused by the server with 400 export_selection_invalid (not by this schema), so later slices can add several agents and other scopes without breaking this shape.
+type PackageExportPlanRequest struct {
+	// AgentIds IDs of the agents to review (exactly one in B1).
+	AgentIds []string `json:"agent_ids"`
+
+	// Scope What to review. B1 knows only "agents".
+	Scope PackageExportPlanRequestScope `json:"scope"`
+}
+
+// PackageExportPlanRequestScope What to review. B1 knows only "agents".
+type PackageExportPlanRequestScope string
+
 // PackageExportRequest Request body of POST /api/v1/packages/export. S1 accepts exactly one agent ID; any other count is refused with 400 export_selection_invalid.
 type PackageExportRequest struct {
 	// AgentIds IDs of the agents to export (exactly one in S1).
@@ -31556,6 +31709,9 @@ type ProbeProviderJSONRequestBody = ProbeProviderRequest
 
 // ExportPackageJSONRequestBody defines body for ExportPackage for application/json ContentType.
 type ExportPackageJSONRequestBody = PackageExportRequest
+
+// CreatePackageExportPlanJSONRequestBody defines body for CreatePackageExportPlan for application/json ContentType.
+type CreatePackageExportPlanJSONRequestBody = PackageExportPlanRequest
 
 // ApplyPackageImportJSONRequestBody defines body for ApplyPackageImport for application/json ContentType.
 type ApplyPackageImportJSONRequestBody = PackageImportApplyRequest

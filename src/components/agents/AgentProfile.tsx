@@ -81,6 +81,7 @@ import { useEffortSwitch, type EffortPair } from '@/lib/effort/useEffortSwitch'
 import { ToolIterationLimitField } from './ToolIterationLimitField'
 import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 import { useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
+import { QuickExportButton } from '@/components/export-import/QuickExportButton'
 
 /**
  * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
@@ -2308,6 +2309,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             built-in
           </Badge>
         )}
+        <QuickExportButton agent={agent} onClose={handleCloseAgentSheet} />
         {agent.description && (
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">{agent.description}</span>
         )}
