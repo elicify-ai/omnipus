@@ -712,11 +712,19 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// data (greenfield: no migration); AuthoredByAgent falls back to the old
 	// registry heuristic for exactly that case.
 	CreatedByKind string `json:"created_by_kind,omitempty"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
-	ApprovedAt    string `json:"approved_at,omitempty"`
-	StartedAt     string `json:"started_at,omitempty"`
-	CompletedAt   string `json:"completed_at,omitempty"`
+	// Provenance is where the work this plan carries came from
+	// (connected-programs I-2, FR-041): the creating agent turn's origins, or
+	// "independent" for a plan a person created, joined with every agent
+	// turn that later changed its instructions (Patch.Provenance). Empty is
+	// unresolved (fail closed). A person's later edit leaves it unchanged.
+	// Server-set only; not on the wire (toWirePlan never maps it).
+	Provenance []string `json:"provenance,omitempty"`
+
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	ApprovedAt  string `json:"approved_at,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+	CompletedAt string `json:"completed_at,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler for Plan.

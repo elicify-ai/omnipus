@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -434,6 +435,9 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 		CreatedBy:     c.Username,
 		CreatedByKind: plan.CreatedByKindUser,
 		OwnerAgentID:  req.OwnerAgentId,
+		// I-2/S-111: a plan a person creates is work with no starting
+		// message: independent (spec producer table). Never on the wire.
+		Provenance: []string{string(bus.OriginIndependent)},
 	}
 	if req.Objective != nil {
 		p.Objective = *req.Objective

@@ -425,6 +425,9 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		CreatedByKind: plan.CreatedByKindAgent,
 		DoD:           dod,
 		Rationale:     rationale,
+		// I-2/S-111: the creating agent turn's provenance, stored in the
+		// creating write (an unresolved turn stores none: fail closed).
+		Provenance: provenanceStrings(ToolTurnProvenance(ctx)),
 	}
 	if objective, ok := args["objective"].(string); ok {
 		p.Objective = objective

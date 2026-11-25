@@ -316,6 +316,14 @@ type Patch struct {
 	SupervisionAttempts         *int
 	SupervisionCorrectionRounds *int
 	SupervisionSessionID        *string
+
+	// Provenance, when non-nil, joins these origins into Plan.Provenance in
+	// the same write (I-2, FR-041): set by an agent path that changes the
+	// plan's instructions, with the writer turn's origins. It never replaces
+	// or shrinks; an empty list (an unresolved writer) makes the plan
+	// unresolved. Nil (a person's edit, a state or counter change) joins
+	// nothing.
+	Provenance *[]string
 }
 
 // Update applies patch to the plan identified by id and persists the result.
@@ -373,6 +381,9 @@ func (su *storeUpdateLocked) applyPlainTextAndLinkFields() {
 	}
 	if su.patch.InitiatedBy != nil {
 		su.p.InitiatedBy = *su.patch.InitiatedBy
+	}
+	if su.patch.Provenance != nil {
+		su.p.Provenance = task.JoinOrigins(su.p.Provenance, *su.patch.Provenance)
 	}
 }
 
