@@ -151,7 +151,13 @@ func (t *AgentPermissionsTool) Execute(ctx context.Context, args map[string]any)
 	if mutateErr != nil {
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)
 	}
-	activation, message := publishAgentActivation(t.deps, id)
+	var activation agentstore.ActivationStatus
+	var message string
+	if err := applyStoredPermissionsLive(t.deps, store, id); err != nil {
+		activation, message = agentstore.ActivationFailed, err.Error()
+	} else {
+		activation, message = publishAgentActivation(t.deps, id)
+	}
 	clamped := policyClamps(t.deps.globalToolPolicies(), requested, t.deps.godModeActive())
 	if note := clampSentence(clamped); note != "" {
 		message = strings.TrimSpace(message + " " + note)

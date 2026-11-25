@@ -277,11 +277,26 @@ func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
 // the live pointer; callers that persist (e.g. systools.Deps.WithConfig)
 // continue to receive that same copy and SaveConfigLocked it directly, then
 // this method publishes it — persisted-disk and live-pointer stay consistent.
+//
+// Skills & Tools C-26 point 7: after the new config is live, the running
+// allowances of every tool or skill permission the mutation changed are
+// ended (the same rule as a reload), outside al.mu.
 func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
+	oldCfg, newCfg, err := al.mutateConfigLocked(fn)
+	if err != nil {
+		return err
+	}
+	al.endAllowancesOnReload(oldCfg, newCfg)
+	return nil
+}
+
+// mutateConfigLocked is MutateConfig's locked part: it applies fn to a copy
+// and publishes it, returning the config before and after.
+func (al *AgentLoop) mutateConfigLocked(fn func(*config.Config) error) (*config.Config, *config.Config, error) {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	if al.cfg == nil {
-		return fmt.Errorf("agent loop config is nil")
+		return nil, nil, fmt.Errorf("agent loop config is nil")
 	}
 	// Deep copy so fn's mutations never touch the live object GetConfig handed
 	// out (and still hands out) to concurrent unlocked readers. config.Clone
@@ -289,10 +304,10 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	// the swap below.
 	clone, err := al.cfg.Clone()
 	if err != nil {
-		return fmt.Errorf("agent loop: clone config for mutation: %w", err)
+		return nil, nil, fmt.Errorf("agent loop: clone config for mutation: %w", err)
 	}
 	if err := fn(clone); err != nil {
-		return err
+		return nil, nil, err
 	}
 	// r17 SR-2: a roster change adds or removes stored env values from the
 	// masking set before the clone goes live.
@@ -301,9 +316,10 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	// (al.cfg replace alone) and ReloadProviderAndConfig (al.cfg + al.registry)
 	// use — so a concurrent UpsertAgentFast sees this change via its configGen
 	// CAS and rebases rather than silently reverting it (DEFECT 2 family).
+	oldCfg := al.cfg
 	al.cfg = clone
 	al.configGen.Add(1)
-	return nil
+	return oldCfg, clone, nil
 }
 
 // ApplyAgentModel switches a live agent instance to a new primary model in
