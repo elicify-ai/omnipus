@@ -123,7 +123,7 @@ const SheetContent = React.forwardRef<
         {showClose && (
           // tabIndex: WebKit tabbability repo convention — Radix renders this
           // close button, so the explicit stamp lives here.
-          <DialogPrimitive.Close data-ds-action tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100">
+          <DialogPrimitive.Close data-ds-action tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 pointer-coarse:h-[var(--target-touch-minimum)] pointer-coarse:w-[var(--target-touch-minimum)] items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100">
             <X aria-hidden="true" size={16} />
             <span className="sr-only">Close</span>
           </DialogPrimitive.Close>

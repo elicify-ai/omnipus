@@ -395,7 +395,8 @@ function IssueCard({
               href={actionHref(issue.action_link)}
               onClick={(e) => e.stopPropagation()}
               data-testid={`issue-action-link-${issue.id}`}
-              className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2"
+              // FR-070 (U3-3): the token, not a rem size, sets the tap area.
+              className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2 pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
               style={{ color: config.color }}
             >
               <CaretRight size={10} />
