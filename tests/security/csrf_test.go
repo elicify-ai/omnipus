@@ -74,9 +74,13 @@ func csrfTargets() []csrfTarget {
 			expectAuthedOK: []int{http.StatusOK, http.StatusCreated},
 		},
 		{
-			method:         http.MethodPut,
-			path:           "/api/v1/security/tool-policies",
-			body:           `{"tool_policies":{}}`,
+			// C-22 row 6 retires PUT /security/tool-policies; PATCH /security/permissions is the
+			// state-changing route that replaces it (C-2). It needs no consent token (team-lead
+			// ruling, fix round 4 part B row 6, option B), so the happy-path leg below attaches
+			// none (isReAuthGatedPUT is PUT-only) and a 403 there would be a real regression.
+			method:         http.MethodPatch,
+			path:           "/api/v1/security/permissions",
+			body:           `{"policies":{"bash":"ask"}}`,
 			needsJSONBody:  true,
 			expectAuthedOK: []int{http.StatusOK, http.StatusBadRequest},
 		},
@@ -136,8 +140,10 @@ func TestCSRFProtection(t *testing.T) {
 	const csrfToken = "csrf-test-fixture-value-42"
 
 	// Onboard a real password-backed admin so the happy-path sub-test can clear
-	// the re-auth gate on sensitive PUTs (e.g. /security/tool-policies, Spec-6
-	// FR-12.2). The synthetic env-token admin (WithBearerAuth) has no password
+	// the re-auth gate on sensitive PUTs (Spec-6 FR-12.2; none of the current targets
+	// is one, because PATCH /security/permissions needs no consent token — team-lead ruling,
+	// fix round 4 part B row 6, option B — but isReAuthGatedPUT still serves any PUT target
+	// added later). The synthetic env-token admin (WithBearerAuth) has no password
 	// hash and so cannot mint a consent token via POST /api/v1/auth/reauth.
 	// Onboarding seeds gateway.users, which disables the legacy env-token bearer
 	// (gw.Token()) — checkBearerAuth then requires a token in the user list — so
@@ -236,7 +242,7 @@ func TestCSRFProtection(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+adminToken)
 			req.AddCookie(&http.Cookie{Name: "__Host-csrf", Value: csrfToken})
 			req.Header.Set("X-Csrf-Token", csrfToken)
-			// Re-auth gate (Spec-6 FR-12.2): sensitive PUTs (e.g. tool-policies)
+			// Re-auth gate (Spec-6 FR-12.2): sensitive PUTs (e.g. sandbox-config)
 			// also require a single-use consent token AFTER the CSRF + admin
 			// checks. Mint one so the request reaches the handler — what this
 			// sub-test actually asserts is that the CSRF compare path lets a
@@ -256,7 +262,9 @@ func TestCSRFProtection(t *testing.T) {
 			// the test accepts the per-target whitelist.
 			require.NotEqual(t, http.StatusForbidden, resp.StatusCode,
 				"CSRF gate must let through matching cookie+header "+
-					"(%s %s returned 403 — regression in the compare path)",
+					"(%s %s returned 403 — either a regression in the compare path, or a re-auth "+
+					"gate on a route that has none: PATCH /security/permissions needs no consent "+
+					"token, team-lead ruling, fix round 4 part B row 6, option B)",
 				tgt.method, tgt.path)
 
 			accepted := false
