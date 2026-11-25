@@ -23,6 +23,7 @@ package agent
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -81,6 +82,15 @@ type PolicyApprovalReq struct {
 // PathGrant/network grant on ANY approval, "Allow once" included.
 type PolicyApprover interface {
 	RequestApproval(ctx context.Context, req PolicyApprovalReq) (approved bool, denialReason string, recordGrant bool)
+}
+
+// AllowanceApprover is a PolicyApprover whose answers also carry the time
+// the person chose with "Allow for …" (Skills & Tools C-26): zero for
+// "Approve once" and for every refusal. The shell file and network
+// pre-flight cards read it to store their narrow allowance for exactly that
+// long. An approver without it answers those cards for one call only.
+type AllowanceApprover interface {
+	RequestApprovalFor(ctx context.Context, req PolicyApprovalReq) (approved bool, denialReason string, allowFor time.Duration)
 }
 
 // nopApproverDenialReason is the reason string returned by the default-build

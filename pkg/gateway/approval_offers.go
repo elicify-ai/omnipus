@@ -40,7 +40,8 @@ var oneRequestKinds = map[string]bool{"fs_preflight_blind": true}
 
 // shellPreflightKinds are the shell pre-flight cards (D7, D8) whose narrow
 // allowance (one path with its access, the named addresses) the shell tool
-// records itself once the call is released.
+// records itself once the call is released, for the time carried on the
+// outcome (ApprovalOutcome.AllowFor).
 var shellPreflightKinds = map[string]bool{"fs_preflight": true, "network_preflight": true}
 
 func approvalKind(e *approvalEntry) string {

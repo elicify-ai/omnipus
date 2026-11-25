@@ -599,7 +599,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		allowance, resp = a.answerWithTime(entry, scope, *body.Duration, ans.allowFor, resp)
 	}
 
-	resolved, gone := a.approvalReg.resolveAnswer(approvalID, action, timed, requestUsername(r), allowance)
+	resolved, gone := a.approvalReg.resolveAnswer(approvalID, action, timed, requestUsername(r), allowance, ans.allowFor)
 	if gone {
 		// Entry already in terminal state — FR-018.
 		logsafeWarn("tool-approval: late action on resolved approval",

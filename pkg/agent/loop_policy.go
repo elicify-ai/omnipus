@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -388,8 +389,8 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // short-circuits above already satisfied — there is nothing NEW to record
 // in either of those branches, so both return recordGrant=false). The
 // classic ask-policy caller (loop_run_turn_tools.go) does not consume this
-// value; the ADR-092 D7/D8 pre-flight escalation callers
-// (ShellPermissionGate.RequestShellApproval, below) do.
+// value; the ADR-092 D7/D8 pre-flight escalation callers use
+// requestApprovalFor (below), which reports the chosen time instead.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
@@ -399,11 +400,46 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
+	approved, denialReason, recordGrant = approver.RequestApproval(ctx, al.policyApprovalReq(ctx, sessionID, agentID, toolName, toolCallID, turnID, args))
+	al.abortOnSessionStop(ctx, approved, denialReason, sessionID, turnID)
+	return approved, denialReason, recordGrant
+}
+
+// requestApprovalFor is CheckGrantOrRequestApproval for the shell file and
+// network pre-flight cards (C-26): instead of the remember flag it returns
+// the time the person chose with "Allow for …", zero for "Approve once". An
+// approver that cannot report a time answers for one call only.
+func (al *AgentLoop) requestApprovalFor(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) (approved bool, denialReason string, allowFor time.Duration) {
+	if al.checkStandingGrant(sessionID, agentID, toolName, args) {
+		return true, "", 0
+	}
+	req := al.policyApprovalReq(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
+	approver := al.loadToolApprover()
+	if timed, ok := approver.(AllowanceApprover); ok {
+		approved, denialReason, allowFor = timed.RequestApprovalFor(ctx, req)
+	} else {
+		approved, denialReason, _ = approver.RequestApproval(ctx, req)
+	}
+	al.abortOnSessionStop(ctx, approved, denialReason, sessionID, turnID)
+	return approved, denialReason, allowFor
+}
+
+// policyApprovalReq builds the approval request for one tool call, with the
+// turn's origin (group chat, peer request, channel) when ctx carries a turn.
+func (al *AgentLoop) policyApprovalReq(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) PolicyApprovalReq {
 	var origin approvalOrigin
 	if ts := turnStateFromContext(ctx); ts != nil {
 		origin = ts.currentApprovalOrigin()
 	}
-	approved, denialReason, recordGrant = approver.RequestApproval(ctx, PolicyApprovalReq{
+	return PolicyApprovalReq{
 		ToolCallID:  toolCallID,
 		ToolName:    toolName,
 		Args:        cloneStringAnyMap(args),
@@ -412,7 +448,12 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		TurnID:      turnID,
 		RoomRef:     origin.roomRefCopy(),
 		OriginLabel: origin.Label,
-	})
+	}
+}
+
+// abortOnSessionStop ends the exact waiting execution when its approval was
+// withdrawn by a session Stop.
+func (al *AgentLoop) abortOnSessionStop(ctx context.Context, approved bool, denialReason, sessionID, turnID string) {
 	// A session Stop is control, not an ordinary refusal for the model to
 	// interpret. The owning chat may have withdrawn this helper's approval
 	// without targeting any of its already-running siblings. End only the
@@ -423,7 +464,6 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 			ts.requestHardAbort()
 		}
 	}
-	return approved, denialReason, recordGrant
 }
 
 // checkStandingGrant reports whether a standing "Always Allow" grant already
@@ -710,11 +750,11 @@ func (g *ShellPermissionGate) RequestShellApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
-) (bool, string, bool) {
+) (bool, string, time.Duration) {
 	if g == nil || g.Loop == nil {
-		return false, "shell permission gate not wired", false
+		return false, "shell permission gate not wired", 0
 	}
-	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
+	return g.Loop.requestApprovalFor(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
 }
 
 // bashShellModeFor returns the ADR-092 mode for a bash call in ts's turn, or

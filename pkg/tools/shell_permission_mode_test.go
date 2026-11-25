@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,15 +56,18 @@ type fakeShellApprovalRequester struct {
 
 func (f *fakeShellApprovalRequester) RequestShellApproval(
 	_ context.Context, _, _, _, _, _ string, args map[string]any,
-) (bool, string, bool) {
+) (bool, string, time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.lastArg = args
 	if f.approve {
-		return true, "", f.recordGrant
+		if f.recordGrant {
+			return true, "", time.Hour
+		}
+		return true, "", 0
 	}
-	return false, "denied by test fixture", false
+	return false, "denied by test fixture", 0
 }
 
 func (f *fakeShellApprovalRequester) callCount() int {

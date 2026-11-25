@@ -58,6 +58,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,13 +81,13 @@ type turnIDCapturingApprovalRequester struct {
 
 func (f *turnIDCapturingApprovalRequester) RequestShellApproval(
 	_ context.Context, _, _, _, _, turnID string, _ map[string]any,
-) (bool, string, bool) {
+) (bool, string, time.Duration) {
 	f.calls++
 	f.lastTurnID = turnID
 	if f.approve {
-		return true, "", true
+		return true, "", time.Hour
 	}
-	return false, "denied by test fixture", false
+	return false, "denied by test fixture", 0
 }
 
 // turnIDAssertionMsg documents, in the failing test's own output, exactly

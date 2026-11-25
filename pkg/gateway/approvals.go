@@ -192,6 +192,11 @@ type ApprovalOutcome struct {
 	// records the narrow allowance itself after the release.
 	Allowance *timedAllowanceAnswer
 
+	// AllowFor is the time an "allow_for" answer chose (C-26), zero for
+	// every other answer. The shell file and network pre-flight cards store
+	// their narrow allowance for this long when the call is released.
+	AllowFor time.Duration
+
 	// ApproverUserID is the authenticated person who made an explicit
 	// decision (approve, deny, cancel through the decision route); empty for
 	// every system decision (timeout, restart, Stop, saturation, …). Used
@@ -642,7 +647,7 @@ func (r *approvalRegistryV2) resolveBy(
 	recordGrant bool,
 	approverUserID string,
 ) (resolveOK bool, gone bool) {
-	return r.resolveAnswer(approvalID, action, recordGrant, approverUserID, nil)
+	return r.resolveAnswer(approvalID, action, recordGrant, approverUserID, nil, 0)
 }
 
 // timedAllowanceAnswer is the timed allowance a card answer recorded before
@@ -653,14 +658,16 @@ type timedAllowanceAnswer struct {
 	EndsAt   time.Time
 }
 
-// resolveAnswer is resolveBy with the timed allowance the answer recorded,
-// nil for every other answer.
+// resolveAnswer is resolveBy with the timed allowance the answer recorded
+// (nil for every other answer) and the time an "allow_for" answer chose
+// (zero for every other answer).
 func (r *approvalRegistryV2) resolveAnswer(
 	approvalID string,
 	action ApprovalAction,
 	recordGrant bool,
 	approverUserID string,
 	allowance *timedAllowanceAnswer,
+	allowFor time.Duration,
 ) (resolveOK bool, gone bool) {
 	r.mu.Lock()
 	e, ok := r.entries[approvalID]
@@ -678,7 +685,7 @@ func (r *approvalRegistryV2) resolveAnswer(
 	switch action {
 	case ApprovalActionApprove:
 		newState = ApprovalStateApproved
-		outcome = ApprovalOutcome{Approved: true, Reason: "approved", RecordGrant: recordGrant, Allowance: allowance}
+		outcome = ApprovalOutcome{Approved: true, Reason: "approved", RecordGrant: recordGrant, Allowance: allowance, AllowFor: allowFor}
 	case ApprovalActionDeny:
 		newState = ApprovalStateDeniedUser
 		outcome = ApprovalOutcome{Approved: false, Reason: denialReasonUser}
