@@ -516,7 +516,7 @@ function ProviderConfigSheet({
                 onChange={(e) => {
                   setAwsRegions((prev) => ({ ...prev, [draftKey]: e.target.value }))
                 }}
-                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-utility-xs-size)]"
+                className="flex h-9 pointer-coarse:min-h-[var(--target-touch-minimum)] w-full rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-utility-xs-size)]"
                 data-testid={`aws-region-input-${providerId}`}
               >
                 {awsRegionOptions.map((r) => (

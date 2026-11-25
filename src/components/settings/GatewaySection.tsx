@@ -265,7 +265,7 @@ export function GatewaySection() {
                 value={String(value ?? LOCAL_ONLY)}
                 onChange={(e) => setValue(e.target.value)}
                 aria-describedby={describedBy}
-                className="flex h-9 w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+                className="flex h-9 pointer-coarse:min-h-[var(--target-touch-minimum)] w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
               >
                 {[LOCAL_ONLY, ALL_INTERFACES].map((o) => (
                   <option key={o} value={o}>

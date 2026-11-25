@@ -247,7 +247,7 @@ export function SettingRow({ state, field, children }: SettingRowProps) {
                   disabled={disabled}
                   aria-describedby={cp['aria-describedby']}
                   aria-invalid={cp['aria-invalid']}
-                  className="flex h-9 w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+                  className="flex h-9 pointer-coarse:min-h-[var(--target-touch-minimum)] w-full max-w-xs rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
                 >
                   {(field.options ?? []).map((o) => (
                     <option key={o} value={o}>
