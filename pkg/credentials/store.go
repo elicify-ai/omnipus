@@ -707,8 +707,8 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	if err != nil {
 		return fmt.Errorf("credentials: marshal store: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("credentials: create store dir: %w", err)
+	if mkErr := os.MkdirAll(filepath.Dir(s.path), 0o700); mkErr != nil {
+		return fmt.Errorf("credentials: create store dir: %w", mkErr)
 	}
 	// The transaction's lock is on the sidecar credentials.json.lock, never
 	// credentials.json itself: locking the store file created it EMPTY on the
