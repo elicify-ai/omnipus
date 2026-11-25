@@ -52,6 +52,11 @@ func storedProvenance(origins []string) bus.Provenance {
 // (fail closed). A store-less direct turn has nothing to classify and joins
 // nothing: its consumed inputs alone decide.
 func (al *AgentLoop) sessionLineageProvenance(sessionID string, declared session.OriginKind) (bus.Provenance, bool) {
+	// A caller built without a loop (a PlanEngine with no AgentLoop) has no
+	// store to read: nothing to join, and the result stays unresolved.
+	if al == nil {
+		return bus.UnresolvedProvenance(), false
+	}
 	sessions := al.GetSessionStore()
 	lifecycle := al.GetSessionLifecycleStore()
 	if sessionID == "" || sessions == nil || lifecycle == nil {
