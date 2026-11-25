@@ -248,6 +248,74 @@ describe('SkillsToolsPage — Skills tab rows', () => {
     expect(api.deleteSkill).toHaveBeenCalledWith('web-research', revision)
     expect(api.deleteSkill).not.toHaveBeenCalledWith('Web Research', expect.anything())
   })
+
+  // S-34 / C-5 / User Story 4 AS7: a skill is shown as Verified exactly when the
+  // server reports it verified (a built-in skill, or a registry install whose
+  // files still match the registry hash); after a change outside Omnipus the
+  // server reports it unverified and "the Skills tab shows it without Verified".
+  // Ported from the retired SkillCard.test 'shows "Verified" badge for verified
+  // skills' (it asserted the word on the old card). The spec says "Verified" but
+  // not how a row draws it, so the question put to a row is whether it says
+  // Verified as a whole word, in its text or in the name of something inside it;
+  // "Unverified" is not "Verified" (S-34: "without Verified").
+  describe('the Verified mark (S-34, C-5)', () => {
+    function saysVerified(row: HTMLElement): boolean {
+      const word = /\bVerified\b/
+      if (word.test(row.textContent ?? '')) return true
+      return [row, ...Array.from(row.querySelectorAll('[aria-label], [title]'))].some(
+        (el) => word.test(el.getAttribute('aria-label') ?? '') || word.test(el.getAttribute('title') ?? ''),
+      )
+    }
+
+    // The instrument: the two cases below fail today because a row does not say
+    // Verified, so show first that this probe would see the word in each place a
+    // row could put it, and that it does not take "Unverified" for it.
+    it('the probe sees Verified in text, in an accessible name and in a title, and not in "Unverified"', () => {
+      const probe = (html: string): HTMLElement => {
+        const el = document.createElement('li')
+        el.innerHTML = html
+        return el
+      }
+      expect(saysVerified(probe('<span>Verified</span>')), 'as text').toBe(true)
+      expect(saysVerified(probe('<svg aria-label="Verified"></svg>')), 'as the name of an inner element').toBe(true)
+      expect(saysVerified(probe('<span title="Verified"></span>')), 'as a title').toBe(true)
+      const own = document.createElement('li')
+      own.setAttribute('aria-label', 'web-search, Verified')
+      expect(saysVerified(own), 'as the name of the row itself').toBe(true)
+      expect(saysVerified(probe('<span>Unverified</span>')), 'Unverified is not Verified').toBe(false)
+      expect(saysVerified(probe('<span>web-search</span>')), 'no mark at all').toBe(false)
+    })
+
+    it('S-34 / C-5: the row of a verified skill says Verified and the row of an unverified skill does not', async () => {
+      world.skills = [
+        skill('web-search', { name: 'web-search', verified: true }),
+        skill('notes-helper', { name: 'notes-helper', verified: false }),
+      ]
+      renderPage()
+      await openToolsGroup()
+
+      const verified = await screen.findByTestId('skill-row-web-search')
+      const unverified = await screen.findByTestId('skill-row-notes-helper')
+      expect(saysVerified(verified), 'the verified skill is shown as Verified').toBe(true)
+      expect(saysVerified(unverified), 'the unverified skill is shown without Verified').toBe(false)
+    })
+
+    it('S-34: the same skill read again after a change outside Omnipus is shown without Verified', async () => {
+      world.skills = [skill('web-search', { name: 'web-search', verified: true })]
+      const first = renderPage()
+      await openToolsGroup()
+      expect(saysVerified(await screen.findByTestId('skill-row-web-search')), 'Given: shown as Verified').toBe(true)
+      first.unmount()
+
+      // When a file in its folder is changed outside Omnipus, the server's next
+      // answer for the same skill carries verified: false; the page is opened again.
+      world.skills = [skill('web-search', { name: 'web-search', verified: false, has_local_changes: true })]
+      renderPage()
+      await openToolsGroup()
+      const row = await screen.findByTestId('skill-row-web-search')
+      expect(saysVerified(row), 'Then: the Skills tab shows it without Verified').toBe(false)
+    })
+  })
 })
 
 // The toasts the real store holds now (the page's own addToast writes here).

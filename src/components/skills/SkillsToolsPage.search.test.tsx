@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { RegistryTool } from '@/lib/api'
+import type { McpServer, RegistryTool, Skill } from '@/lib/api'
 // The pack's BLOCKED seam (support.tsx::requireModule convention): the
 // missing module is a named, loud failure — the acceptance oracles are the
 // interaction tests below.
@@ -223,5 +223,90 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
 
     await waitFor(() => expectPermissionPatches(permissions(), { skill_policies: { 'notes-helper': 'allow' } }))
     expect(permissions().stored.policies).toEqual({ browser_navigate: 'ask', browser_click: 'allow', fetch_url: 'allow' })
+  })
+})
+
+// S-45 / User Story 6 AS1 / FR-001: the page opens on Skills and every tab says how
+// many it holds. Added in Skills & Tools fix round 4 (item 22): this file's header
+// has always named S-45, but its first case was S-46, and the retired
+// SkillCard.test case 'renders Skills & Tools heading and tabs' (the old screen's
+// "Installed Skills", "MCP Servers" and "Built-in Tools") had no counterpart on the
+// page. Two data sets: the spec's own numbers, and smaller ones, so a label with
+// fixed numbers cannot pass both. The spec lists the tabs in this order but never
+// says they sit in this order, so the order is not asserted; whitespace between a
+// tab's name and its count is layout, not text.
+describe('SkillsToolsPage — the page opens on Skills with counts (S-45)', () => {
+  function skillRecord(i: number): Skill {
+    return {
+      has_local_changes: false, id: `skill-${i}`, name: `skill-${i}`, description: `Skill ${i}.`,
+      source: 'global', status: 'active', verified: true, version: '1.0.0',
+      revision: 'a'.repeat(64), category: 'tools', trust_approved: false,
+    }
+  }
+  function squeeze(text: string): string {
+    return text.replace(/\s+/g, '')
+  }
+  function reading(tab: HTMLElement): string {
+    return squeeze(tab.textContent ?? '')
+  }
+
+  it.each([
+    {
+      label: "the spec's numbers (53 skills, 3 services with 86 tools, 114 Omnipus tools)",
+      skillCount: 53, serviceSizes: [30, 28, 28], omnipusCount: 114,
+      tabs: ['Skills 53', 'External tools (MCP) 86', 'Omnipus tools 114'],
+    },
+    {
+      label: 'other numbers (2 skills, 1 service with 3 tools, 5 Omnipus tools)',
+      skillCount: 2, serviceSizes: [3], omnipusCount: 5,
+      tabs: ['Skills 2', 'External tools (MCP) 3', 'Omnipus tools 5'],
+    },
+  ])('S-45: with $label the tabs read $tabs and Skills is selected', async ({ skillCount, serviceSizes, omnipusCount, tabs }) => {
+    const omnipus = Array.from({ length: omnipusCount }, (_, i) => tool(`omnipus_tool_${i}`, `group_${i % 7}`))
+    const servers: McpServer[] = []
+    const external: RegistryTool[] = []
+    serviceSizes.forEach((size, index) => {
+      const id = `service-${index + 1}`
+      const names = Array.from({ length: size }, (_, j) => `mcp_${id}_tool_${j}`)
+      names.forEach((name) => external.push({ ...tool(name, 'search'), source: 'mcp', server_id: id }))
+      servers.push({ id, name: id, transport: 'sse', status: 'connected', enabled: true, tool_count: size, tools: names })
+    })
+    vi.mocked(api.fetchSkills).mockResolvedValue(Array.from({ length: skillCount }, (_, i) => skillRecord(i)))
+    vi.mocked(api.fetchRegistryTools).mockResolvedValue([...omnipus, ...external])
+    vi.mocked(api.fetchMcpServers).mockResolvedValue(servers)
+    // The stored settings name every tool and skill the page lists, so no row is
+    // short of a value for a reason other than the one under test.
+    const policies: Record<string, 'ask'> = {}
+    const visibility: Record<string, 'full'> = {}
+    for (const entry of [...omnipus, ...external]) {
+      policies[entry.name] = 'ask'
+      visibility[entry.name] = 'full'
+    }
+    const skillPolicies: Record<string, 'ask'> = {}
+    const skillVisibility: Record<string, 'name_and_description'> = {}
+    for (let i = 0; i < skillCount; i += 1) {
+      skillPolicies[`skill-${i}`] = 'ask'
+      skillVisibility[`skill-${i}`] = 'name_and_description'
+    }
+    permissions().stored.policies = policies
+    permissions().stored.visibility = visibility
+    permissions().stored.skill_policies = skillPolicies
+    permissions().stored.skill_visibility = skillVisibility
+
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+
+    // "Skills is selected" waits for no count, so it is asked first: a wrong tab
+    // label below cannot stop this check from running.
+    const skillsTab = await screen.findByRole('tab', { name: /^skills/i })
+    const selected = screen.getAllByRole('tab').filter((tab) => tab.getAttribute('aria-selected') === 'true')
+    expect(selected, 'exactly one tab is selected, and it is Skills').toEqual([skillsTab])
+
+    await waitFor(
+      () => {
+        const found = screen.getAllByRole('tab').map(reading).sort()
+        expect(found, `the three tabs, each with its count (expected ${tabs.join(' | ')})`).toEqual(tabs.map(squeeze).sort())
+      },
+      { timeout: 4000 },
+    )
   })
 })
