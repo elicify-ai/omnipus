@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
  *     the next option, ArrowLeft/ArrowUp to the previous, both wrapping) —
  *     this component generalizes that implementation so both can be deleted
  *     in favor of it.
- *   - PromptGuardSection.tsx and SkillTrustSection.tsx render full-width card
+ *   - PromptGuardSection.tsx (and the retired SkillTrustSection.tsx) render full-width card
  *     rows (`role="radio"`, `aria-checked`) with every option at a fixed
  *     `tabIndex={0}` and NO arrow-key handling at all — a pre-existing
  *     accessibility gap. Using this component there is a real accessibility

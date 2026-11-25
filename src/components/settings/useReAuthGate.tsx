@@ -12,8 +12,7 @@ export function isReAuthCancelled(err: unknown): boolean {
 }
 
 // useReAuthGate wires the Spec-6 FR-12.2 re-auth consent flow into mutations
-// that hit a re-auth-gated PUT route (e.g. /security/sandbox-config,
-// /security/tool-policies). It mirrors IntegrationsSection's gated-save UX —
+// that hit a re-auth-gated PUT route (e.g. /security/sandbox-config). It mirrors IntegrationsSection's gated-save UX —
 // the same ReAuthDialog, the same "re-type your password" copy, the same
 // token-replay-in-header semantics — but in a reactive, promise-based form so
 // it slots cleanly into debounced auto-save flows that fire the PUT directly.

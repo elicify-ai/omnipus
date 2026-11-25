@@ -1,6 +1,6 @@
 // permissions.ts: the canonical global permissions of every tool and skill
 // (Skills & Tools spec C-2, C-3). One read model replaces the retired
-// /security/tool-policies and /security/skill-trust clients.
+// /security/tool-policies and /security/skill-trust clients (C-22 row 6).
 
 import type { ZodType } from 'zod'
 import { PermissionSettings as PermissionSettingsSchema } from '@/lib/api/generated/schemas'
