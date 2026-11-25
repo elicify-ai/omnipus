@@ -33,6 +33,7 @@ package credentials
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,6 +156,36 @@ func pausedWriteHook(enter func()) (hook func(stage string), engaged chan struct
 		enter()
 	}
 	return hook, engaged
+}
+
+// switchableTxHook is a test-owned trampoline for the package variable
+// TransactHook. A transaction goroutine reads TransactHook at every stage
+// (transactStage), so ASSIGNING it while such a goroutine is still alive is a
+// data race: CI job "Go Race Tests (group-2)", run 45597069707, subtest
+// busy_store_fails_ordinary_writes_within_five_seconds. The test therefore
+// assigns TransactHook only before the goroutine that reads it is launched and
+// after that goroutine is joined, and changes the behaviour in between through
+// this trampoline: the installed function (call) never changes while a reader
+// is alive, only the atomically swapped function behind it does.
+type switchableTxHook struct {
+	fn atomic.Pointer[func(stage string)]
+}
+
+func newSwitchableTxHook(initial func(stage string)) *switchableTxHook {
+	h := &switchableTxHook{}
+	h.swap(initial)
+	return h
+}
+
+// swap replaces the behaviour that later calls run; safe against a concurrent
+// call from a transaction goroutine.
+func (h *switchableTxHook) swap(fn func(stage string)) { h.fn.Store(&fn) }
+
+// call is the function assigned to TransactHook.
+func (h *switchableTxHook) call(stage string) {
+	if fn := h.fn.Load(); fn != nil {
+		(*fn)(stage)
+	}
 }
 
 // pausedWriter is one launched writer paused inside its transaction (R5-N1:
@@ -416,7 +447,7 @@ func s136CrossProcessBarrier(t *testing.T) {
 		s136DirEnv+"="+scratch,
 	)
 	require.NoError(t, cmd.Start(), "start child writer process")
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	t.Cleanup(func() { reapChildProcess(t, cmd.Process) })
 
 	waitForFile(t, pausedMarker, 5*time.Second,
 		"BLOCKED: the child writer never paused inside its transaction — "+
@@ -479,14 +510,16 @@ func s146BusyStoreBound(t *testing.T) {
 	// only on its first engagement — the holder's — so the paste's own
 	// transaction is never delayed by the seam.
 	holderHook, engaged := pausedWriteHook(func() { time.Sleep(6 * time.Second) })
-	TransactHook = holderHook
+	hook := newSwitchableTxHook(holderHook)
+	TransactHook = hook.call // assigned before the holder goroutine exists
 	holderWrite := launchAsync(func() error { return holder.Set("OTHER", "x") })
 	t.Cleanup(func() { joinWithin(t, holderWrite.done, 10*time.Second, "the 6 s holder") })
 	waitHookEntered(t, engaged, 2*time.Second)
 
 	// The paste runs with an inert hook (the holder is already inside its
-	// sleeping engagement).
-	TransactHook = func(stage string) {}
+	// sleeping engagement). The swap goes through the trampoline: assigning
+	// TransactHook here would race with the holder goroutine's later stage reads.
+	hook.swap(func(stage string) {})
 	pasteStart := time.Now()
 	_, pasteErr := store.CommitProgramCredential("prog_github_token", "tok_new_67890", nil)
 	elapsed := time.Since(pasteStart)
@@ -510,11 +543,12 @@ func s146BusyStoreBound(t *testing.T) {
 
 	// 1 s holder: the paste succeeds as generation 2.
 	holderHook2, engaged2 := pausedWriteHook(func() { time.Sleep(1 * time.Second) })
-	TransactHook = holderHook2
+	hook2 := newSwitchableTxHook(holderHook2)
+	TransactHook = hook2.call // the first holder is joined: no reader is alive
 	holder2Write := launchAsync(func() error { return holder.Set("OTHER2", "y") })
 	t.Cleanup(func() { joinWithin(t, holder2Write.done, 10*time.Second, "the 1 s holder") })
 	waitHookEntered(t, engaged2, 2*time.Second)
-	TransactHook = func(stage string) {}
+	hook2.swap(func(stage string) {}) // inert for the paste; see switchableTxHook
 	pasteStart2 := time.Now()
 	gen2, pasteErr2 := store.CommitProgramCredential("prog_github_token", "tok_new_67890", nil)
 	elapsed2 := time.Since(pasteStart2)
@@ -543,7 +577,7 @@ func s146CrossProcessHolder(t *testing.T) {
 		s136ChildEnv+"=1", s136RoleEnv+"="+s136RoleHold, s136PathEnv+"="+path,
 		s136KeyEnv+"="+hex.EncodeToString(txTestKey()), s136DirEnv+"="+scratch)
 	require.NoError(t, holder.Start(), "start holder process")
-	t.Cleanup(func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() })
+	t.Cleanup(func() { reapChildProcess(t, holder.Process) })
 
 	// Wait until the child actually holds the sidecar lock.
 	waitForFile(t, filepath.Join(scratch, "holder-locked"), 5*time.Second,
@@ -556,7 +590,7 @@ func s146CrossProcessHolder(t *testing.T) {
 		s136KeyEnv+"="+hex.EncodeToString(txTestKey()), s136DirEnv+"="+scratch,
 		s136ResultEnv+"="+cliResult)
 	require.NoError(t, cli.Start(), "start CLI stand-in process")
-	t.Cleanup(func() { _ = cli.Process.Kill(); _, _ = cli.Process.Wait() })
+	t.Cleanup(func() { reapChildProcess(t, cli.Process) })
 
 	start := time.Now()
 	pasteErr := store.Set("UNRELATED", "x")
@@ -583,6 +617,35 @@ type s136ChildResult struct {
 	Err string `json:"err"`
 }
 
+// reapChildProcess kills a re-exec'd child writer and waits for it. A child
+// that already exited is normal (os.ErrProcessDone); any other failure is
+// reported, never ignored.
+func reapChildProcess(t *testing.T, p *os.Process) {
+	t.Helper()
+	if killErr := p.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		t.Errorf("kill child process %d: %v", p.Pid, killErr)
+	}
+	if _, waitErr := p.Wait(); waitErr != nil && !errors.Is(waitErr, os.ErrProcessDone) {
+		t.Errorf("wait for child process %d: %v", p.Pid, waitErr)
+	}
+}
+
+// writeS136ChildResult records the child's Set outcome for the parent test.
+func writeS136ChildResult(t *testing.T, resultFile string, setErr error) {
+	t.Helper()
+	rec := s136ChildResult{}
+	if setErr != nil {
+		rec.Err = setErr.Error()
+	}
+	b, marshalErr := json.Marshal(rec)
+	if marshalErr != nil {
+		t.Fatalf("child: marshal result: %v", marshalErr)
+	}
+	if writeErr := os.WriteFile(resultFile, b, 0o600); writeErr != nil {
+		t.Fatalf("child: write result: %v", writeErr)
+	}
+}
+
 // runS136ChildBody runs inside the re-exec'd test binary.
 func runS136ChildBody(t *testing.T) {
 	t.Helper()
@@ -602,21 +665,29 @@ func runS136ChildBody(t *testing.T) {
 	case s136RoleHold:
 		// Hold the sidecar lock for 6 s — the "another process" holder of
 		// S-146, needing no seam (the raw lock exists today).
-		_ = fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
-			_ = os.WriteFile(filepath.Join(dir, "holder-locked"), []byte("1"), 0o600)
+		holdErr := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+			if markErr := os.WriteFile(filepath.Join(dir, "holder-locked"), []byte("1"), 0o600); markErr != nil {
+				return markErr
+			}
 			time.Sleep(6 * time.Second)
 			return nil
 		})
+		if holdErr != nil {
+			t.Fatalf("child: hold the sidecar lock: %v", holdErr)
+		}
 	case s136RolePausedSet:
 		// Pause inside Set after the in-lock read until the signal file.
 		pausedMarker := filepath.Join(dir, "child-paused")
 		signalFile := filepath.Join(dir, "release-signal")
 		resultFile := filepath.Join(dir, "child-result.json")
+		var markerErr error // written by the hook on this goroutine: Set runs the hook synchronously
 		TransactHook = func(stage string) {
 			if stage != "after-read" {
 				return
 			}
-			_ = os.WriteFile(pausedMarker, []byte("1"), 0o600)
+			if markerErr = os.WriteFile(pausedMarker, []byte("1"), 0o600); markerErr != nil {
+				return // reported after Set returns; the parent never sees the pause
+			}
 			deadline := time.Now().Add(30 * time.Second)
 			for time.Now().Before(deadline) {
 				if _, err := os.Stat(signalFile); err == nil {
@@ -627,23 +698,14 @@ func runS136ChildBody(t *testing.T) {
 		}
 		setErr := store.Set("OTHER", "y")
 		TransactHook = nil
-		rec := s136ChildResult{}
-		if setErr != nil {
-			rec.Err = setErr.Error()
+		if markerErr != nil {
+			t.Fatalf("child: write the paused marker: %v", markerErr)
 		}
-		b, _ := json.Marshal(rec)
-		_ = os.WriteFile(resultFile, b, 0o600)
+		writeS136ChildResult(t, resultFile, setErr)
 	case s136RolePlainSet:
 		resultFile := os.Getenv(s136ResultEnv)
 		setErr := store.Set("OTHER", "y")
-		rec := s136ChildResult{}
-		if setErr != nil {
-			rec.Err = setErr.Error()
-		}
-		b, _ := json.Marshal(rec)
-		if werr := os.WriteFile(resultFile, b, 0o600); werr != nil {
-			t.Fatalf("child: write result: %v", werr)
-		}
+		writeS136ChildResult(t, resultFile, setErr)
 	default:
 		t.Fatalf("child: unknown role %q", os.Getenv(s136RoleEnv))
 	}
