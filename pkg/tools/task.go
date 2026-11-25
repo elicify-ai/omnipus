@@ -88,6 +88,24 @@ func SyncTaskGoalRecord(
 	dod []task.AcceptanceCriterion, dodProvided bool,
 	goalMaxRoundsFn func() int,
 ) error {
+	return SyncTaskGoalRecordJoining(gs, t, criteriaProvided, dod, dodProvided, goalMaxRoundsFn, nil)
+}
+
+// SyncTaskGoalRecordJoining is SyncTaskGoalRecord for an agent's edit of the
+// task's criteria or DoD (I-2, S-111): joinProvenance is the task write's
+// Patch.JoinProvenance and lands on the paired goal in the same goal write
+// (on a legacy task's newly created goal it is the goal's first provenance),
+// because a running task session's goal wakes read the goal's provenance.
+// Nil (fresh creation, a person's edit) joins nothing; an empty set (an
+// unresolved turn) makes the goal unresolved.
+func SyncTaskGoalRecordJoining(
+	gs *goal.Store,
+	t *task.Task,
+	criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+	goalMaxRoundsFn func() int,
+	joinProvenance *[]string,
+) error {
 	if !criteriaProvided && !dodProvided {
 		return nil
 	}
@@ -120,9 +138,12 @@ func SyncTaskGoalRecord(
 		if nErr != nil {
 			return fmt.Errorf("build goal record: %w", nErr)
 		}
+		if joinProvenance != nil {
+			g.Provenance = append([]string(nil), *joinProvenance...)
+		}
 		return gs.Create(g)
 	}
-	_, err = gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
+	_, err = gs.Update(existing.GoalID, goal.Write{Provenance: joinProvenance, Mutate: func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
 				return sErr
@@ -2334,9 +2355,12 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
 	// (dual-write) and then on the paired goal record — creating one if this
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
-	if tu.patch.Prompt != nil || tu.patch.Description != nil || tu.patch.Title != nil {
-		// FR-041: an agent change to the task's instructions joins its
-		// turn's provenance in the same write.
+	if tu.patch.Prompt != nil || tu.patch.Description != nil || tu.patch.Title != nil ||
+		tu.criteriaProvided || tu.dodProvided {
+		// FR-041 / S-111: an agent change to the task's instructions —
+		// prompt, description, title, criteria or DoD — joins its turn's
+		// provenance in the same write (an unresolved turn joins an empty
+		// set: fail closed).
 		joined := provenanceStrings(ToolTurnProvenance(tu.ctx))
 		tu.patch.JoinProvenance = &joined
 	}
@@ -2351,8 +2375,8 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	}
 	if tu.criteriaProvided || tu.dodProvided {
 		req.SyncGoalDefinition = func(updated *task.Task) error {
-			return SyncTaskGoalRecord(GoalStoreForTasks(tu.t.store), updated,
-				tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn)
+			return SyncTaskGoalRecordJoining(GoalStoreForTasks(tu.t.store), updated,
+				tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn, tu.patch.JoinProvenance)
 		}
 	}
 	out, wErr := WriteTaskReconciled(tu.t.store, tu.taskID, req)
