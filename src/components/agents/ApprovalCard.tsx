@@ -5,36 +5,21 @@
 // the time choices that go with them (`allow_durations`); the card renders
 // exactly those and nothing else. No card offers a lasting allow: a lasting
 // Allow exists only as stored policy (Skills & Tools, or an agent's Tools
-// tab). The five exact-action tools and the always-ask tools never get a time
-// choice, so a person always sees the exact action.
+// tab). The server gives the five exact-action tools and the always-ask tools
+// no time choice, so a person always sees the exact action.
 //
 // `ApprovalChoices` is the shared row the tool-approval panel and modal
-// render. `ApprovalCard` is the skill card's decision row: it maps the C-12
-// decision-table inputs (which checks are open, whether the skill is
-// verified) onto the same offered actions the server computes for them.
+// render. `ApprovalCard` is the skill card's decision row: it renders the
+// lists the server computed for the skill card.
 
 import { useId, type Ref } from 'react'
 import { CheckCircle, Clock, SealCheck, XCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
-import { isAlwaysAskTool } from '@/lib/alwaysAskTools'
+import { parseServerErrorField } from '@/lib/api-error'
 
 export type ApprovalAction = ToolApprovalRequiredFrame['offered_actions'][number]
 export type ApprovalDuration = ToolApprovalRequiredFrame['allow_durations'][number]
-
-/**
- * C-26 point 9 (founder Q5 A): these tools keep a card for every action and
- * are never covered by a time limit. Mirrors the server's ExactActionTools.
- */
-export const EXACT_ACTION_TOOLS: readonly string[] = [
-  'environment_setup',
-  'request_mount',
-  'send_email',
-  'browser_evaluate',
-  'set_config',
-]
-
-export const ALL_DURATIONS: readonly ApprovalDuration[] = ['1h', '3h', '1d']
 
 const DURATION_WORDS: Record<ApprovalDuration, string> = {
   '1h': '1 hour',
@@ -44,35 +29,6 @@ const DURATION_WORDS: Record<ApprovalDuration, string> = {
 
 export function durationWords(duration: ApprovalDuration): string {
   return DURATION_WORDS[duration]
-}
-
-/**
- * The actions a card offers. The server's list wins; an entry without one
- * (built before the server sent it) follows the tool's own rule: exact-action
- * and always-ask tools answer one request at a time, every other tool may be
- * allowed for a limited time.
- */
-export function resolveOfferedActions(
-  toolName: string,
-  offered: readonly ApprovalAction[] | undefined,
-): readonly ApprovalAction[] {
-  if (offered) return offered
-  if (EXACT_ACTION_TOOLS.includes(toolName) || isAlwaysAskTool(toolName)) {
-    return ['allow_once', 'deny', 'cancel']
-  }
-  return ['allow_once', 'allow_for', 'deny', 'cancel']
-}
-
-/** The time choices shown with a timed action; empty when none is offered. */
-export function resolveDurations(
-  offered: readonly ApprovalAction[],
-  durations: readonly ApprovalDuration[] | undefined,
-): readonly ApprovalDuration[] {
-  const timed = offered.includes('allow_for') || offered.includes('approve_version_allow_for')
-  if (!timed) return []
-  // The card's own list wins, even when empty: a time choice the server did
-  // not list would be refused. Only an entry built without a frame has none.
-  return durations ?? ALL_DURATIONS
 }
 
 export function coversSentence(agentName: string): string {
@@ -86,7 +42,8 @@ export interface ApprovalChoice {
 
 interface ApprovalChoicesProps {
   offered: readonly ApprovalAction[]
-  durations?: readonly ApprovalDuration[]
+  /** The server's time choices; shown only with a timed action. */
+  durations: readonly ApprovalDuration[]
   agentName: string
   /** Label of the one-request approval (a readable preview may rename it). */
   onceLabel?: string
@@ -115,13 +72,13 @@ export function ApprovalChoices({
   denyRef,
 }: ApprovalChoicesProps) {
   const scopeId = useId()
-  const shownDurations = resolveDurations(offered, durations)
   const choose = (choice: ApprovalChoice) => onChoose?.(choice)
   const timedAction: ApprovalAction | undefined = offered.includes('approve_version_allow_for')
     ? 'approve_version_allow_for'
     : offered.includes('allow_for')
       ? 'allow_for'
       : undefined
+  const shownDurations = timedAction ? durations : []
   const timedPrefix = timedAction === 'approve_version_allow_for' ? 'Approve this version and allow for' : 'Allow for'
 
   return (
@@ -195,10 +152,9 @@ export function ApprovalChoices({
 }
 
 /**
- * The C-12 decision-table inputs of a skill card (a skill load or an
- * install_skill call). The server sends the same facts as
- * ToolApprovalRequiredFrame.skill.open_checks; this projection keeps the card
- * renderable from either. // not-wire-format
+ * A skill card's entry (a skill load or an install_skill call): the C-12
+ * facts plus the two lists the server computed for the card. The card shows
+ * exactly those lists. // not-wire-format
  */
 export interface SkillApprovalEntry {
   toolName: string
@@ -207,41 +163,22 @@ export interface SkillApprovalEntry {
   verified?: boolean
   trustOpen?: boolean
   permissionOpen?: boolean
+  offeredActions: readonly ApprovalAction[]
+  allowDurations: readonly ApprovalDuration[]
   disabled?: boolean
   onChoose?: (choice: ApprovalChoice) => void
 }
 
-/**
- * The actions of a skill card by the C-12 decision table: permission open →
- * Approve Once, the time choices, Deny; trust open → Approve this version,
- * Deny; both → Approve this version, Approve this version and allow for …,
- * Deny; an unverified install under Ask → one install-and-approve choice and
- * Deny.
- */
-export function skillCardActions(entry: Pick<SkillApprovalEntry, 'toolName' | 'trustOpen' | 'permissionOpen' | 'verified'>): {
-  offered: ApprovalAction[]
-  installApproval: boolean
-} {
-  const install = entry.toolName === 'install_skill'
-  if (install && entry.trustOpen && entry.verified === false) {
-    return { offered: ['allow_once', 'deny'], installApproval: true }
-  }
-  if (!install && entry.trustOpen && entry.permissionOpen) {
-    return { offered: ['approve_version', 'approve_version_allow_for', 'deny'], installApproval: false }
-  }
-  if (!install && entry.trustOpen) {
-    return { offered: ['approve_version', 'deny'], installApproval: false }
-  }
-  return { offered: ['allow_once', 'allow_for', 'deny'], installApproval: false }
-}
-
 /** The decision row of a skill approval card (C-12 rows 2–7). */
 export function ApprovalCard({ entry }: { entry: SkillApprovalEntry }) {
-  const { offered, installApproval } = skillCardActions(entry)
+  // C-12 row 6: an unverified install under Ask words its one approval as
+  // "Install and approve this version".
+  const installApproval = entry.toolName === 'install_skill' && entry.verified === false && entry.trustOpen === true
   return (
     <div className="flex flex-wrap gap-[var(--space-2)]" data-testid="skill-approval-choices">
       <ApprovalChoices
-        offered={offered}
+        offered={entry.offeredActions}
+        durations={entry.allowDurations}
         agentName={entry.agentName ?? 'this agent'}
         installApproval={installApproval}
         disabled={entry.disabled}
@@ -268,7 +205,39 @@ export function formatAllowanceEnd(iso: string, now: Date = new Date()): string 
   return `${end.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })} ${time}`
 }
 
-const NOT_APPLIED_PREFIX = 'Approved for this request only. The time limit was not saved'
+/** C-24: the card's own words for a refused answer (400). */
+export const CHOICE_NOT_OFFERED = 'This choice is no longer offered. Choose Approve Once or a time limit.'
+/** C-24: a 500 stored nothing; the card stays answerable. */
+export const APPROVAL_NOT_SAVED = 'Could not save the approval. Nothing was changed.'
+
+/**
+ * What the card says when the server refused or could not store an answer
+ * (spec "Approval card" Error cells, C-24): a 409 carries the server's own
+ * reason ("The skill changed after this request." and the like), a 400 means
+ * the choice is not offered, a 500 means nothing was stored. Undefined for
+ * any other status, or a 409 without a reason, so the caller keeps its
+ * general wording.
+ */
+export function refusedAnswerMessage(status: number, body: string | undefined): string | undefined {
+  if (status === 400) return CHOICE_NOT_OFFERED
+  if (status === 409) return parseServerErrorField(body)
+  if (status === 500) return APPROVAL_NOT_SAVED
+  return undefined
+}
+
+/**
+ * The result line of a stored version approval (C-24): said only when the
+ * server reports a trust approval, never for Approve Once or a time choice.
+ */
+export function versionApprovedResult(
+  resp: { applied?: { trust_approved?: boolean } },
+  skillName: string | undefined,
+): { message: string; variant: 'success' } | undefined {
+  if (resp.applied?.trust_approved !== true || !skillName) return undefined
+  return { message: `Approved this version of ${skillName}.`, variant: 'success' }
+}
+
+const NOT_APPLIED_PREFIX ='Approved for this request only. The time limit was not saved'
 
 /**
  * The result line after a timed choice (C-24, C-26): what the server stored,

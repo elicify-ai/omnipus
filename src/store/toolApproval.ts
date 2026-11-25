@@ -66,13 +66,11 @@ export interface PendingToolApproval {
   roomRef?: RoomRef
   /**
    * Skills & Tools C-24/C-26: the choices the server computed for this card.
-   * The card shows exactly these; undefined only for an entry built without
-   * a frame (older fixtures), where the card falls back to the tool's own
-   * rule (exact-action and always-ask tools get no time choice).
+   * The card shows exactly these.
    */
-  offeredActions?: ToolApprovalRequiredFrame['offered_actions']
+  offeredActions: ToolApprovalRequiredFrame['offered_actions']
   /** C-26: the time choices offered with allow_for, server-computed. */
-  allowDurations?: ToolApprovalRequiredFrame['allow_durations']
+  allowDurations: ToolApprovalRequiredFrame['allow_durations']
   /** C-9: the skill this call loads or installs, server-derived. */
   skill?: ToolApprovalSkill
 }
@@ -87,8 +85,8 @@ function k7Fields(source: {
   acting_agent_name?: string
   origin_label?: string
   room_ref?: RoomRef
-  offered_actions?: ToolApprovalRequiredFrame['offered_actions']
-  allow_durations?: ToolApprovalRequiredFrame['allow_durations']
+  offered_actions: ToolApprovalRequiredFrame['offered_actions']
+  allow_durations: ToolApprovalRequiredFrame['allow_durations']
   skill?: ToolApprovalSkill
 }): Pick<
   PendingToolApproval,
@@ -101,8 +99,8 @@ function k7Fields(source: {
     ...(source.room_ref ? { roomRef: source.room_ref } : {}),
     // C-24/C-26: the server-computed choices travel with the entry, live or
     // restored, so a reloaded card offers exactly what the server accepts.
-    ...(source.offered_actions ? { offeredActions: source.offered_actions } : {}),
-    ...(source.allow_durations ? { allowDurations: source.allow_durations } : {}),
+    offeredActions: source.offered_actions,
+    allowDurations: source.allow_durations,
     ...(source.skill ? { skill: source.skill } : {}),
   }
 }

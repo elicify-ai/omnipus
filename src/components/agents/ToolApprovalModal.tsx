@@ -105,8 +105,9 @@ import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
 import { highlightBinaryInText } from './approvalPreviews/BashApprovalPreview'
 import {
   ApprovalChoices,
-  resolveOfferedActions,
   timedChoiceResult,
+  refusedAnswerMessage,
+  versionApprovedResult,
   type ApprovalAction,
   type ApprovalChoice,
   type ApprovalDuration,
@@ -214,10 +215,12 @@ interface ToolApprovalCardProps {
   /** K7: display name of the acting agent (a helper names itself). */
   actingAgentName?: string
   /** C-24/C-26: the server-computed choices of this card. */
-  offeredActions?: readonly ApprovalAction[]
-  allowDurations?: readonly ApprovalDuration[]
+  offeredActions: readonly ApprovalAction[]
+  allowDurations: readonly ApprovalDuration[]
   /** C-9: an unverified skill install under Ask has one install choice. */
   skillUnverifiedInstall?: boolean
+  /** C-9: the skill this card loads or installs, for the result line. */
+  skillName?: string
 }
 
 function ToolApprovalCard({
@@ -234,6 +237,7 @@ function ToolApprovalCard({
   offeredActions,
   allowDurations,
   skillUnverifiedInstall,
+  skillName,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -339,6 +343,10 @@ function ToolApprovalCard({
         if (timed) {
           // C-24/C-26: report what the server stored, never what was asked.
           addToast(timedChoiceResult(resp, resolvedAgentName))
+        } else {
+          // C-24: a stored version approval says so; Approve Once never does.
+          const approved = versionApprovedResult(resp, skillName)
+          if (approved) addToast(approved)
         }
         // The server resolved it: remember that, rather than only hiding it.
         markResolved(approvalId)
@@ -368,7 +376,7 @@ function ToolApprovalCard({
             }
           } else {
             addToast({
-              message: `Failed to submit approval: ${err.userMessage}`,
+              message: refusedAnswerMessage(err.status, err.body) ?? `Failed to submit approval: ${err.userMessage}`,
               variant: 'error',
             })
           }
@@ -383,7 +391,7 @@ function ToolApprovalCard({
         setSubmitting(false)
       }
     },
-    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope, resolvedAgentName],
+    [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope, resolvedAgentName, skillName],
   )
 
   // Safe-default handler for Escape / overlay-click / X close. The Dialog
@@ -410,7 +418,7 @@ function ToolApprovalCard({
   // tool answers one request (channels FR-038); exact-action tools
   // (request_mount among them) never get a time choice.
   const alwaysAsk = isAlwaysAskTool(toolName)
-  const offered = resolveOfferedActions(toolName, offeredActions)
+  const offered = offeredActions
   const timeChoicesOffered = offered.includes('allow_for') || offered.includes('approve_version_allow_for')
 
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
@@ -759,6 +767,7 @@ export function ToolApprovalModal() {
       offeredActions={first.offeredActions}
       allowDurations={first.allowDurations}
       skillUnverifiedInstall={first.toolName === 'install_skill' && first.skill?.unverified === true}
+      skillName={first.skill?.name}
     />
   )
 }
