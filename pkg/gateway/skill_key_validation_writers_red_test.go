@@ -378,7 +378,14 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 			"workspace_id":         "w1",
 			"skill_policy_changes": map[string]any{"set": map[string]any{mountedKey: "ask"}},
 		}
-		res := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		// The conversation that creates the agent is W1's own. create_agent lets a conversation name
+		// its own workspace; any other target needs Omnipus's cross-workspace setup authority, a
+		// separate rule (omnipus-system-agent FR-006/FR-043, as quoted in
+		// pkg/sysagent/tools/target_workspace.go::resolveTargetWorkspace) that this row does not test.
+		// A bare context carries no workspace, so the first version of this call was refused with
+		// WORKSPACE_NOT_AUTHORIZED before the project key was looked at: a red for the wrong reason.
+		inW1 := tools.WithWorkspaceID(context.Background(), "w1")
+		res := systools.NewAgentCreateTool(deps).Execute(inW1, args)
 		require.False(t, res.IsError,
 			"D16#5: create_agent must accept the mounted project key; got: %s", res.ForLLM)
 		var created map[string]any
