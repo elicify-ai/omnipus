@@ -406,6 +406,13 @@ describe('C-16 app-owned save queue through SkillsToolsPage (D12)', () => {
     second.release(200, full({ skill_policies: { plan: 'allow', 'other-skill': 'ask' } })); await tick()
     expect(within(target).getByText('Saved')).toBeInTheDocument()
   })
+})
+
+// Split from the describe above so that neither callback passes the 240-line
+// function budget (scripts/check-function-budget.sh). Both describes drive the
+// same page through the same module-level helpers and hooks; nothing is local
+// to either of them.
+describe('C-16 app-owned save queue through SkillsToolsPage: cases ported from retired legacy suites, and page ownership', () => {
   // CHECK round 4, candidate 11: the apply/recovery invariants of the retired
   // SecuritySection.policy-activation.test (cases 1 and 2, RR1 pr-test F3 / SFH
   // N1) move onto the page's app-owned queue. That suite drove the legacy
