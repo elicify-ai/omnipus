@@ -11492,7 +11492,7 @@ export interface components {
             inference_profiles?: ("us" | "eu" | "apac" | "jp" | "au" | "global")[];
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
-             * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+             * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Limits → Model overrides. Never a Provider.status value.
              * @example false
              */
             window_unknown?: boolean;

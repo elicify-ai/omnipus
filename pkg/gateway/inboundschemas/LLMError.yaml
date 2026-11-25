@@ -204,7 +204,7 @@ x-user-messages:
     message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
     attribution: config
   context_window_unknown:
-    message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+    message: "This endpoint did not report a context length for this model. Set it under Settings → Limits → Model overrides → Context length."
     attribution: config
   bad_model:
     message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
