@@ -20,13 +20,21 @@ package session
 // CHECK R05 repair: the detector is proven on synthetic populations — a
 // complete-table positive control (the earlier instrument demanded a positive
 // count of REAL missing kinds, so a correct table failed it forever), a
-// dropped-kind negative control naming the kind, and a dropped-path control;
-// real turn-start-path completeness remains explicitly BLOCKED until an
-// independent registration inventory is wired. The spec does not require a
-// particular registration type. Rows read back from ProvenanceModeRows prove
-// self-consistency only, never completeness.
+// dropped-kind negative control naming the kind, and a dropped-path control.
+//
+// Turn-start paths (architect ruling of 2026-11-25 on S-83): the population is
+// the spec's own list (specTurnStartPaths, from the handoff table and "Root
+// versus lineage"), never the table's rows, and the table must hold exactly one
+// lineage row for each, naming its producer (turnStartPathProblems). Until the
+// table holds any path row the leaf fails loudly with BLOCKED naming the five
+// paths. A path without a row, a duplicate, a root path row, a path row with no
+// producer and a path row outside the spec's list all fail, and the judge is
+// proven on synthetic tables in TestProgramProvenance_TurnStartPathJudge. Rows
+// read back from ProvenanceModeRows prove self-consistency only; coverage comes
+// from the spec's list.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -63,6 +71,21 @@ var specTypeMode = map[UnifiedSessionType]ProvenanceMode{
 	SessionTypeHeartbeat: ProvenanceModeLineage,
 	SessionTypeVerifier:  ProvenanceModeLineage,
 	SessionTypeDelegate:  ProvenanceModeLineage,
+}
+
+// specTurnStartPaths is the population of registered turn-start paths, taken
+// from the SPEC and never from the table: one identifier per row of the
+// handoff table ("Everyone else copies or joins") that starts or feeds a turn.
+// Every one carries a provenance produced elsewhere, so each is lineage
+// ("Root versus lineage": everything that is not an identified standing
+// conversation). The identifiers are the architect's ruling of 2026-11-25 on
+// S-83; the table must hold exactly one row for each, with TurnStartPath set.
+var specTurnStartPaths = []string{
+	"launch",              // helper, delegated or steered session launch; any work session
+	"steering",            // steering message into an existing session
+	"peer_request",        // peer request (requestWakeMessage)
+	"background_callback", // background command started by a tool call, its async callback
+	"goal_follow_up",      // goal follow-up (runOrdinaryGoalFollowUp, dispatchGoalAsyncFollowUp)
 }
 
 func TestProgramProvenance_DriftTable(t *testing.T) {
@@ -170,35 +193,23 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 	})
 
 	t.Run("every_registered_turn_start_path_has_exactly_one_row", func(t *testing.T) {
-		// Spec S-83: the registered turn-start paths each have exactly one
-		// row too (the launch, steering and background-callback paths of the
-		// producer table). Structural checks run on whatever path rows exist;
-		// COMPLETENESS needs a population that does not come from the table
-		// itself (CHECK R05: rows derived from ProvenanceModeRows are
-		// self-consistency, never coverage).
-		seen := map[string]string{}
+		// Spec S-83: each registered turn-start path has exactly one row, naming
+		// its mode and its provenance producer. The population is the spec's own
+		// list (specTurnStartPaths), never the table's rows: rows read back from
+		// ProvenanceModeRows prove self-consistency, not coverage (CHECK R05).
 		pathRows := 0
 		for _, r := range rows {
-			if r.TurnStartPath == "" {
-				continue
+			if r.TurnStartPath != "" {
+				pathRows++
 			}
-			pathRows++
-			if prev, dup := seen[r.TurnStartPath]; dup {
-				t.Errorf("turn-start path %q has two rows (%s and %s) — exactly one row per path (S-83)",
-					r.TurnStartPath, prev, r.Origin)
-				continue
-			}
-			seen[r.TurnStartPath] = string(r.Origin)
-			require.Contains(t, []ProvenanceMode{ProvenanceModeRoot, ProvenanceModeLineage}, r.Mode,
-				"each path names its mode; FR-050 does not make every start path lineage")
-			require.NotEmpty(t, r.Producer,
-				"turn-start path %q must name its provenance producer (S-83)", r.TurnStartPath)
 		}
-		// No independent path inventory is connected yet. Do not prescribe a
-		// new production type just for the test, or infer coverage from rows.
-		t.Fatalf("BLOCKED: independent registered-turn-start-path inventory is not connected — "+
-			"required by S-83 (table has %d rows, %d paths); registration naming needs "+
-			"same-author reconciliation, not an invented TurnStartPath API", len(rows), pathRows)
+		if pathRows == 0 {
+			t.Fatalf("BLOCKED: the turn-start path rows %v are not in provenanceModeRows (the table holds %d rows, none of them a path row) — "+
+				"required by S-83; architect ruling 2026-11-25: five data rows, mode lineage, a named producer, no new type or function",
+				specTurnStartPaths, len(rows))
+		}
+		require.Empty(t, turnStartPathProblems(rows, specTurnStartPaths),
+			"each spec turn-start path has exactly one lineage row naming its producer, and the table holds no other path row (S-83)")
 	})
 
 	t.Run("instrument_detector_passes_a_complete_table", func(t *testing.T) {
@@ -235,6 +246,20 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 			"instrument: an added kind without a row is detected")
 	})
 
+	t.Run("instrument_added_path_without_row_is_caught", func(t *testing.T) {
+		// The paths twin of the added-kind instrument (architect ruling
+		// 2026-11-25): a test-only path in the population with no row fires the
+		// same judge the real leaf uses, naming that path.
+		rows, _, paths := syntheticDriftTable()
+		const probePath = "probe-added-path"
+		withProbe := append(append([]string{}, paths...), probePath)
+		require.Equal(t, []string{probePath}, missingPathRows(rows, withProbe),
+			"instrument: an added path without a row is detected, naming the path")
+		problems := turnStartPathProblems(rows, withProbe)
+		require.Len(t, problems, 1, "the judge reports exactly the added path: %v", problems)
+		require.Contains(t, problems[0], probePath)
+	})
+
 	t.Run("instrument_duplicate_kind_and_path_are_caught", func(t *testing.T) {
 		rows, kinds, paths := syntheticDriftTable()
 		rows = append(rows, rows[0], rows[len(rows)-1])
@@ -256,6 +281,90 @@ func TestProgramProvenance_DriftTable(t *testing.T) {
 		}
 		require.Equal(t, []string{"syn-steer"}, missingPathRows(cut, paths),
 			"instrument: a dropped path row is detected, naming the path")
+	})
+}
+
+// TestProgramProvenance_TurnStartPathJudge proves turnStartPathProblems on
+// synthetic tables, so the real leaf is never the only evidence that the judge
+// can fail (CHECK R05). Architect ruling 2026-11-25 on S-83: deleting any one of
+// the five path rows must fail, naming that path.
+func TestProgramProvenance_TurnStartPathJudge(t *testing.T) {
+	require.Len(t, specTurnStartPaths, 5,
+		"instrument check: the spec's handoff table lists five turn-start paths")
+
+	const producer = "synthetic-producer"
+	complete := func() []ProvenanceModeRow {
+		rows := make([]ProvenanceModeRow, 0, len(specTurnStartPaths))
+		for _, p := range specTurnStartPaths {
+			rows = append(rows, ProvenanceModeRow{Mode: ProvenanceModeLineage, Producer: producer, TurnStartPath: p})
+		}
+		return rows
+	}
+
+	t.Run("a_complete_table_of_the_five_paths_passes", func(t *testing.T) {
+		require.Empty(t, turnStartPathProblems(complete(), specTurnStartPaths),
+			"positive control: one lineage row with a producer for each spec path")
+	})
+
+	t.Run("kind_rows_are_not_path_rows", func(t *testing.T) {
+		rows := append(complete(), ProvenanceModeRow{Origin: OriginKindTask, Mode: ProvenanceModeLineage, Producer: producer})
+		require.Empty(t, turnStartPathProblems(rows, specTurnStartPaths),
+			"a kind row beside the path rows is not a path row")
+	})
+
+	t.Run("an_empty_table_reports_every_path", func(t *testing.T) {
+		problems := turnStartPathProblems(nil, specTurnStartPaths)
+		require.Len(t, problems, len(specTurnStartPaths), "one problem per path: %v", problems)
+		for _, p := range specTurnStartPaths {
+			require.Contains(t, problems, fmt.Sprintf("turn-start path %q does not have exactly one row", p))
+		}
+	})
+
+	t.Run("deleting_any_one_row_fails_naming_that_path", func(t *testing.T) {
+		for i, path := range specTurnStartPaths {
+			rows := complete()
+			cut := append(append([]ProvenanceModeRow{}, rows[:i]...), rows[i+1:]...)
+			problems := turnStartPathProblems(cut, specTurnStartPaths)
+			require.Equal(t, []string{fmt.Sprintf("turn-start path %q does not have exactly one row", path)}, problems,
+				"deleting the %q row", path)
+		}
+	})
+
+	t.Run("a_second_row_for_a_path_fails_naming_that_path", func(t *testing.T) {
+		for i, path := range specTurnStartPaths {
+			rows := complete()
+			rows = append(rows, rows[i])
+			problems := turnStartPathProblems(rows, specTurnStartPaths)
+			require.Equal(t, []string{fmt.Sprintf("turn-start path %q does not have exactly one row", path)}, problems,
+				"a duplicate %q row", path)
+		}
+	})
+
+	t.Run("a_root_row_fails_naming_the_path", func(t *testing.T) {
+		for i, path := range specTurnStartPaths {
+			rows := complete()
+			rows[i].Mode = ProvenanceModeRoot
+			problems := turnStartPathProblems(rows, specTurnStartPaths)
+			require.Equal(t, []string{fmt.Sprintf("turn-start path %q has mode %q, want %q", path, ProvenanceModeRoot, ProvenanceModeLineage)}, problems,
+				"the %q row as root", path)
+		}
+	})
+
+	t.Run("a_row_without_a_producer_fails_naming_the_path", func(t *testing.T) {
+		for i, path := range specTurnStartPaths {
+			rows := complete()
+			rows[i].Producer = ""
+			problems := turnStartPathProblems(rows, specTurnStartPaths)
+			require.Equal(t, []string{fmt.Sprintf("turn-start path %q names no provenance producer", path)}, problems,
+				"the %q row without a producer", path)
+		}
+	})
+
+	t.Run("a_path_row_outside_the_spec_list_fails_naming_it", func(t *testing.T) {
+		const extra = "probe-extra-path"
+		rows := append(complete(), ProvenanceModeRow{Mode: ProvenanceModeLineage, Producer: producer, TurnStartPath: extra})
+		problems := turnStartPathProblems(rows, specTurnStartPaths)
+		require.Equal(t, []string{fmt.Sprintf("path row %q is not in the spec's list of turn-start paths", extra)}, problems)
 	})
 }
 
@@ -319,6 +428,36 @@ func missingPathRows(rows []ProvenanceModeRow, paths []string) []string {
 		}
 	}
 	return out
+}
+
+// turnStartPathProblems is the judge of the path rows against a population of
+// turn-start paths: every path in the population has exactly one row, every
+// path row is lineage (each carries a provenance produced elsewhere) and names
+// its producer, and no path row exists outside the population. The real leaf
+// and every instrument go through it (CHECK R05: one detector, proven on
+// synthetic tables).
+func turnStartPathProblems(rows []ProvenanceModeRow, paths []string) []string {
+	var problems []string
+	for _, p := range missingPathRows(rows, paths) {
+		problems = append(problems, fmt.Sprintf("turn-start path %q does not have exactly one row", p))
+	}
+	population := map[string]bool{}
+	for _, p := range paths {
+		population[p] = true
+	}
+	for _, r := range rows {
+		switch {
+		case r.TurnStartPath == "":
+			continue
+		case !population[r.TurnStartPath]:
+			problems = append(problems, fmt.Sprintf("path row %q is not in the spec's list of turn-start paths", r.TurnStartPath))
+		case r.Mode != ProvenanceModeLineage:
+			problems = append(problems, fmt.Sprintf("turn-start path %q has mode %q, want %q", r.TurnStartPath, r.Mode, ProvenanceModeLineage))
+		case r.Producer == "":
+			problems = append(problems, fmt.Sprintf("turn-start path %q names no provenance producer", r.TurnStartPath))
+		}
+	}
+	return problems
 }
 
 // declaredOriginKindsForDrift enumerates the OriginKind constants by parsing
