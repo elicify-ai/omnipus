@@ -11221,7 +11221,7 @@ export interface components {
             context_window?: number;
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
-             * @description True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+             * @description True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Limits → Model overrides instead of a number.
              * @example false
              */
             window_unknown?: boolean;

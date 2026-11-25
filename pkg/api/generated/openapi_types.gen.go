@@ -17279,7 +17279,7 @@ type DefaultModel struct {
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
-	// WindowUnknown True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+	// WindowUnknown True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Limits → Model overrides instead of a number.
 	WindowUnknown *bool `json:"window_unknown,omitempty"`
 }
 
