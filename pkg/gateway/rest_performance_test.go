@@ -104,102 +104,25 @@ func TestGetPerformance_ExplicitConfig_ReportsConfigured(t *testing.T) {
 	}
 }
 
-// TestGetPerformance_ToolsOnDemand_AlwaysPresent verifies that GET /api/v1/performance
-// always includes the tools_on_demand field and that it reflects
-// cfg.Tools.Manifest.Compressed correctly. The test harness writes a config with
-// tools.manifest.compressed=true so the assertion can exercise the true branch.
-func TestGetPerformance_ToolsOnDemand_AlwaysPresent(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	// Overwrite the on-disk config with compressed=true so the in-memory config
-	// is reloaded with that value before the GET.
-	cfgJSON := []byte(`{"version":1,"agents":{"defaults":{}},"providers":[],"tools":{"manifest":{"compressed":true}}}`)
-	require.NoError(t, os.WriteFile(api.homePath+"/config.json", cfgJSON, 0o600))
-	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
-	w := httptest.NewRecorder()
-	api.HandlePerformance(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "GET must return 200; body=%s", w.Body.String())
-	var resp gen.PerformanceSettings
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.NotNil(t, resp.ToolsOnDemand, "tools_on_demand must always be present in GET response")
-	assert.True(t, *resp.ToolsOnDemand,
-		"tools_on_demand must be true when cfg.Tools.Manifest.Compressed=true")
-}
-
-// TestPutPerformance_ToolsOnDemand_False_ThenGet verifies that:
-//  1. PUT tools_on_demand=false persists and is reflected in the response.
-//  2. A subsequent GET returns tools_on_demand=false.
-//  3. cfg.Tools.Manifest.Compressed is false after the write.
-func TestPutPerformance_ToolsOnDemand_False_ThenGet(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// PUT: disable tools-on-demand (set Compressed=false).
-	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
-		strings.NewReader(`{"tools_on_demand":false}`))
-	putReq.Header.Set("Content-Type", "application/json")
-	putReq = withReAuthAdmin(t, api, putReq)
-	putW := httptest.NewRecorder()
-	api.HandlePerformance(putW, putReq)
-	require.Equal(t, http.StatusOK, putW.Code, "PUT must return 200; body=%s", putW.Body.String())
-
-	var putResp gen.PerformanceSettings
-	require.NoError(t, json.Unmarshal(putW.Body.Bytes(), &putResp))
-	require.NotNil(t, putResp.ToolsOnDemand, "tools_on_demand must be in PUT response")
-	assert.False(t, *putResp.ToolsOnDemand, "PUT response must reflect the written value (false)")
-
-	// GET: confirm the persisted value is returned.
-	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
-	getW := httptest.NewRecorder()
-	api.HandlePerformance(getW, getReq)
-	require.Equal(t, http.StatusOK, getW.Code, "GET must return 200; body=%s", getW.Body.String())
-
-	var getResp gen.PerformanceSettings
-	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
-	require.NotNil(t, getResp.ToolsOnDemand, "tools_on_demand must be in GET response")
-	assert.False(t, *getResp.ToolsOnDemand,
-		"GET must return tools_on_demand=false after PUT persisted false")
-
-	// Verify in-memory config is updated.
-	liveCfg := api.agentLoop.GetConfig()
-	assert.False(t, liveCfg.Tools.Manifest.Compressed,
-		"cfg.Tools.Manifest.Compressed must be false after PUT")
-}
-
-// TestPutPerformance_PartialUpdate_ToolsOnDemandOnly_LeavesParallelAgentsUnchanged
-// verifies that a PUT with only tools_on_demand does not clobber max_parallel_agents.
-func TestPutPerformance_PartialUpdate_ToolsOnDemandOnly_LeavesParallelAgentsUnchanged(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// First set max_parallel_agents to a known value.
-	req1 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
-		strings.NewReader(`{"max_parallel_agents":6}`))
-	req1.Header.Set("Content-Type", "application/json")
-	req1 = withReAuthAdmin(t, api, req1)
-	w1 := httptest.NewRecorder()
-	api.HandlePerformance(w1, req1)
-	require.Equal(t, http.StatusOK, w1.Code, "first PUT must return 200; body=%s", w1.Body.String())
-
-	// Then update only tools_on_demand without providing max_parallel_agents.
-	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
-		strings.NewReader(`{"tools_on_demand":false}`))
-	req2.Header.Set("Content-Type", "application/json")
-	req2 = withReAuthAdmin(t, api, req2)
-	w2 := httptest.NewRecorder()
-	api.HandlePerformance(w2, req2)
-	require.Equal(t, http.StatusOK, w2.Code, "second PUT must return 200; body=%s", w2.Body.String())
-
-	var resp2 gen.PerformanceSettings
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
-	require.NotNil(t, resp2.ToolsOnDemand, "tools_on_demand must be in PUT response")
-	assert.False(t, *resp2.ToolsOnDemand, "tools_on_demand must be false after second PUT")
-
-	// max_parallel_agents must still be 6 (not clobbered).
-	liveCfg := api.agentLoop.GetConfig()
-	assert.Equal(t, 6, liveCfg.Performance.MaxParallelAgents,
-		"max_parallel_agents must be unchanged after a tools_on_demand-only PUT")
-}
+// RETIRED with the "Load tools on demand" switch (skills-tools-redesign-spec.md,
+// C-22 row 2: `tools_on_demand` leaves PerformanceSettings and
+// PerformanceSettingsUpdate, and `rest_performance.go` "stops reading, writing and
+// reporting it"; C-22 row 4: `TestSettingsAgentWriteParity` loses the same row;
+// ST-Q4 B). Three cases here tested only that removed surface, so they are deleted
+// rather than rewritten — each names where its invariant now lives:
+//
+//   - TestGetPerformance_ToolsOnDemand_AlwaysPresent (GET always carried the field
+//     and mirrored cfg.Tools.Manifest.Compressed): the spec now says the opposite,
+//     pinned by TestGetPerformance_DoesNotReportToolsOnDemand in
+//     performance_tools_on_demand_red_test.go.
+//   - TestPutPerformance_ToolsOnDemand_False_ThenGet (PUT wrote the field and the
+//     GET echoed it): a request still carrying it now gets the schema's 400, pinned
+//     by TestPerformancePut_RejectsToolsOnDemand in the same file.
+//   - TestPutPerformance_PartialUpdate_ToolsOnDemandOnly_LeavesParallelAgentsUnchanged
+//     (a tools_on_demand-only PUT left max_parallel_agents alone): such a PUT is now
+//     a 400. The invariant it protected — a PUT of one field leaves
+//     max_parallel_agents alone — is still pinned below by
+//     TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchanged.
 
 // TestGetPerformance_GoalMaxRounds_DefaultTwenty is GOAL-FR-024/FR-045's
 // backend-half regression: a fresh install with nothing configured must
@@ -262,14 +185,16 @@ func TestPutPerformance_GoalMaxRounds_PersistsThenGet(t *testing.T) {
 }
 
 // TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchanged
-// mirrors the existing tools_on_demand/max_parallel_agents partial-update
-// tests below: a PUT touching only goal_max_rounds must not clobber the
-// other two fields, and vice versa.
+// pins that a PUT touching only goal_max_rounds does not clobber
+// max_parallel_agents. (Its first PUT used to set tools_on_demand as well and its
+// last assertion pinned that switch; both left with the switch — C-22 row 2. The
+// "a Limits PUT never touches tools.manifest.compressed" invariant lives in
+// TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesStoredManifestKeyInPlace.)
 func TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchanged(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	req1 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
-		strings.NewReader(`{"max_parallel_agents":6,"tools_on_demand":false}`))
+		strings.NewReader(`{"max_parallel_agents":6}`))
 	req1.Header.Set("Content-Type", "application/json")
 	req1 = withReAuthAdmin(t, api, req1)
 	w1 := httptest.NewRecorder()
@@ -292,40 +217,46 @@ func TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchang
 	liveCfg := api.agentLoop.GetConfig()
 	assert.Equal(t, 6, liveCfg.Performance.MaxParallelAgents,
 		"max_parallel_agents must be unchanged after a goal_max_rounds-only PUT")
-	assert.False(t, liveCfg.Tools.Manifest.Compressed,
-		"tools_on_demand must be unchanged after a goal_max_rounds-only PUT")
 }
 
-// TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesToolsOnDemandUnchanged
-// verifies that a PUT with only max_parallel_agents does not clobber tools_on_demand.
-func TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesToolsOnDemandUnchanged(t *testing.T) {
+// TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesStoredManifestKeyInPlace
+// replaces ..._LeavesToolsOnDemandUnchanged. The switch left the Performance
+// contract (C-22 row 2), but the stored `tools.manifest.compressed` key does not
+// leave the file: "stored values stay in place, ignored" (spec C-6 / D7, the
+// tool-loading conversion). So the invariant the old test protected survives in a
+// new form — saving a Limits value must never write that key, in either direction.
+//
+// The seed is the NON-default value: the shipped default is compressed=true
+// (pkg/config/defaults.go), so a handler that rewrote the key to its default, or
+// dropped it from config.json, is visible here. The key is read from the file, not
+// from the in-memory struct, because the spec does not say when the Go field goes.
+// This test passes on the pre-change code (the old handler also left the key alone
+// when the PUT omitted tools_on_demand); it guards the removal.
+func TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesStoredManifestKeyInPlace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	cfgJSON := []byte(`{"version":1,"agents":{"defaults":{}},"providers":[],"tools":{"manifest":{"compressed":false}}}`)
+	require.NoError(t, os.WriteFile(api.configPath(), cfgJSON, 0o600))
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
 
-	// First set tools_on_demand=false.
-	req1 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
-		strings.NewReader(`{"tools_on_demand":false}`))
-	req1.Header.Set("Content-Type", "application/json")
-	req1 = withReAuthAdmin(t, api, req1)
-	w1 := httptest.NewRecorder()
-	api.HandlePerformance(w1, req1)
-	require.Equal(t, http.StatusOK, w1.Code, "first PUT must return 200; body=%s", w1.Body.String())
-
-	// Then update only max_parallel_agents without providing tools_on_demand.
-	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
 		strings.NewReader(`{"max_parallel_agents":8}`))
-	req2.Header.Set("Content-Type", "application/json")
-	req2 = withReAuthAdmin(t, api, req2)
-	w2 := httptest.NewRecorder()
-	api.HandlePerformance(w2, req2)
-	require.Equal(t, http.StatusOK, w2.Code, "second PUT must return 200; body=%s", w2.Body.String())
+	req.Header.Set("Content-Type", "application/json")
+	req = withReAuthAdmin(t, api, req)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "PUT must return 200; body=%s", w.Body.String())
 
-	var resp2 gen.PerformanceSettings
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
-	require.NotNil(t, resp2.MaxParallelAgents, "max_parallel_agents must be in PUT response")
-	assert.EqualValues(t, 8, *resp2.MaxParallelAgents, "max_parallel_agents must be 8 after second PUT")
+	var resp gen.PerformanceSettings
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.MaxParallelAgents, "max_parallel_agents must be in PUT response")
+	assert.EqualValues(t, 8, *resp.MaxParallelAgents, "max_parallel_agents must be 8 after the PUT")
 
-	// tools_on_demand must still be false (not clobbered back to default).
-	liveCfg := api.agentLoop.GetConfig()
-	assert.False(t, liveCfg.Tools.Manifest.Compressed,
-		"cfg.Tools.Manifest.Compressed must remain false after a max_parallel_agents-only PUT")
+	data, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var saved map[string]any
+	require.NoError(t, json.Unmarshal(data, &saved))
+	tools, _ := saved["tools"].(map[string]any)
+	manifest, _ := tools["manifest"].(map[string]any)
+	assert.Equal(t, false, manifest["compressed"],
+		"tools.manifest.compressed must stay in config.json, untouched, after a Limits PUT (C-6: stored values stay in place); saved tools section: %v", saved["tools"])
 }

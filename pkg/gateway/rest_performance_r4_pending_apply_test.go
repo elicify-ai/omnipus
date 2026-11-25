@@ -158,12 +158,14 @@ func TestPerformancePendingApply_RefreshStage_ClearedByLaterSuccessfulPut(t *tes
 	}, pending.ChangedFields)
 
 	// Repair the cause, then a PUT that on its own needs no registry reload
-	// (tools_on_demand only). While something is pending it must reload.
+	// (goal_max_rounds only: only a changed global max_tool_iterations or a lowered
+	// agent reloads by itself, rest_performance.go). While something is pending it
+	// must reload. The field was tools_on_demand until C-22 row 2 removed it.
 	require.NoError(t, os.Remove(filepath.Join(api.homePath, "entities", "agents", "broken.json")))
 	var reloads atomic.Int32
 	api.agentLoop.SetReloadFunc(func() error { reloads.Add(1); return nil })
 
-	w = mtiPutPerf(t, api, `{"tools_on_demand":true}`)
+	w = mtiPutPerf(t, api, `{"goal_max_rounds":9}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.EqualValues(t, 1, reloads.Load(), "a PUT while settings are pending apply must reload the agent registry")
 	assert.Nil(t, r4DecodePending(t, w.Body.Bytes()), "the successful PUT response carries no pending_apply")
@@ -190,7 +192,8 @@ func TestPerformancePendingApply_ReloadStage_UnionUntilApplied(t *testing.T) {
 	}, pending.ChangedFields, "union of every failed PUT, in contract enum order")
 
 	api.agentLoop.SetReloadFunc(func() error { return nil })
-	w = mtiPutPerf(t, api, `{"tools_on_demand":false}`)
+	// A field outside the pending union (tools_on_demand until C-22 row 2 removed it).
+	w = mtiPutPerf(t, api, `{"max_parallel_agents":3}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.Nil(t, r4Pending(t, api), "a later PUT whose refresh and reload succeed clears pending_apply")
 }
@@ -239,7 +242,7 @@ func waitForReloadOrRebuildFailure(api *restAPI) error {
 func TestPerformancePendingApply_OnlyLaterApplyClears(t *testing.T) {
 	var p performancePendingApply
 	p.mark(gen.PerformanceReloadFailedDetailsStageReload,
-		[]gen.PerformanceReloadFailedDetailsChangedFields{gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand}, 3, 0)
+		[]gen.PerformanceReloadFailedDetailsChangedFields{gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents}, 3, 0)
 
 	p.clearAfterReload(3, 1)
 	require.NotNil(t, p.snapshot(), "reload #3 started before the mark: must not clear")
