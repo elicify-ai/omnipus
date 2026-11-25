@@ -102,6 +102,13 @@ for i in "${!REGEXES[@]}"; do
   LOG="$WORKDIR/shard-${i}.log"
   LOGS+=("$LOG")
   echo "shard $i: starting (regex len ${#REGEXES[$i]})" >&2
+  # Linux refuses any single argument over 131072 bytes (MAX_ARG_STRLEN): the
+  # shard then dies with "Argument list too long" and runs no test. As the
+  # package grows, raise --shards instead of letting the shard fail to start.
+  if [ "${#REGEXES[$i]}" -gt 120000 ]; then
+    echo "FATAL: shard $i test regex is ${#REGEXES[$i]} bytes, near the 131072-byte single-argument limit; raise --shards" >&2
+    exit 1
+  fi
   # Each shard gets its own -timeout budget; the overall job still has headroom.
   # We run with -p 1 inside the shard (same discipline as the non-sharded path).
   (

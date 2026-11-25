@@ -2861,7 +2861,7 @@ jobs:
         run: |
           set +e
           out=$(bash scripts/run-gateway-sharded.sh \
-          --shards 2 \
+          --shards 4 \
           --timeout 3600s \
           --tags goolm,stdjson,s1seams \
           --race 2>&1)
