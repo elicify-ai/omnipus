@@ -1382,6 +1382,9 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 		writeConfigurationMutationFailure(w, deletion)
 		return
 	}
+	// C-26: a deleted agent's timed allowances end with it, and its live
+	// egress tokens are revoked.
+	a.agentLoop.EndAgentAllowances(id)
 	// Tell the roster regression guard this shrink was INTENTIONAL before the
 	// reload below re-reads the store. Deleting the last agent legitimately
 	// empties the roster, which is otherwise indistinguishable from the store

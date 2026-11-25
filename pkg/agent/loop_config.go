@@ -153,6 +153,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Atomically swap the config and registry under write lock.
 	al.mu.Lock()
 	oldRegistry := al.registry
+	oldCfg := al.cfg
 
 	// Store new values
 	al.cfg = cfg
@@ -170,6 +171,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	al.mu.Unlock()
 	unlockPairing()
+
+	al.endAllowancesOnReload(oldCfg, cfg)
 
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)

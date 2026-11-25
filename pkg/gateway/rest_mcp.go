@@ -416,6 +416,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			entry["header_refs"] = headerRefs
 		}
 		servers[req.Name] = entry
+		coverNewMCPServiceJSON(m, a.agentLoop.GetConfig().Sandbox.ToolPolicies, req.Name)
 		return nil
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
@@ -1086,4 +1087,36 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		Enabled:      &enabled,
 	}
 	jsonOK(w, resp)
+}
+
+// coverNewMCPServiceJSON writes the global key mcp_<server>_* = ask for a
+// newly added service when no global key covers it (Skills & Tools C-7,
+// C-18), as add_mcp_server does. Covered means covered by the loaded
+// global map or by the stored one; a broader operator rule such as
+// mcp_*: deny writes nothing.
+func coverNewMCPServiceJSON(m map[string]any, loaded map[string]string, server string) {
+	sandbox, _ := m["sandbox"].(map[string]any)
+	stored, _ := sandbox["tool_policies"].(map[string]any)
+	storedValues := make(map[string]string, len(stored))
+	for k, v := range stored {
+		if s, ok := v.(string); ok {
+			storedValues[k] = s
+		}
+	}
+	plan := config.PlanMCPServiceCoverage(loaded, []string{server})
+	storedPlan := config.PlanMCPServiceCoverage(storedValues, []string{server})
+	for key, policy := range plan {
+		if _, uncovered := storedPlan[key]; !uncovered {
+			continue
+		}
+		if sandbox == nil {
+			sandbox = map[string]any{}
+			m["sandbox"] = sandbox
+		}
+		if stored == nil {
+			stored = map[string]any{}
+			sandbox["tool_policies"] = stored
+		}
+		stored[key] = policy
+	}
 }

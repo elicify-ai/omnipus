@@ -44,6 +44,9 @@ type restAPIUpdateAgent struct {
 	modelIdentityChanged    bool
 	mutationResult          agentstore.MutationResult
 	activationFailed        string
+	// skillPolicies is the checked tools_cfg.skills.policies (C-4, C-21);
+	// nil when tools_cfg names no skills (the stored overrides stay).
+	skillPolicies map[string]config.ToolPolicy
 }
 
 // restAPIUpdateAgentFlow carries the shared state of updateAgent across its stages.
@@ -319,6 +322,13 @@ func (uf *restAPIUpdateAgentFlow) refuseOmnipusRules() bool {
 		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(tc.Builtin.Policies)) {
 			return true
 		}
+	}
+	if tc := uf.ru.req.ToolsCfg; tc != nil && tc.Skills != nil {
+		checked, ok := checkAgentSkillPolicies(uf.w, uf.ru.a.homePath, uf.ru.id, uf.cfg.Sandbox.SkillPolicies, tc.Skills.Policies)
+		if !ok {
+			return true
+		}
+		uf.ru.skillPolicies = checked
 	}
 	return false
 }
@@ -1195,6 +1205,14 @@ func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.Age
 			// omitted mcp (e.g. a builtin-only policy update) must not
 			// silently drop the agent's existing MCP server bindings.
 			newTools.MCP = agentRec.Tools.MCP
+		}
+		switch {
+		case rp.ru.req.ToolsCfg.Skills != nil && len(rp.ru.skillPolicies) > 0:
+			newTools.Skills = &config.AgentSkillsCfg{Policies: rp.ru.skillPolicies}
+		case rp.ru.req.ToolsCfg.Skills != nil:
+			newTools.Skills = nil // {} clears every skill override (C-4)
+		case agentRec.Tools != nil:
+			newTools.Skills = agentRec.Tools.Skills // C-21: a writer naming no skills keeps them
 		}
 		agentRec.Tools = newTools
 	}

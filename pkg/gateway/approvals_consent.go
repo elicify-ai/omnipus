@@ -129,6 +129,10 @@ func auditAskDecision(ctx context.Context, logger *audit.Logger, e *approvalEntr
 	}
 	d := consentDecision(e, outcome.ApproverUserID, latency)
 	if outcome.Approved {
+		if a := outcome.Allowance; a != nil {
+			audit.EmitToolPolicyAskGrantedForTime(ctx, logger, d, a.Duration, a.EndsAt)
+			return
+		}
 		audit.EmitToolPolicyAskGrantedForCall(ctx, logger, d, !outcome.RecordGrant)
 		return
 	}

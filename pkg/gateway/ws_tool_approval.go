@@ -218,6 +218,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		RoomRef:         approvalRoomRef(entry),
 		OriginLabel:     approvalOriginLabel(entry),
 	}
+	frame.OfferedActions, frame.AllowDurations = offeredActions(entry)
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -450,7 +451,10 @@ func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionS
 	// r17 SR-1 / 10.4: every reconnect masks exactly like the live frame.
 	args := tools.ApprovalDisplayArguments(e.Args)
 	ctx := h.approvalSessionContext(e.SessionID)
+	offered, durations := offeredActions(e)
 	return generated.SessionStatePendingApproval{
+		OfferedActions:  offered,
+		AllowDurations:  durations,
 		ApprovalId:      e.ApprovalID,
 		SessionId:       e.SessionID,
 		ToolName:        e.ToolName,

@@ -414,7 +414,8 @@ func (nai *newAgentInstance) prepareIdentity() {
 	// discovery off, so the old gate rendered no discovery guidance at all.
 	nai.contextBuilder = NewContextBuilder(nai.workspace).
 		WithToolDiscovery(nai.cfg.Tools.Manifest.Compressed || nai.cfg.Sandbox.ToolVisibility != nil).
-		WithSplitOnMarker(nai.cfg.Agents.Defaults.SplitOnMarker)
+		WithSplitOnMarker(nai.cfg.Agents.Defaults.SplitOnMarker).
+		WithLoadedSandbox(&nai.cfg.Sandbox)
 
 	if nai.agentCfg != nil {
 		nai.contextBuilder.WithAgentInfo(nai.agentID, nai.agentName)

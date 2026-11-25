@@ -38,17 +38,45 @@ type SkillMenuView struct {
 	stamp   string
 }
 
-// ReadSkillMenuView reads the menu state of agentID under home. An agent
-// with no stored record keeps only the stored levels.
+// ReadSkillMenuView reads the menu state of agentID under home, with the
+// sandbox values as stored in config.json. An agent with no stored record
+// keeps only the stored levels.
 func ReadSkillMenuView(home, agentID, workspaceID string) (SkillMenuView, error) {
-	v := SkillMenuView{home: home, agentID: agentID, workspaceID: workspaceID}
 	vis, err := config.ReadPersistedVisibility(home)
 	if err != nil {
-		return v, err
+		return SkillMenuView{home: home, agentID: agentID, workspaceID: workspaceID}, err
 	}
-	v.levels = vis.Skills
-	if v.settings, err = config.ReadPersistedSkillSettings(home); err != nil {
-		return v, err
+	settings, err := config.ReadPersistedSkillSettings(home)
+	if err != nil {
+		return SkillMenuView{home: home, agentID: agentID, workspaceID: workspaceID}, err
+	}
+	return buildSkillMenuView(home, agentID, workspaceID, vis.Skills, settings)
+}
+
+// LoadedSkillMenuView builds the menu state of agentID from the sandbox
+// section of the loaded config (the values applied to running agents, C-15,
+// C-16) and the agent's stored record under home.
+func LoadedSkillMenuView(home, agentID, workspaceID string, sb *config.OmnipusSandboxConfig) (SkillMenuView, error) {
+	if sb == nil {
+		return SkillMenuView{home: home, agentID: agentID, workspaceID: workspaceID},
+			errors.New("skill menu: no loaded sandbox config")
+	}
+	settings := config.PersistedSkillSettings{
+		Policies: sb.SkillPolicies,
+		Trust:    sb.EffectiveSkillTrust(),
+		GodMode:  sb.GodMode,
+	}
+	return buildSkillMenuView(home, agentID, workspaceID, sb.SkillVisibility, settings)
+}
+
+// buildSkillMenuView completes a view from the given levels and settings
+// with the grants and per-agent values of the stored agent record.
+func buildSkillMenuView(
+	home, agentID, workspaceID string, levels map[string]string, settings config.PersistedSkillSettings,
+) (SkillMenuView, error) {
+	v := SkillMenuView{
+		home: home, agentID: agentID, workspaceID: workspaceID,
+		levels: levels, settings: settings,
 	}
 	var grants []string
 	if agentID != "" {
@@ -67,12 +95,17 @@ func ReadSkillMenuView(home, agentID, workspaceID string) (SkillMenuView, error)
 	}
 	v.decided = v.settings.Policies != nil || (v.agentSkills != nil && len(v.agentSkills.Policies) > 0)
 	raw, err := json.Marshal(struct {
-		Levels   map[string]string
-		Settings config.PersistedSkillSettings
-		Agent    *config.AgentSkillsCfg
-		Grants   []string
-		Approved string
-	}{v.levels, v.settings, v.agentSkills, grants, skills.RecordsFingerprint(filepath.Join(home, "skills"))})
+		Levels   map[string]string      `json:"levels"`
+		Policies map[string]string      `json:"policies"`
+		Trust    string                 `json:"trust"`
+		GodMode  bool                   `json:"god_mode"`
+		Agent    *config.AgentSkillsCfg `json:"agent"`
+		Grants   []string               `json:"grants"`
+		Approved string                 `json:"approved"`
+	}{
+		v.levels, v.settings.Policies, string(v.settings.Trust), v.settings.GodMode, v.agentSkills, grants,
+		skills.RecordsFingerprint(filepath.Join(home, "skills")),
+	})
 	if err != nil {
 		return v, fmt.Errorf("skill menu stamp: %w", err)
 	}

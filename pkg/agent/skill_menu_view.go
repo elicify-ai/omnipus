@@ -15,15 +15,32 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// skillMenuView reads this agent's stored skill levels and outcomes. An
+// WithLoadedSandbox sets the sandbox section of the loaded config the skill
+// menu reads (C-15: the values applied to running agents).
+func (cb *ContextBuilder) WithLoadedSandbox(sb *config.OmnipusSandboxConfig) *ContextBuilder {
+	cb.loadedSandbox = sb
+	return cb
+}
+
+// readSkillMenuView builds this agent's skill levels and outcomes from the
+// loaded config. A builder without a loaded config reads the stored values.
+func (cb *ContextBuilder) readSkillMenuView(workspaceID string) (tools.SkillMenuView, error) {
+	if cb.loadedSandbox == nil {
+		return tools.ReadSkillMenuView(omnipusHome(), cb.agentID, workspaceID)
+	}
+	return tools.LoadedSkillMenuView(omnipusHome(), cb.agentID, workspaceID, cb.loadedSandbox)
+}
+
+// skillMenuView reads this agent's skill levels and outcomes. An
 // unreadable state is logged and reported as not ok.
 func (cb *ContextBuilder) skillMenuView(workspaceID string) (tools.SkillMenuView, error) {
-	view, err := tools.ReadSkillMenuView(omnipusHome(), cb.agentID, workspaceID)
+	view, err := cb.readSkillMenuView(workspaceID)
 	if err != nil {
 		logger.ErrorCF("agent", "skill menu: stored skill levels unreadable; no skill is listed this turn",
 			map[string]any{"agent_id": cb.agentID, "error": err.Error()})
@@ -48,8 +65,8 @@ func denyEverySkill(skills.SkillInfo, bool) (string, bool) { return "", true }
 // stored skill levels and outcomes.
 func (cb *ContextBuilder) skillMenuGeneration(workspaceID string) uint64 {
 	generation := skills.Generation()
-	stamp := ""
-	if view, err := tools.ReadSkillMenuView(omnipusHome(), cb.agentID, workspaceID); err != nil {
+	var stamp string
+	if view, err := cb.readSkillMenuView(workspaceID); err != nil {
 		stamp = "unreadable: " + err.Error()
 	} else {
 		stamp = view.Stamp()

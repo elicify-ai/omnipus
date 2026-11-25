@@ -417,6 +417,8 @@ type restAPI struct {
 	// to end (see TestCreateAgent_ReloadFailure_ReturnsWarning). Always nil
 	// in production.
 	testForceFastUpsertErr error
+	// installReviews holds the C-13 install reviews (rest_skills_review.go).
+	installReviews installReviews
 }
 
 // ssrfChk returns the SSRF checker as a providers_pkg.URLChecker interface.
@@ -656,13 +658,22 @@ func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCrea
 // operations that have been accepted and dispatched but not yet completed.
 func jsonAccepted(w http.ResponseWriter, body any) { writeJSON(w, http.StatusAccepted, body) }
 
+// errorEncoder encodes error bodies with the text as written: an
+// application/json body needs no HTML escaping, and the spec's texts
+// ("Skills & Tools") reach clients unchanged.
+func errorEncoder(w http.ResponseWriter) *json.Encoder {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc
+}
+
 // jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
 // Content-Type before WriteHeader so error bodies are never served as text/plain
 // (#96). It does not call writeJSON to avoid recursion on a marshal failure.
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
+	if err := errorEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }
@@ -673,7 +684,7 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+	if err := errorEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }
@@ -908,7 +919,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// ruling 6).
 	rae.cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", rae.a.adminWrap(rae.a.HandleGodMode))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/audit-log", rae.a.adminWrap(rae.a.HandleSandboxAuditLog))
-	rae.cm.RegisterHTTPHandler("/api/v1/security/skill-trust", rae.a.adminWrap(rae.a.HandleSkillTrust))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", rae.a.adminWrap(rae.a.HandlePromptGuard))
 	// /api/v1/security/rate-limits handles GET (read state — the response carries
 	// the live daily-cost meter and current cap config, sensitive observability)
@@ -931,10 +941,8 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// /api/v1/security/sandbox-config is registered above with adminWrap — do NOT
 	// re-register here; Go ServeMux takes the last registration, and a lighter
 	// wrapper here would silently drop the dev_mode_bypass gate.
-	// GET/PUT /api/v1/security/tool-policies — readable and writable by the
-	// single authenticated account (PUT authorization enforced inside
-	// HandleToolPolicies).
-	rae.cm.RegisterHTTPHandler("/api/v1/security/tool-policies", rae.a.withAuth(rae.a.HandleToolPolicies))
+	// The legacy skill-trust and tool-policies routes are retired (Skills &
+	// Tools C-22 row 6): PATCH /security/permissions below is their writer.
 	// GET/PATCH /api/v1/security/permissions (Skills & Tools C-2): every
 	// global permission and level in one model, changed key by key; the
 	// PATCH needs a fresh re-auth (rest_permissions.go).

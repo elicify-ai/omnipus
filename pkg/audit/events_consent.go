@@ -12,7 +12,10 @@
 
 package audit
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AskDecision is one terminal approval decision, bound to its call.
 type AskDecision struct {
@@ -46,6 +49,18 @@ func (d AskDecision) fields() map[string]any {
 func EmitToolPolicyAskGrantedForCall(ctx context.Context, logger *Logger, d AskDecision, once bool) {
 	fields := d.fields()
 	fields["grant_recorded"] = !once
+	Emit(ctx, logger, EventToolPolicyAskGranted, SeverityInfo, fields)
+}
+
+// EmitToolPolicyAskGrantedForTime writes tool.policy.ask.granted for an
+// "allow_for" answer (Skills & Tools C-26): the call is released and a
+// timed allowance of the given length runs until expiresAt.
+func EmitToolPolicyAskGrantedForTime(ctx context.Context, logger *Logger, d AskDecision, duration string, expiresAt time.Time) {
+	fields := d.fields()
+	fields["grant_recorded"] = true
+	fields["action"] = "allow_for"
+	fields["duration"] = duration
+	fields["expires_at"] = expiresAt.UTC().Format(time.RFC3339Nano)
 	Emit(ctx, logger, EventToolPolicyAskGranted, SeverityInfo, fields)
 }
 

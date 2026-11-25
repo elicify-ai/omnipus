@@ -27,9 +27,11 @@ import (
 )
 
 type ContextBuilder struct {
-	workspace     string
-	agentID       string // agent ID for multi-agent context
-	agentName     string // agent display name for multi-agent context
+	workspace string
+	agentID   string // agent ID for multi-agent context
+	agentName string // agent display name for multi-agent context
+	// loadedSandbox is the sandbox section of the loaded config (C-15).
+	loadedSandbox *config.OmnipusSandboxConfig
 	skillsLoader  *skills.SkillsLoader
 	memory        *MemoryStore
 	splitOnMarker bool

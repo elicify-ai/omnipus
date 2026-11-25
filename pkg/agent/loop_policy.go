@@ -446,7 +446,9 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 // row 14) is never settled by a standing grant: this one guard covers every
 // grant-lookup call site, so each of its calls gets a fresh approval.
 func (al *AgentLoop) checkStandingGrant(sessionID, agentID, toolName string, args map[string]any) bool {
-	if tools.IsAlwaysAsk(toolName) {
+	// Always-ask and exact-action tools (C-26 point 9) are never settled by
+	// an allowance: every call shows its card.
+	if tools.IsAlwaysAsk(toolName) || tools.IsExactActionTool(toolName) {
 		return false
 	}
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {

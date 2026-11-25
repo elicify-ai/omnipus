@@ -1390,6 +1390,13 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 		})
 		return wsHandlerReadLoopContinue
 	}
+	if refusal := workflowStartRefusal(f.WorkflowStart); refusal != "" {
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: refusal,
+		})
+		return wsHandlerReadLoopContinue
+	}
 	var recipient *addressing.Pair
 	if f.Recipient != nil {
 		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
@@ -1813,4 +1820,25 @@ type wsStreamer struct {
 	// identity instead of leaving it nil. Guarded by statsMu like every
 	// other Finalize-written field.
 	finalizedMessageID string
+}
+
+// workflowStartRefusal checks a message's workflow_start (Skills & Tools
+// C-8): W1 and W18 need a target workspace, W5 (write a skill) takes one
+// optionally, and any other workflow is refused. It answers "" when the
+// start is accepted or absent. The server checks this whether or not
+// inbound schema validation is on.
+func workflowStartRefusal(ws *generated.WorkflowStart) string {
+	if ws == nil {
+		return ""
+	}
+	switch ws.Workflow {
+	case "W5":
+		return ""
+	case "W1", "W18":
+		if ws.TargetWorkspaceId == nil || strings.TrimSpace(*ws.TargetWorkspaceId) == "" {
+			return "This workflow needs a target workspace."
+		}
+		return ""
+	}
+	return "Unknown workflow."
 }

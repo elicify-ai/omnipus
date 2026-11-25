@@ -310,6 +310,10 @@ type Deps struct {
 	// non-empty summary when the session could not be stopped, which keeps the
 	// session and the agent record. Nil means no stop is available (tests).
 	StopSessionForDelete func(sessionID string) string
+	// EndAgentAllowances drops a deleted agent's timed allowances and
+	// revokes its live egress tokens (Skills & Tools C-26). Nil means the
+	// loop is not wired (tests).
+	EndAgentAllowances func(agentID string)
 	// MCPStatus reports live per-server connection status so mcp tool results
 	// can be honest about whether a server actually connected rather than
 	// just echoing the config write. status is one of "connected", "error",

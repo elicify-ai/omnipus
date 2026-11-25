@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -97,6 +98,14 @@ type restAPIUpdateAgentTools struct {
 		ToolsSpecified bool
 	}
 	mcpSpecified bool
+	// skillsOnly is a C-4 request carrying skills and no builtin map: the
+	// stored tool overrides stay as they are.
+	skillsOnly      bool
+	skillsSpecified bool
+	skillPolicies   map[string]config.ToolPolicy
+	// permissionChanges is what persistState changed of the agent's own
+	// stored values (C-26 point 7).
+	permissionChanges []agent.PermissionChange
 }
 
 // updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
@@ -113,6 +122,10 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	}
 
 	if rau.validateMCPBindings() {
+		return
+	}
+
+	if rau.normalizeSkillPolicies() {
 		return
 	}
 
@@ -170,7 +183,14 @@ func (rau *restAPIUpdateAgentTools) validateRequest() bool {
 	}
 
 	validateEnabled := rau.a.agentLoop.GetConfig().Gateway.ValidateInbound
-	return !decodeAndValidate(rau.w, rau.r, "AgentToolsUpdateRequest", &rau.req, validateEnabled)
+	body, ok := bufferRequestBody(rau.w, rau.r)
+	if !ok {
+		return true
+	}
+	if !decodeAndValidate(rau.w, rau.r, "AgentToolsUpdateRequest", &rau.req, validateEnabled) {
+		return true
+	}
+	return refuseNullSkills(rau.w, body)
 }
 
 // normalizeBuiltinPolicies normalizes and validates the complete built-in tool policy map.
@@ -209,6 +229,14 @@ func (rau *restAPIUpdateAgentTools) normalizeBuiltinPolicies() bool {
 	// `tools` and `agent_type` are read-only echoes and are ignored. A body
 	// carrying NEITHER `builtin` nor `config.builtin` is still rejected.
 	rau.roundTrip = rau.req.Builtin == nil && rau.req.Config != nil && rau.req.Config.Builtin != nil
+	if rau.req.Builtin == nil && !rau.roundTrip && len(rau.req.OverrideNames) > 0 {
+		jsonErr(rau.w, http.StatusBadRequest, "override_names names tools that are not in this request.")
+		return true
+	}
+	if _, skillsSent := rau.requestedSkillPolicies(); skillsSent && rau.req.Builtin == nil && !rau.roundTrip {
+		rau.skillsOnly = true // C-4: a skills-only write leaves the tool map alone
+		return false
+	}
 	if rau.req.Builtin == nil && !rau.roundTrip {
 		jsonErr(rau.w, http.StatusBadRequest,
 			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
@@ -342,6 +370,9 @@ func (rau *restAPIUpdateAgentTools) validateMCPBindings() bool {
 
 // persistPolicy validates policy coverage and persists the agent tool configuration atomically.
 func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
+	if rau.skillsOnly {
+		return rau.persistState(nil)
+	}
 	complete := make(map[string]config.ToolPolicy, len(rau.builtinPolicies))
 	for name, policy := range rau.builtinPolicies {
 		complete[name] = config.ToolPolicy(policy)
@@ -374,6 +405,13 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 	if refuseOmnipusPerAgentAsk(rau.w, rau.agentID, overrides) {
 		return true
 	}
+	return rau.persistState(overrides)
+}
+
+// persistState writes the agent record: the tool overrides (nil on a
+// skills-only write), the MCP bindings when sent and the skill overrides
+// when sent.
+func (rau *restAPIUpdateAgentTools) persistState(overrides map[string]config.ToolPolicy) bool {
 	mutation, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {
 		if err := agentmutation.ValidateFields(*agentRec, []string{"tools_cfg"}); err != nil {
 			return err
@@ -381,8 +419,15 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		if agentRec.Tools == nil {
 			agentRec.Tools = &config.AgentToolsCfg{}
 		}
-		retainReservedBuiltinToolPolicies(overrides, agentRec.Tools.Builtin.Policies, rau.builtinPolicies)
-		agentRec.Tools.Builtin.Policies = overrides
+		beforeTools, beforeSkills := storedAgentPermissions(agentRec.Tools)
+		defer func() {
+			rau.permissionChanges = changedAgentPermissions(rau.agentID, beforeTools, beforeSkills, agentRec.Tools)
+		}()
+		if !rau.skillsOnly {
+			retainReservedBuiltinToolPolicies(overrides, agentRec.Tools.Builtin.Policies, rau.builtinPolicies)
+			agentRec.Tools.Builtin.Policies = overrides
+		}
+		rau.applySkillPolicies(agentRec.Tools)
 		if rau.mcpSpecified {
 			servers := make([]config.AgentMCPServerBinding, 0, len(rau.mcpServers))
 			for _, s := range rau.mcpServers {
@@ -408,6 +453,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		}
 		return true
 	}
+	rau.a.endChangedAllowances(rau.r, rau.permissionChanges)
 	return false
 }
 

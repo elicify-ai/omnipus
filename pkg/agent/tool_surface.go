@@ -18,22 +18,21 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// readTurnToolSurface reads the stored tool levels for one turn. When
-// config.json cannot be read, the turn uses the levels of the loaded config
-// (the same stored values as of the last load) and the failure is logged as
-// an error.
+// readTurnToolSurface returns the tool levels of the loaded config for one
+// turn (C-15, C-16: a saved change applies to running agents once the config
+// is reloaded). A loop without a loaded config reads the stored levels; an
+// unreadable file then keeps the pre-conversion tiers and is logged.
 func (al *AgentLoop) readTurnToolSurface() tools.ToolSurface {
-	surface, err := tools.ReadToolSurface(omnipusHome())
-	if err == nil {
-		return surface
-	}
-	var live map[string]string
 	if cfg := al.GetConfig(); cfg != nil {
-		live = cfg.Sandbox.ToolVisibility
+		return tools.ToolSurface{Levels: cfg.Sandbox.ToolVisibility}
 	}
-	logger.ErrorCF("agent", "stored tool levels unreadable; this turn uses the levels of the loaded config",
-		map[string]any{"error": err.Error()})
-	return tools.ToolSurface{Levels: live}
+	surface, err := tools.ReadToolSurface(omnipusHome())
+	if err != nil {
+		logger.ErrorCF("agent", "stored tool levels unreadable; this turn keeps the pre-conversion tiers",
+			map[string]any{"error": err.Error()})
+		return tools.ToolSurface{}
+	}
+	return surface
 }
 
 // manifestCompressed reports whether this turn sends only part of the

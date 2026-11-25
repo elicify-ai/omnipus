@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -197,8 +198,11 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	agentType := "custom"
 	var toolsCfg *config.AgentToolsCfg
 	var wireAgentType gen.AgentType
-	for _, ac := range cfg.Agents.List {
+	var agentCfg *config.AgentConfig
+	for i := range cfg.Agents.List {
+		ac := cfg.Agents.List[i]
 		if ac.ID == agentID {
+			agentCfg = &cfg.Agents.List[i]
 			at := ac.ResolveType(coreagent.IsCoreAgent)
 			agentType = string(at)
 			wireAgentType = coreagent.ToWireType(ac)
@@ -347,6 +351,25 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	sort.Strings(overrideNames)
+	// Skill values come from the durable record (the same revision as
+	// above), so a write is read back even before the reload lands.
+	skillAgent := agentCfg
+	if state.Agent != nil {
+		skillAgent = state.Agent
+	}
+	skillEntries, skillErr := a.agentSkillEntries(skillAgent)
+	if skillErr != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read the skill permissions", skillErr)
+		return
+	}
+	var storedSkills *gen.AgentSkillsCfg
+	if skillAgent != nil && skillAgent.Tools != nil && skillAgent.Tools.Skills != nil && len(skillAgent.Tools.Skills.Policies) > 0 {
+		policies := make(map[string]gen.ToolPolicy, len(skillAgent.Tools.Skills.Policies))
+		for k, v := range skillAgent.Tools.Skills.Policies {
+			policies[k] = gen.ToolPolicy(v)
+		}
+		storedSkills = &gen.AgentSkillsCfg{Policies: policies}
+	}
 
 	mcpServers := make([]gen.AgentToolsMcpServerBinding, 0)
 	if toolsCfg != nil {
@@ -392,8 +415,10 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			Mcp: &struct {
 				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{Servers: &mcpServers},
+			Skills: storedSkills,
 		},
-		Tools: toolEntries,
+		Skills: skillEntries,
+		Tools:  toolEntries,
 	}
 	persistence := gen.AgentToolsResponsePersistenceStatusComplete
 	activation := gen.AgentToolsResponseActivationStatusActive
@@ -494,49 +519,31 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse body.
-	var body gen.ToolApprovalActionRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
+	// Parse and check the answer before the card is looked up, so a
+	// malformed answer leaves the card as it was (C-26 refusals).
+	ans, ok := a.readApprovalAnswer(w, r)
+	if !ok {
 		return
 	}
-	// recordGrant is set only for the "allow" action. "allow" resolves THIS
-	// call exactly like "allow_once" (identical terminal transition, so the
-	// pending tool call proceeds) and, once that resolve succeeds, records a
-	// session-scoped grant so future matching calls auto-approve. The grant's
-	// scoping identity is read from the immutable approval entry below —
-	// never from client-supplied fields. grantScope defaults to "exact" when
-	// the client omits it, per the wire contract.
+	body := ans.body
 	var action ApprovalAction
-	var recordGrant bool
-	grantScope := gen.ToolApprovalActionRequestScopeExact
 	switch body.Action {
-	case gen.ToolApprovalActionRequestActionAllowOnce:
-		action = ApprovalActionApprove
-	case gen.ToolApprovalActionRequestActionAllowFor,
+	case gen.ToolApprovalActionRequestActionAllowOnce,
+		gen.ToolApprovalActionRequestActionAllowFor,
 		gen.ToolApprovalActionRequestActionApproveVersion,
 		gen.ToolApprovalActionRequestActionApproveVersionAllowFor:
-		// TODO(#1963 developer): C-24/C-26 timed allowance and skill trust
-		// approval. Until implemented these actions store nothing and are
-		// refused with the existing unknown-action error, so nothing grants.
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
-		)
-		return
+		action = ApprovalActionApprove
 	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
 	case gen.ToolApprovalActionRequestActionCancel:
 		action = ApprovalActionCancel
 	default:
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
-		)
+		// Not an answer any card offers (schema validation off): the
+		// existing unknown-action refusal.
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown action %q", string(body.Action)))
 		return
 	}
+	timed := ans.allowFor > 0
 
 	// Guard: registry is nil in pre-registry test harnesses.
 	if a.approvalReg == nil {
@@ -551,11 +558,17 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// channels-spec-r8 FR-038(b): the lasting allow action is refused for an
-	// always-ask tool BEFORE the pending call is approved or resolved, so the
-	// card stays usable for approve-once, Deny or Cancel.
-	if recordGrant && tools.IsAlwaysAsk(entry.ToolName) {
+	// An always-ask tool keeps today's 400 for a remembering answer, checked
+	// before the offered-actions rule (C-26); the card stays usable.
+	if timed && tools.IsAlwaysAsk(entry.ToolName) {
 		jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(entry.ToolName))
+		return
+	}
+	// The server accepts only the answers the card offers (C-24): an
+	// exact-action tool's time choice and any skill action on a tool card
+	// are refused, nothing stored.
+	if !isOffered(entry, body.Action) {
+		jsonErr(w, http.StatusConflict, approvalNotOfferedText)
 		return
 	}
 
@@ -565,8 +578,28 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// and that Omnipus is single-account, so there is no other account to
 	// scope against; release's ws_tool_approval.go has no audience rule.
 
-	// Attempt the state transition.
-	resolved, gone := a.approvalReg.resolveBy(approvalID, action, recordGrant, requestUsername(r))
+	resp := gen.ToolApprovalResponse{
+		ApprovalId: approvalID,
+		Action:     gen.ToolApprovalResponseAction(body.Action),
+		Status:     gen.ToolApprovalResponseStatusOk,
+	}
+	// C-24 order of effects: the timed allowance is recorded first, then
+	// the waiting call is released. A late answer to a card that is no
+	// longer waiting records nothing.
+	var allowance *timedAllowanceAnswer
+	if timed {
+		if !a.approvalReg.isPending(approvalID) {
+			jsonErr(w, http.StatusGone, "approval already resolved")
+			return
+		}
+		scope := gen.ToolApprovalActionRequestScopeExact
+		if body.Scope != nil {
+			scope = *body.Scope
+		}
+		allowance, resp = a.answerWithTime(entry, scope, *body.Duration, ans.allowFor, resp)
+	}
+
+	resolved, gone := a.approvalReg.resolveAnswer(approvalID, action, timed, requestUsername(r), allowance)
 	if gone {
 		// Entry already in terminal state — FR-018.
 		logsafeWarn("tool-approval: late action on resolved approval",
@@ -579,178 +612,43 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.awaitRoomAdmission(entry)
-
-	// "allow": the pending call is now approved — record the session-scoped
-	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable
-	// approval entry set at creation, never from client-supplied data, so a
-	// caller cannot install a grant for an arbitrary (session, agent, tool, args).
-	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops (returns false)
-	// on any empty key component (fail-safe: never records under an empty
-	// session/agent/tool key). This is now the ONLY writer of "allow" grants
-	// (ADR-036 §3.4 retired the legacy WS-frame gate, wsApprovalHook, which
-	// used to also record grants from its own decision:"always" handling).
-	//
-	// The underlying tool call is still approved either way (the state
-	// transition above already succeeded) — a no-op grant only means the NEXT
-	// matching call will prompt again, not that this call fails. We log at Warn
-	// instead of Info in that case so an operator can see the grant did not
-	// actually take effect, rather than silently believing it did.
-	resp := gen.ToolApprovalResponse{
-		ApprovalId: approvalID,
-		Action:     gen.ToolApprovalResponseAction(body.Action),
-		Status:     gen.ToolApprovalResponseStatusOk,
+	if timed && resp.Applied != nil {
+		resp.Applied.CallReleased = action == ApprovalActionApprove
 	}
-	if recordGrant {
-		record, recordedScope := a.approvalGrantRecorder(entry, grantScope)
-		recorded := record(entry.SessionID)
-		if recorded {
-			logsafeInfo("tool-approval: recorded session Allow grant",
-				"approval_id", approvalID,
-				"session_id", entry.SessionID,
-				"agent_id", entry.AgentID,
-				"tool", entry.ToolName,
-				"requested_scope", string(grantScope),
-				"recorded_scope", string(recordedScope))
-		} else {
-			logsafeWarn("tool-approval: 'allow' action approved this call but the grant was NOT recorded "+
-				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
-				"approval_id", approvalID,
-				"session_id", entry.SessionID,
-				"agent_id", entry.AgentID,
-				"tool", entry.ToolName)
-		}
-		// Bug fix: also propagate the grant onto the durable identity the
-		// NEXT delegation will inherit from, so "Allow" clicked during a
-		// delegated child's own turn survives past that child's session
-		// lifetime. See recordGrantOnDelegationParent's doc comment.
-		// Honesty: if this IS a delegated child and the parent write did
-		// not stick, grant_recorded must be false — the child session is
-		// torn down at the end of the turn and the next same-identity use
-		// will ask again.
-		parentOK := a.recordGrantOnDelegationParent(entry, approvalID, record)
-		resp.GrantRecorded = boolPtr(recorded && parentOK)
-		if recorded {
-			resp.Scope = &recordedScope
-		}
-	}
-
 	jsonOK(w, resp)
 }
 
-// recordGrantOnDelegationParent is the fix for the bug where an "Always
-// Allow" grant clicked during a DELEGATED CHILD's own turn evaporates on the
-// very next delegation.
-//
-// # The bug
-//
-// entry.SessionID is the ACTING session id (approvalEntry.SessionID's own
-// doc comment, approvals.go) — for a tool-approval request raised from
-// inside a delegated child's turn, that is the CHILD's OWN session id, never
-// the delegating parent's. HandleToolApprovals records the "always" grant
-// under exactly that key: (entry.SessionID, entry.AgentID). But
-// pkg/agent/subturn.go's spawnSubTurn calls
-// al.CloseSession(childID, "delegate_terminal") unconditionally in its
-// cleanup defer, which calls ApprovalGrants().ClearSession(childID) — wiping
-// every grant filed under the child's key the MOMENT this one delegation
-// ends. Since every delegation mints a brand-new, effectively single-use
-// child session id (subturn.go's childID), a grant recorded only under that
-// key can never survive past this one delegation's own lifetime.
-//
-// # The fix — and the boundary it must not cross (2026-08 security review)
-//
-// In addition to the existing record under (entry.SessionID, entry.AgentID)
-// — which keeps the grant immediately effective for any further tool calls
-// within THIS SAME child turn — also record it under the acting session's
-// OWN immediate parent's SESSION id (reconstructed via the session store's
-// ParentSessionID, ADR-057 FR-008) paired with entry.AgentID: the EXACT
-// (session, agent) identity the approval modal displayed to the user. The
-// parent session outlives any one child's "delegate_terminal" teardown
-// (ClearSession only ever wipes the CHILD's own key), so this durably
-// survives that teardown while staying scoped to the agent identity the
-// user actually reviewed.
-//
-// An earlier version of this fix keyed the second component by
-// AgentForSession(meta.ParentSessionID) — the PARENT turn's OWN driving
-// agent (e.g. "Mia", delegating to "Jim") — reasoning that this exactly
-// matches the SOURCE key pkg/agent/subturn.go's spawnSubTurn reads via
-// InheritFrom (parentTS.transcriptSessionID, parentTS.agentID) at the next
-// delegation, so the grant would auto-propagate into every future sibling
-// delegation regardless of target agent. That was a real security defect:
-// the approval modal named "Jim," and a user clicking Always Allow for Jim
-// never reviewed or consented to Mia's OWN future tool calls, nor to
-// whatever DIFFERENT agent Mia might delegate to next — recording under
-// Mia's identity silently escalated a Jim-scoped decision across an agent
-// boundary the user never saw. Keying by entry.AgentID instead closes that
-// leak: the grant only ever benefits the SAME agent identity again, e.g. if
-// that agent is later switched in as the directly-active agent on this same
-// parent session (pkg/agent/loop.go's per-turn
-// `ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, ...)`
-// check then matches (parentSessionID, entry.AgentID) exactly).
-//
-// Trade-off accepted deliberately: because subturn.go's InheritFrom always
-// SOURCES from the PARENT's own agent id, not the previous child's, this
-// narrower key is no longer picked up by that standard spawn-time
-// inheritance call — a grant approved for Jim during one delegation does
-// NOT automatically flow into the NEXT delegation (to Jim again, or anyone
-// else) the way the wider, boundary-crossing key used to. Re-prompting on
-// the next delegation is the accepted cost of not silently crossing an
-// agent boundary the user never reviewed.
-//
-// A no-op (nothing extra recorded) when the acting session is not itself a
-// delegated child (ParentSessionID == "", the common case for approvals
-// raised directly in a real user chat turn) — that case already resolves
-// correctly today, since entry.SessionID there already equals whatever a
-// future delegation FROM this session will read as source. Also a no-op,
-// logged at Warn, when the parent session's owning agent cannot be resolved
-// (deleted agent, corrupt meta) — kept as a liveness gate on the delegation
-// relationship itself, even though its value no longer supplies the grant
-// key; the immediate grant above already succeeded, so the tool call itself
-// is unaffected, only this extra durability is missed.
-func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string, record func(sessionID string) bool) bool {
-	store := a.agentLoop.GetSessionStore()
-	if store == nil {
-		return true
+// answerWithTime records the timed allowance of an "allow_for" answer for
+// the card's agent and fills the response with what was stored (C-24,
+// C-26). A failed record still releases the call: the response says the
+// approval covers this request only, and why.
+func (a *restAPI) answerWithTime(
+	entry *approvalEntry, scope gen.ToolApprovalActionRequestScope,
+	duration gen.ApprovalAllowDuration, d time.Duration, resp gen.ToolApprovalResponse,
+) (*timedAllowanceAnswer, gen.ToolApprovalResponse) {
+	resp.Applied = &gen.ToolApprovalApplied{}
+	end, recorded, err := a.recordTimedAllowance(entry, scope, d)
+	if err != nil {
+		logsafeWarn("tool-approval: the time choice was not recorded; this call is approved once",
+			"approval_id", entry.ApprovalID, "agent_id", entry.AgentID, "tool", entry.ToolName, "error", err)
+		resp.GrantRecorded = boolPtr(false)
+		reason := approvalNotAppliedPrefix + err.Error() + "."
+		resp.NotAppliedReason = &reason
+		return nil, resp
 	}
-	meta, err := store.GetMeta(entry.SessionID)
-	if err != nil || meta.ParentSessionID == "" {
-		// Not a delegated child's session (or unresolvable) — nothing more
-		// to propagate; the direct record above already covers this case.
-		return true
+	resp.GrantRecorded = boolPtr(true)
+	resp.Scope = &recorded
+	resp.Applied.TimedAllowance = true
+	if end.IsZero() {
+		// A shell pre-flight card: the shell tool records the narrow
+		// allowance when the call is released.
+		return nil, resp
 	}
-	// AgentForSession is a liveness/validity gate on the delegation
-	// relationship (does the parent session still resolve to a real,
-	// currently-registered agent?), not the grant key itself — the key's
-	// second component is entry.AgentID (see doc comment above).
-	parentAgent, err := a.agentLoop.AgentForSession(meta.ParentSessionID)
-	if err != nil || parentAgent == nil {
-		logsafeWarn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
-			"the grant recorded above will not survive this delegation's own teardown",
-			"approval_id", approvalID,
-			"child_session_id", entry.SessionID,
-			"parent_session_id", meta.ParentSessionID,
-			"error", err)
-		return false
-	}
-	if record(meta.ParentSessionID) {
-		logsafeInfo("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
-			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
-			"own teardown without crossing into the parent's own agent identity",
-			"approval_id", approvalID,
-			"child_session_id", entry.SessionID,
-			"parent_session_id", meta.ParentSessionID,
-			"parent_agent_id", parentAgent.ID,
-			"agent_id", entry.AgentID,
-			"tool", entry.ToolName)
-		return true
-	}
-	logsafeWarn("tool-approval: parent Always-Allow grant was NOT recorded "+
-		"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
-		"approval_id", approvalID,
-		"child_session_id", entry.SessionID,
-		"parent_session_id", meta.ParentSessionID,
-		"agent_id", entry.AgentID,
-		"tool", entry.ToolName)
-	return false
+	resp.ExpiresAt = &end
+	logsafeInfo("tool-approval: recorded timed allowance",
+		"approval_id", entry.ApprovalID, "agent_id", entry.AgentID, "tool", entry.ToolName,
+		"duration", string(duration), "scope", string(recorded))
+	return &timedAllowanceAnswer{Duration: string(duration), EndsAt: end}, resp
 }
 
 // toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
