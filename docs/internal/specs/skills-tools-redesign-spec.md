@@ -135,6 +135,7 @@ Round 0 added merge members to `GlobalToolPolicies`, whose PUT still required an
 | `GET /security/permissions` | new | `contracts/openapi.yaml` | returns `PermissionSettings`; signed-in person (the same authentication the retired `/security/tool-policies` used) |
 | `PATCH /security/permissions` | new | `contracts/openapi.yaml` | body `PermissionSettingsPatch`; 200 `PermissionSettings`; 400/403/409 `ErrorResponse`; 503 saved-not-applied (existing text) |
 | `PermissionSettings` | new | `contracts/components/schemas/PermissionSettings.yaml` | complete stored maps: `policies` (tool → `ToolPolicy`, as `GlobalToolPolicies.policies`), `skill_policies` (skill key → `ToolPolicy`), `visibility` (tool name or `mcp_<server>_*` → `ModelVisibility`), `skill_visibility` (skill key → `ModelVisibility`), `skill_trust` (`allow`/`ask`/`deny`) |
+| `PermissionSettings.upgrade_unfinished` | new, optional (ruling spec-gaps-1, 2026-11-25) | `contracts/components/schemas/PermissionSettings.yaml`; new `contracts/components/schemas/SkillUpgradeUnfinishedAgent.yaml` | read-only array of `SkillUpgradeUnfinishedAgent` = `{agent_id: string, reason: enum [write_failed, unreadable]}`, both required, `additionalProperties: false`. Not in `required`: absent when the list would be empty. Served by GET and by every PATCH response; it is **not** a member of `PermissionSettingsPatch`, so a PATCH body naming it gets the existing 400 for an unknown member. Source: the C-19 upgrade ledger (`failures` and `skipped`), read on every request, never cached; the "listed while the record exists" rule is in C-19 |
 | `PermissionSettingsPatch` | new | `contracts/components/schemas/PermissionSettingsPatch.yaml` | the same five members, all optional; each map names **only the keys to change** |
 | `GlobalToolPolicies`, `GET/PUT /security/tool-policies` | retired by this package | `contracts/openapi.yaml`, `pkg/gateway/rest_tool_policies.go`, `pkg/gateway/inboundschemas/GlobalToolPolicies.yaml` | on the Settings base no screen writes them; the agent tab, their last reader, moves to `GET /security/permissions` (C-22 row 6) |
 
@@ -323,7 +324,12 @@ Stored consent:
 
 - Full never counts as consent and never bypasses E1's checks.
 - **Budget.** The injected instructions are charged once to the existing request budget (`pkg/agent/context_budget.go::contextBudget`, `::pinnedCoreOverheadTokens`), as part of the pinned overhead. If pinned overhead including all Full skills plus the output reserve does not fit the agent's model, the turn is **not sent** and the chat shows: "The skills set to Full for <agent> need about <n> tokens, more than <model> can take with this chat. Set some of them to Name and short description in Skills & Tools, or choose a model with a larger context." with a link to the Skills tab filtered to Full. Nothing is trimmed silently. The check runs every turn, so a model switch or a skill that grew is caught on the next turn.
-- **Page warning.** Each Full skill row shows its size ("about 3,200 tokens"); when the Full total for any agent exceeds half of that agent's model context, the Skills tab shows a warning callout naming the agents.
+- **Page warning** (data sources settled by ruling spec-gaps-1, 2026-11-25). Each Full skill row shows its size ("about 3,200 tokens"); when the Full total for any agent exceeds half of that agent's model context, the Skills tab shows a warning callout naming the agents. Both numbers are computed by the server; the page never adds up sizes or decides outcomes itself:
+  - `Skill.full_tokens` (`contracts/components/schemas/Skill.yaml`, `GET /skills`; integer ≥ 0, read-only, optional): the estimate the turn charges for this skill's block `### Skill: <id>\n\n<body>`, made with the turn's estimator (`pkg/agent/context_budget.go::estimateMessageTokens`, as `pkg/agent/full_skills.go::fullSkillsTokens` applies it). Served for every installed skill whatever its level, so a row can show it as soon as it is set to Full. Absent when the skill file cannot be read (the skill then has `load_error`).
+  - `Agent.full_skills_tokens` (`contracts/components/schemas/Agent.yaml`, `GET /agents` and `GET /agents/{id}`; integer ≥ 0, read-only, optional): what this agent's next turn would charge for Full skills, computed by **the same selection the turn uses** (`pkg/agent/full_skills.go::ContextBuilder.fullSkillsContext`: granted, eligible, level Full, outcome `allowed` for this agent, then `fullSkillsTokens`) over installed skills only. Project skills are left out: they depend on the chat's workspace and are not listed on this tab. 0 when no Full skill would be injected; absent when it cannot be computed (for example the agent's record is unreadable). The gateway calls the turn's selection; it never keeps a second copy of the outcome rules (C-11, C-14).
+  - Row text: `full_tokens` rounded to the nearest 100, "about <n> tokens" (for example 3,240 → "about 3,200 tokens"); below 50 → "under 100 tokens"; absent → no size. Only rows at Full show it.
+  - Warning rule: the Skills tab reads `GET /agents` and names every agent with `full_skills_tokens × 2 > context_window_effective` (the existing ADR-066 field on `Agent`). Exactly half is not a warning. An agent whose `full_skills_tokens` or `context_window_effective` is absent, or whose window is 0 (exempt subprocess agents), is never named. Callout (warning): "The skills set to Full take more than half of the model's context for <agent names, comma-separated>. Set some of them to Name and short description, or choose a model with a larger context."
+  - Freshness: the page re-reads `GET /agents` once after each saved skill level or skill permission change and on window focus. If `GET /agents` fails, no warning is shown and the rest of the tab is unaffected (no extra error callout); the chat refusal above stays the guarantee.
 
 
 ### C-15 Changing a level or a permission while chats are running (round-1 fix, MAJ-005)
@@ -394,14 +400,15 @@ New service (after upgrade, screen or `add_mcp_server`): `mcp_<S>_*` = ask is wr
 | Step | What is written | If Omnipus stops right after it |
 |---|---|---|
 | 0 Lock | exclusive file lock `entities/.skill-permissions-upgrade.lock`; a second process waits, then sees the ledger | nothing written; the next start begins again |
-| 1 Snapshot | `entities/.skill-permissions-upgrade-snapshot.json`, written once and never rewritten: the old global `Skill` value (or "absent"), the old trust value, the old manifest switches (`tools.manifest.compressed`, `preview_all_lazy`, `tools.mcp.discovery.enabled`, each server's `deferred`), the global map's MCP entries, God Mode, and for every agent record its id, its old per-agent `Skill` value (or "absent"), its granted skills and its workspace mounts; the installed and project skills found. Then the ledger `entities/.skill-permissions-upgrade-ledger.json`: `{state: in_progress, pending: [agent ids], in_flight: null}` | a missing or unreadable snapshot means nothing else was written: start again from the live files. Once the snapshot is durable it is the only source of old values |
+| 1 Snapshot | `entities/.skill-permissions-upgrade-snapshot.json`, written once and never rewritten: the old global `Skill` value (or "absent"), the old trust value, the old manifest switches (`tools.manifest.compressed`, `preview_all_lazy`, `tools.mcp.discovery.enabled`, each server's `deferred`), the global map's MCP entries, God Mode, and for every agent record its id, its old per-agent `Skill` value (or "absent"), its granted skills and its workspace mounts; the installed and project skills found. Then the ledger `entities/.skill-permissions-upgrade-ledger.json`: `{state: in_progress, pending: [agent ids], in_flight: null, failures: {}, skipped: [ids of the agent records the snapshot skipped as unreadable]}` (`failures` and `skipped` added by ruling spec-gaps-1, 2026-11-25) | a missing or unreadable snapshot means nothing else was written: start again from the live files. Once the snapshot is durable it is the only source of old values |
 | 2 Plan | nothing; every target value of steps 3–4 is computed in memory from the snapshot alone | — |
 | 3 Config | one atomic `config.json` write: trust (C-3); each skill's global value = the old global `Skill` value; levels (C-6, D7); external tools (C-18); `Skill` fixed `allow` with the old global `Skill` entry removed; retired keys left in place, ignored | a replay recomputes the same plan and writes it again; a key whose stored value differs from both its old value and its planned value was changed by a person in between and is left as it is |
 | 4 Agents | for each pending agent: the ledger names it `in_flight`; its record is written (`skills.policies` gains the planned overrides — its old `Skill` value for each skill granted to it and each project skill of its mounts at snapshot time — and its old `Skill` entry is removed); the ledger retires it | a leftover `in_flight` agent is completed from the plan: keys equal to the plan stay, an absent planned key is added, a key holding another value is left (a person's later choice) and logged |
-| 5 Done | ledger `{state: done}`; then `sandbox.migrations.skill_permissions = done` in `config.json`; then the C-2 self-heal | the ledger is the authority; a missing config marker is rewritten from it |
+| 5 Done | ledger `{state: done}` (its `skipped` list is kept); then `sandbox.migrations.skill_permissions = done` in `config.json`; then the C-2 self-heal | the ledger is the authority; a missing config marker is rewritten from it |
 
 - **When the new rules apply.** From the moment the snapshot is durable, policy is resolved from the plan of step 2, not from the files being rewritten: an agent still `pending` or `in_flight` gets exactly its planned overrides. Startup runs the upgrade before the agent loop starts any turn, so no turn sees the fixed `Skill: allow` without the per-skill values it replaced.
-- **A failed agent write** (for example a read-only file) leaves that agent `pending`; the run reports an Error naming it; the plan keeps applying to it; the next start retries only that agent. The Skills tab shows "The upgrade has not finished for <n> agents: <reason>. Their old skill limits still apply." An unreadable or malformed agent record is skipped permanently with a Warn and listed in the same notice; such an agent cannot run today either (`resolveTurnSkillAuthority` fails closed on an unreadable record).
+- **A failed agent write** (for example a read-only file) leaves that agent `pending` and records `failures[<id>] = write_failed` in the ledger; the run reports an Error naming it; the plan keeps applying to it; the next start retries only that agent, and a successful write removes its `failures` entry. An unreadable or malformed agent record is skipped permanently with a Warn; its id is in the ledger's `skipped` list, which stays after `done`; such an agent cannot run today either (`resolveTurnSkillAuthority` fails closed on an unreadable record).
+- **The notice** (ruling spec-gaps-1, 2026-11-25). Every `GET` and `PATCH /security/permissions` reads the ledger and serves `PermissionSettings.upgrade_unfinished` (C-2): one entry `{agent_id, reason: write_failed}` per `failures` entry, and one entry `{agent_id, reason: unreadable}` per `skipped` id **only while that agent's record file still exists** under `entities/agents/` (checked at each read; deleting the record clears the entry). No ledger, or nothing to list: the member is absent. When it is present the Skills tab shows the warning callout "The upgrade has not finished for <n> agents: <agent> (<reason words>), <agent> (<reason words>). Their old skill limits still apply." Here <n> is the number of entries, <agent> is the agent's name from `GET /agents` (its `agent_id` when the name is not known), and the reason words are `write_failed` = "its settings file could not be saved" and `unreadable` = "its settings file could not be read". The page shows only what the server lists; it never reads the ledger or infers the state.
 - **Nothing is inferred from replaced values.** Old values come only from the snapshot; the fixed `Skill: allow` written in step 3 is never read as an old value; a key a replay finds already migrated is never overwritten.
 - **Snapshot kept.** After `done` the snapshot is renamed `.skill-permissions-upgrade-snapshot.done.json` and never read again by the upgrade. Snapshot, ledger and lock live in `entities/`, which agents cannot read or change on either layer (`pkg/fspolicy/inventory.go::ProtectedInventoryNames`).
 - **Translation, not backfill.** Step 4 turns each agent's existing, explicit `Skill` value into per-skill values; that keeps what the operator said and is required. Nothing is written for an agent that had no `Skill` value, and no tool entry is ever written (C-18): that would be the forbidden backfill (Hard Constraint #6).
@@ -653,7 +660,7 @@ Refusals on `POST /tool-approvals/{approval_id}`: `action: allow` (a screen from
 
 | Endpoint / event | Change |
 |---|---|
-| `GET/PATCH /security/permissions` | new (C-2): this page reads and writes every permission, level and trust value through it, one per-key change per request |
+| `GET/PATCH /security/permissions` | new (C-2): this page reads and writes every permission, level and trust value through it, one per-key change per request; optional read-only `upgrade_unfinished` (C-2, C-19) |
 | `GET/PUT /security/tool-policies` | retired (C-22 row 6) |
 | `POST /skills/install/review`, `DELETE /skills/install/review/{id}`, `GET /skills/install/review/{id}` | new (C-13) |
 | `POST /tool-approvals/{approval_id}` | `allow` replaced by `allow_for` with `duration` (C-26); two skill actions and the `applied` result (C-24); `expires_at` |
@@ -662,7 +669,8 @@ Refusals on `POST /tool-approvals/{approval_id}`: `action: allow` (a screen from
 | `POST /skills/{name}/copy` | gains `category` (C-21) |
 | `GET/PUT /security/skill-trust` | retired (C-22 row 6) |
 | `GET /tools` | C-6 fields |
-| `GET /skills` | C-5 `category`, redefined `verified` |
+| `GET /skills` | C-5 `category`, redefined `verified`; C-14 `full_tokens` |
+| `GET /agents`, `GET /agents/{id}` | C-14 `full_skills_tokens` (read-only; compared with the existing `context_window_effective`) |
 | `POST /skills/install` | C-5 `category`, C-13 `review_id`; trust Deny refuses an unverified install (C-3); trust Ask needs a review (C-12) |
 | `GET/PUT /agents/{id}/tools` | C-4 `skills` |
 | `POST /mcp-servers` | writes the service's Ask key (C-7) |
@@ -775,6 +783,7 @@ A person wants rarely used tools hidden from the model to save cost, and importa
 9. **Given** an install that had "Load tools on demand" off before the upgrade, **When** Omnipus first starts, **Then** every static tool's level is Full, the switch is gone from Settings, and the tool tabs show no note, because the levels are the only control (ST-Q4 B).
 10. **Given** a running chat that already loaded `browser_evaluate`, **When** the person sets it to Hidden, **Then** the chat keeps the loaded definition, and new chats do not list it (C-15).
 11. **Given** Full skills for an agent that do not fit its model, **When** a turn starts, **Then** nothing is sent and the chat shows the C-14 text with a link to the Skills tab (ST-Q1 A).
+12. **Given** skills set to Full, **When** the Skills tab shows, **Then** each Full row shows "about <n> tokens", and a warning callout names every agent whose Full skills take more than half of its model's context (C-14 "Page warning").
 
 ### User Story 6 — Find any tool or skill and change a group at once (Priority: P1)
 
@@ -850,6 +859,7 @@ A person with 53 skills and 200 tools needs search, filters and group actions.
 2. **Given** a tab fails to load, **When** shown, **Then** an error callout gives the observed cause and Retry; no control on that tab can write until it loads.
 3. **Given** a width of 390 px, **When** any tab is shown, **Then** each row becomes a card with "Permission" and "What the model sees" lines, every control is at least 44 × 44 px, and nothing scrolls sideways.
 4. **Given** keyboard use only, **When** the person moves through the page, **Then** tabs, badges, menus and dialogs work with the keys in "Accessibility and Keyboard".
+5. **Given** the rows of a tab load and the permissions request fails, **When** the tab shows, **Then** the rows show read-only with "Permissions could not be loaded." and Retry, and no badge can write.
 
 ### User Story 11 — Agents can do what the person can (Priority: P1)
 
@@ -921,14 +931,14 @@ A person answering an approval card wants to let one agent do the same thing aga
 
 | Screen / Component | Loading | Empty | Error | Partial | Success |
 |---|---|---|---|---|---|
-| Skills tab | spinner "Loading skills…", skeleton rows, trust block skeleton | trust block stays; "No skills installed" + "Browse the catalog" (outline) | callout with cause + Retry; no writes | list loads, permissions fail: rows read-only, "Permissions could not be loaded." + Retry; upgrade not finished: callout "The upgrade has not finished for <n> agents: <reason>. Their old skill limits still apply." (C-19) | trust block, grouped rows, "Saved" after each change |
+| Skills tab | spinner "Loading skills…", skeleton rows, trust block skeleton | trust block stays; "No skills installed" + "Browse the catalog" (outline) | callout with cause + Retry; no writes | list loads, permissions fail: rows read-only, "Permissions could not be loaded." + Retry; upgrade not finished (`PermissionSettings.upgrade_unfinished` present): warning callout "The upgrade has not finished for <n> agents: <agent> (<reason words>), .... Their old skill limits still apply." (C-19 "The notice") | trust block, grouped rows, "Saved" after each change |
 | External tools tab | spinner "Loading services…" | "No external services yet" + "Add service" | callout + Retry | a service not connected: "Not connected" in its header and the error notice inside; others normal | one group per service |
-| Omnipus tools tab | spinner "Loading tools…" | "No Omnipus tools reported" + Retry | callout + Retry | levels fail, permissions load: level shows "Could not load" + Retry; badges work | one group per category |
+| Omnipus tools tab | spinner "Loading tools…" | "No Omnipus tools reported" + Retry | callout + Retry | tools load, permissions fail: rows and their levels (from `ToolRegistryEntry.visibility`, C-6) shown read-only, no badge enabled, "Permissions could not be loaded." + Retry (the Skills tab's text). Levels cannot fail on their own: they arrive with the rows (ruling spec-gaps-1, 2026-11-25) | one group per category |
 | Agent Tools tab | as today | Skills group: "No skills granted. Grant skills on this agent's Skills tab." | as today (three Retry states) | global ceiling missing: read-only, today's text | rows, "Saved" |
 | Install review (success toast: "Installed <name>. It is set to Ask: an agent needs your yes to use it unless Auto-approve is on. No agent is granted it yet; grant it on an agent's Skills tab.") | "Checking the skill…" while staging (Cancel usable, discards); "Installing…" after Install (Cancel disabled) | — | server reason; trust Deny refusal; "This review expired. Open the skill again to review it."; "The skill changed after review. Review it again."; outcome unknown → "Could not confirm the install. Checking…", then the result from the install status (C-13), or "Couldn't confirm the install. Open Skills to see what is installed." with Retry | verification unavailable: "Not verified: the catalog did not answer." and trust applies | the toast in the first column |
 | Web & Search panel | today's states | today's | today's | today's | today's |
 | Page save signal | "Saving…" (queued or in flight, C-16) | — | "Not saved: <server reason>." + Retry; "Not saved: the settings file could not be written." + Retry; rows show stored values; outcome unknown → "Couldn't confirm the save. Checking…" then "Showing what is stored now."; check failed → "Couldn't load what is stored." + Retry | "Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus." + Retry | "Saved" |
-| Full skills too large | — | — | in the chat: the C-14 text; on the Skills tab: a warning callout naming the agents whose Full total exceeds half of their model's context (ST-Q1 A) | — | each Full row shows its size |
+| Full skills too large | — | — | in the chat: the C-14 text; on the Skills tab: a warning callout naming the agents whose `full_skills_tokens` × 2 exceeds their `context_window_effective` (C-14 "Page warning", ST-Q1 A) | `GET /agents` fails: no warning, the tab is otherwise normal | each Full row shows "about <n> tokens" from `Skill.full_tokens` |
 | Approval card (C-12, C-24, C-26) | the card itself; buttons Approve Once, "Allow for" with 1 hour / 3 hours / 1 day, Deny (Cancel where it has it today); under the time choices: "Covers <agent> in all its chats, tasks and its own helpers until the time ends or Omnipus restarts. Other agents still ask."; always-ask tools unchanged; the five exact-action tools offer Approve Once and Deny only, with no time choices | — | 409 reasons shown on the card ("The skill changed after this request." and the others in C-24); 400 "This choice is no longer offered. Choose Approve Once or a time limit."; 500 "Could not save the approval. Nothing was changed." with the card still answerable | "Approved for this request only. The time limit was not saved: <reason>." | the card closes; the result line says what was stored, e.g. "Allowed for Mia until 14:05." or "Approved this version of notes-helper." |
 | Agent Tools tab, locked badge (US-3 AS2) | — | — | — | — | Allow (and Ask under a global Deny) disabled; tooltip "The global setting is Ask. Set it to Allow on Skills & Tools first." (or the Deny text); link "Change the global setting" next to the badges opens `/skills` at that row |
 | After leaving the page | — | — | a late outcome shows one toast with "Open Skills & Tools", worded by class: "A change on Skills & Tools was not saved: <reason>." / "A change on Skills & Tools was saved but is not applied to running agents yet." / "Couldn't confirm a change on Skills & Tools. Open it to see what is stored." (C-16) | — | — |
@@ -2469,6 +2479,39 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **Then** the `bash` Allow badge is disabled with the tooltip "The global setting is Ask. Set it to Allow on Skills & Tools first."; the `send_email` Allow and Ask badges are disabled with "The global setting is Deny. Change it on Skills & Tools first."
 - **And** each row's "Change the global setting" link opens Skills & Tools with that row in view and focused
 
+#### Scenario Outline: S-130 Full rows show their size and the page warns before a chat would stop (ruling spec-gaps-1, 2026-11-25)
+
+**Traces to**: User Story 5, Acceptance Scenario 12
+**Category**: Edge Case
+
+- **Given** `<setup>` (fixed token estimator in the Go test; literal `GET /skills` and `GET /agents` answers in the screen test)
+- **When** the server answers `GET /skills` and `GET /agents`, and the Skills tab shows
+- **Then** `<expected>`
+
+**Examples**: Dataset D18 (all rows).
+
+#### Scenario: S-131 The Skills tab names the agents the upgrade has not finished (ruling spec-gaps-1, 2026-11-25)
+
+**Traces to**: User Story 2, Acceptance Scenario 7
+**Category**: Error Path
+
+- **Given** an upgrade whose write of Mia's record failed (read-only file), and Jim's record skipped as unreadable at the snapshot
+- **When** the person opens the Skills tab
+- **Then** `GET /security/permissions` returns `upgrade_unfinished` = `[{agent_id: mia, reason: write_failed}, {agent_id: jim, reason: unreadable}]`
+- **And** the tab shows "The upgrade has not finished for 2 agents: Mia (its settings file could not be saved), Jim (its settings file could not be read). Their old skill limits still apply."
+- **And** after Mia's file is made writable and Omnipus restarts, only Jim is listed; after Jim's record file is deleted, `upgrade_unfinished` is absent and the callout is gone
+- **And** a `PATCH /security/permissions` body that names `upgrade_unfinished` gets 400 and stores nothing
+
+#### Scenario: S-132 Omnipus tools load but permissions fail (ruling spec-gaps-1, 2026-11-25)
+
+**Traces to**: User Story 10, Acceptance Scenario 5
+**Category**: Error Path
+
+- **Given** `GET /tools` answers and `GET /security/permissions` fails with "Omnipus did not respond"
+- **When** the Omnipus tools tab shows
+- **Then** the rows show with their levels from `GET /tools`, read-only, and no badge or level control can write
+- **And** the tab shows "Permissions could not be loaded." with Retry; after a successful Retry the badges work
+
 ---
 
 ## Test-Driven Development Plan
@@ -2555,7 +2598,7 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 27 | SkillsToolsPage.search.test | Unit TS | S-45 to S-50 | |
 | 28 | InstallReview.category.test | Unit TS | S-55, S-56, S-27 | Dataset D5 |
 | 29 | NewSkillMenu.test | Unit TS | S-52, S-54 | |
-| 30 | SkillsToolsPage.states.test | Unit TS | S-66, S-67 | |
+| 30 | SkillsToolsPage.states.test | Unit TS | S-66, S-67, S-131, S-132 | S-131 callout text from a literal `upgrade_unfinished`; S-132 rows read-only with Retry |
 | 31 | skills-tools.spec.ts | E2E | S-03, S-15, S-20, S-57, S-58, S-60 to S-65, S-68, S-69 | targeted spec file |
 | 32 | Rider tests (one each) | mixed | S-75 to S-81 | per rider |
 | 33 | TestSkillAuthority_FoldersFollowOutcome | Integration Go | S-85, S-86, S-87 | E6/E7 app-level and kernel grant lists |
@@ -2590,8 +2633,11 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 62 | ApprovalCard.timeChoices.test; ToolPolicyEditor.lockTooltip.test; repository guard for card labels | Unit TS; guard over `src/` and `pkg/` | S-119, S-126, S-127 | labels, scope line, result line, tooltip and link; no "Always Allow" or "Allow everywhere" label in production code |
 | 63 | TestTimedAllowance_EndsOnPermissionChange | Integration Go (each writer: PATCH, PUT agent tools, `set_agent_permissions`, config reload) | S-128 | Dataset D17 rows 10, 11, 14–20; audit entries; egress token revoked for `bash` |
 | 64 | TestToolApprovals_ExactActionToolsNoTimeChoice | Integration Go | S-129 | Dataset D17 rows 21–25: `offered_actions`, empty `allow_durations`, 409, no allowance recorded, second call asks; `ExactActionTools` holds exactly the five names |
+| 65 | TestFullSkills_PageSizeFields | Integration Go (fixed token estimator; `GET /skills`, `GET /agents`; request capture) | S-130 | Dataset D18 rows 1–3, 6–10 server side: literal `full_tokens` and `full_skills_tokens`; plus, for Mia, `full_skills_tokens` equals the Full-skills charge captured from Mia's next turn (same selection as C-14) |
+| 66 | SkillsToolsPage.fullSize.test | Unit TS | S-130 | Dataset D18 rows 1–5, 11–14 screen side: row text, rounding, warning names, exactly half, absent or 0 window, `GET /agents` failing, re-read after a saved level |
+| 67 | TestPermissionsGet_UpgradeUnfinished | Integration Go (ledger fixture, read-only agent file) | S-131 | `failures` and `skipped` mapping; skipped listed only while its record file exists; absent member when nothing to list; PATCH naming the member gets 400 |
 
-**Positive controls (MAJ-014, R2-MAJ-008).** Each of tests 33, 34, 36, 37, 38, 49–64 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value, read an old value from `config.json` instead of the snapshot, drop the project-skill gate leg, let a broader mount grant re-admit a gated folder, accept an action that was not offered, skip the revision re-check, decide an install from the skills list, start the next save before the previous one resolves, reverse the shelf precedence, key an allowance by session again, ignore an allowance's end time, copy allowances to another agent at delegation, write an allowance to disk, offer a time choice on an always-ask tool, key an ordinary tool's allowance by its arguments, skip ending allowances on one permission writer, and offer `allow_for` for one exact-action tool. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
+**Positive controls (MAJ-014, R2-MAJ-008).** Each of tests 33, 34, 36, 37, 38, 49–65, 67 and the migration tests ships with a recorded mutation probe run by CHECK: remove the outcome filter from `LoadableFolders`, skip the trust floor, inject Full unconditionally, keep the old tier lists, write the full map instead of the named keys, drop one audit call, reset one migrated value, read an old value from `config.json` instead of the snapshot, drop the project-skill gate leg, let a broader mount grant re-admit a gated folder, accept an action that was not offered, skip the revision re-check, decide an install from the skills list, start the next save before the previous one resolves, reverse the shelf precedence, key an allowance by session again, ignore an allowance's end time, copy allowances to another agent at delegation, write an allowance to disk, offer a time choice on an always-ask tool, key an ordinary tool's allowance by its arguments, skip ending allowances on one permission writer, offer `allow_for` for one exact-action tool, count an Ask or not-granted skill in `full_skills_tokens`, and list a skipped agent whose record file is gone. Each probe must turn its test red. Expected values come from this spec and from literal pre-upgrade fixtures, never from calling the new resolver or builder.
 
 **Execution checklist.** Targeted Go tests with `heavy --local` only when needed; `npm run typecheck` (never bare `tsc`); the design-system gate and the full suites run in CI at the cut, which is the authority.
 
@@ -2953,6 +2999,27 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (narrow cards: to
 | 24 | `browser_evaluate` card with one script; `allow_for 1h`; then the same script again | exact-action | 409; card again | BDD Scenario: S-129 | |
 | 25 | `set_config` card for one key; `allow_for 1d`; then the same change again | exact-action | 409; card again | BDD Scenario: S-129 | |
 
+#### Dataset D18: Full skill size and page warning (C-14 "Page warning"; ruling spec-gaps-1, 2026-11-25)
+
+Fixed token estimator in the Go test; every expected number is literal, never computed by calling the new code.
+
+| # | Input | Boundary Type | Expected Output | Traces to | Notes |
+|---|---|---|---|---|---|
+| 1 | skill `plan` at Full; estimator returns 3,240 for its block | normal | `full_tokens` 3,240; row shows "about 3,200 tokens" | BDD Scenario: S-130 | nearest 100 |
+| 2 | `plan` at Name and short description; `full_tokens` 3,240 | not Full | no size on the row | BDD Scenario: S-130 | |
+| 3 | `notes-helper` with `load_error` | unreadable | `full_tokens` absent; no size on the row | BDD Scenario: S-130 | |
+| 4 | a Full skill with `full_tokens` 40 | tiny | row shows "under 100 tokens" | BDD Scenario: S-130 | |
+| 5 | a Full skill with `full_tokens` 3,250 | rounding half | row shows "about 3,300 tokens" | BDD Scenario: S-130 | half rounds up |
+| 6 | Mia granted `plan` (Full, Allow, verified, 4,001 tokens); window 8,000 | one over half | `full_skills_tokens` 4,001; callout names Mia | BDD Scenario: S-130 | |
+| 7 | as row 6 with 4,000 tokens | exactly half | `full_skills_tokens` 4,000; no callout | BDD Scenario: S-130 | |
+| 8 | Mia granted `plan` (Full, Allow, 3,000) and `deep-research` (Full, Ask, not approved, 3,000); window 8,000 | ask not counted | `full_skills_tokens` 3,000; no callout | BDD Scenario: S-130 | same outcome rule as D9 row 2 |
+| 9 | Mia not granted `deep-research` (Full, Allow, 5,000); Mia's own value for `plan` Deny | not granted, denied | `full_skills_tokens` 0 | BDD Scenario: S-130 | D9 row 6 |
+| 10 | Mia granted `plan` (Full, Allow, unverified, trust Ask, no approval) | trust ask | `full_skills_tokens` 0; after "Approve this version" 3,000 | BDD Scenario: S-130 | D9 rows 3–4 |
+| 11 | `full_skills_tokens` 5,000; `context_window_effective` absent | unknown window | no callout | BDD Scenario: S-130 | |
+| 12 | `full_skills_tokens` 5,000; `context_window_effective` 0 | exempt agent | no callout | BDD Scenario: S-130 | |
+| 13 | `GET /agents` fails | load failure | no callout; rows and sizes normal; no error callout | BDD Scenario: S-130 | |
+| 14 | Mia fits (3,000 of 8,000); the person sets a second 2,000-token skill to Full and it is saved; `GET /agents` re-read returns 5,000 | change on the page | callout names Mia after the re-read | BDD Scenario: S-130 | |
+
 ## Functional Requirements
 
 ### Page, search and saving (US-1, US-6)
@@ -3055,11 +3122,11 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (narrow cards: to
 - **FR-076**: Bulk changes MUST follow C-20: only rows that can take the value change; the label counts them; skipped rows are named.
 - **FR-077**: Every write path of C-21 MUST carry the agent's skill permissions and the skill category: `create_agent` `skill_policy_changes`; preservation in `updateToolsConfig`; `edit_skill` `set_category` and copy `category`; `PUT /skills/{name}/category` once; the write-skill workflow sets the category; every agent writer validates skill keys with C-23 (FR-088).
 - **FR-078**: At this landing the C-22 rows MUST be done together: no commit leaves `tools.manifest.compressed` unguarded, no retired endpoint keeps a caller, and links use the post-Settings section ids.
-- **FR-079**: Each Full skill row MUST show its approximate size, and the Skills tab MUST warn when an agent's Full total exceeds half of its model's context (ST-Q1 A).
+- **FR-079**: Each Full skill row MUST show its approximate size from `Skill.full_tokens`, and the Skills tab MUST warn when an agent's `full_skills_tokens` exceeds half of its `context_window_effective`; the server MUST compute both numbers with the turn's estimator and the turn's Full-skill selection (C-14 "Page warning"; ST-Q1 A; ruling spec-gaps-1).
 - **FR-081**: The person MUST see at most one card per moment (C-12 decision table): one combined card when the permission and trust checks are both open, one install card when `install_skill` needs approval and the staged skill needs trust, and no card at a screen install whose review answered trust.
 - **FR-082**: A project-folder skill MUST count as unverified, so trust applies to each new version, also under God Mode (ST-Q8 A).
 - **FR-083**: Unattended runs MUST skip a load that still needs a person's answer, with the unattended text, and MUST NOT wait; a running timed allowance of that agent MUST settle the permission part there; no card action MUST change a stored permission (C-12, C-26, ST-Q9 A as narrowed by R2-Q1).
-- **FR-084**: The upgrade MUST take an immutable snapshot of every old value before any write, keep a ledger of agent records with one in-flight record at a time under a cross-process lock, resolve policy from the snapshot-derived plan until done, never read an old value from a rewritten file, never overwrite a key a person changed in between, report failed agent writes and retry them on the next start, and write per-agent values only as the translation of an existing explicit `Skill` value (C-19).
+- **FR-084**: The upgrade MUST take an immutable snapshot of every old value before any write, keep a ledger of agent records with one in-flight record at a time under a cross-process lock, resolve policy from the snapshot-derived plan until done, never read an old value from a rewritten file, never overwrite a key a person changed in between, report failed agent writes and retry them on the next start, serve failed and skipped agents as `PermissionSettings.upgrade_unfinished` (a skipped agent only while its record file exists), and write per-agent values only as the translation of an existing explicit `Skill` value (C-19).
 - **FR-085**: A project-skill folder under any mount the turn can reach MUST be readable by file tools, search and listings, and runnable as a helper, only when its outcome is `allowed`, ahead of every mount, work-dir, path-grant and God Mode allowance, with path identity per C-25; where a kernel sandbox enforces, the gate MUST be rendered into it where the platform can express it, and the platforms where it is app-level only MUST be logged and documented (C-25).
 - **FR-086**: Skill approvals MUST use the C-24 contract: server-computed offered actions, an immutable binding to skill key and revision, a re-check before any effect, the stated order of effects, an `applied` result that reports only what was stored, no second effect on replay, and audit entries for trust approvals and timed allowances.
 - **FR-087**: `GET /skills/install/review/{review_id}` MUST report the review's state bound to its revision (C-13); `POST /skills/install` with a `review_id` MUST be idempotent.
@@ -3178,7 +3245,7 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (narrow cards: to
 | FR-047 | US-8 | S-62, S-63 | skills-tools.spec.ts | DOC-001 |
 | FR-048 | US-9 | S-64 | skills-tools.spec.ts | DOC-008 |
 | FR-049 | US-9 | S-65 | skills-tools.spec.ts | DOC-008, DOC-009 |
-| FR-050 | US-10 | S-66, S-67 | SkillsToolsPage.states.test | DOC-001 |
+| FR-050 | US-10 | S-66, S-67, S-132 | SkillsToolsPage.states.test | DOC-001 |
 | FR-051 | US-10 | S-68 | skills-tools.spec.ts | none — layout only, no behaviour to document |
 | FR-052 | US-10, US-6 | S-69, S-100 | skills-tools.spec.ts; SkillsToolsPage.focus.test | none — keyboard follows product-wide conventions |
 | FR-053 | US-10 | S-52, S-75 | NewSkillMenu.test | none — wording rule, no user page |
@@ -3207,12 +3274,12 @@ Oracle: C-26 "Which card offers what" and "Lifetime and scope" (narrow cards: to
 | FR-076 | US-1, US-6 | S-84 | SkillsToolsPage.setAll.test | DOC-001 |
 | FR-077 | US-7, US-11 | S-97, S-98, S-103, S-104 | TestUpdateAgentToolsCfg_PreservesSkillPolicies; TestCreateAgent_SkillPolicyChangesParity; TestWriteSkillWorkflow_PublishesCategorisedSkill; TestEditSkill_SetCategoryOnce | DOC-007, DOC-011 |
 | FR-078 | US-4, US-9 | S-101, S-65, S-44 | TestLegacySecurityEndpoints_Retired; TestSetConfig_RefusesRetiredManifestKeys; skills-tools.spec.ts | DOC-009 |
-| FR-079 | US-5 | S-90 | SkillsToolsPage.levels.test | DOC-010 |
+| FR-079 | US-5 | S-130 | TestFullSkills_PageSizeFields; SkillsToolsPage.fullSize.test | DOC-010 |
 | FR-080 | US-2 | S-102 | TestProjectSkillKeys | DOC-004 |
 | FR-081 | US-2, US-4 | S-106, S-107, S-118 | TestSkillConsent_Table; TestInstallSkill_OneCard | DOC-013 |
 | FR-082 | US-4 | S-105 | TestSkillConsent_Table | DOC-004 |
 | FR-083 | US-2 | S-109, S-113 | TestSkillConsent_Table; ApprovalCard.offeredActions.test; TestSkillApproval_TimedAllowanceReachesScheduledRun | DOC-013 |
-| FR-084 | US-2 | S-110 | TestSkillPermissionsUpgrade_StopAtEveryStep | DOC-004 |
+| FR-084 | US-2 | S-110, S-131 | TestSkillPermissionsUpgrade_StopAtEveryStep; TestPermissionsGet_UpgradeUnfinished; SkillsToolsPage.states.test | DOC-004 |
 | FR-085 | US-2 | S-111 | TestProjectSkillPathGate; TestProjectSkillPathGate_Kernel | DOC-004 |
 | FR-086 | US-2 | S-112, S-113, S-114 | TestSkillApprovalActions_Handler; TestSkillApproval_TimedAllowanceReachesScheduledRun | DOC-013 |
 | FR-087 | US-7 | S-115 | TestInstallReview_OutcomeStatus; InstallReview.lostAnswer.test | DOC-011 |
@@ -3401,3 +3468,9 @@ Grill round 2 report: `docs/internal/specs/skills-tools-redesign-spec-review-rou
 | Founder answers R2-Q1 (timed only) and R2-Q2 A, 2026-11-22 | No Always Allow or Allow everywhere on any card; Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny; per-agent, in-memory, ending at its time or a restart; contract, impact analysis, migration, security-review points; locked agent badge tooltip and link; every pending marker resolved | Header, C-9, C-12, C-24, C-26 (new), API and Data, Impact Assessment, US-2, US-3, US-4, US-13 (new), Edge Cases, UI States, Accessibility, Security and User Promises, Behavioral Contract, Prohibitions, Machine-Verifiable Constraints, S-10, S-11, S-30, S-106, S-107, S-109, S-112 to S-114, S-118, S-119 to S-127 (new), D10, D17 (new), ST-04, ST-07, ST-26, ST-29 to ST-31 (new), tests 51, 52, 57 to 62, FR-016, FR-017, FR-023, FR-030, FR-067, FR-083, FR-086, FR-089 to FR-095 (new), SC-001, SC-002, SC-009 (new), DOC-006, DOC-013, DOC-015 to DOC-017, ADR-TODO-3, Clarifications, Questions, Notes for team-lead |
 | Follow-up rulings 2026-11-22 (founder Q4 B; team-lead on the architect's points) | Ordinary card covers the whole tool; a permission change ends running allowances, audited; looser agent values kept as today; delegation, Cancel and ST-Q9 narrowing kept; notes moved to Clarifications | C-24, C-26 (points 6–8, Key, End, A permission change, Deny, Audit, impact rows, security points 2, 7, 8), US-13 (AS3, new AS8), Edge Cases, Behavioral Contract, S-120, S-121, S-128 (new), D17 rows 10–20, ST-29, ST-32 (new), tests 57, 63 (new), FR-090, FR-091, FR-096 (new), SC-002, DOC-015, DOC-016, Clarifications, Questions, Notes for team-lead |
 | Founder answers Q5 A, Q6 A, Q7 A (2026-11-22) | Five exact-action tools get Approve Once and Deny only, never an allowance; server refuses `allow_for` for them; timed-allowance examples moved from `send_email` to `delete_task`; Q6 and Q7 recorded | C-12, C-24, C-26 (point 9, card table, impact, refusals, security points 7 and 9), US-13 (Independent Test, new AS9), UI States, Prohibitions, Machine-Verifiable Constraints, S-119, S-120, S-124, S-126, S-129 (new), D17 rows 10, 12–14, 16, 18, 21–25 (new), ST-29, ST-32, ST-33 (new), test 64 (new), FR-089, FR-097 (new), SC-002, DOC-015, Clarifications, Questions |
+
+## Change log
+
+| Date | Change | Decided by |
+|---|---|---|
+| 2026-11-25 | Spec gaps (a), (b), (c) found by the test author settled: (a) `PermissionSettings.upgrade_unfinished` with fixed reason codes, from new ledger fields `failures` and `skipped`; a skipped agent is listed only while its record file exists; (b) the Omnipus tools tab's impossible "levels fail" partial state replaced by "tools load, permissions fail"; (c) `Skill.full_tokens` and `Agent.full_skills_tokens` computed by the server with the turn's estimator and Full-skill selection, warning against `context_window_effective`. New S-130 to S-132, Dataset D18, tests 65 to 67, US-5 AS12, US-10 AS5; FR-079 and FR-084 reworded; traceability updated. Contract files are named here and changed by backend-lead. Sections: C-2, C-14, C-19, API and Data, US-5, US-10, UI Screens and States, BDD Scenarios, TDD plan, Dataset D18, FR-079, FR-084, Traceability Matrix | team-lead ruling, 2026-11-25, on the architect's `/workspace/logs/skills-tools-1519f/arch/spec-gaps-1.md` (options A2, B2, C3) |
