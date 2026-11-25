@@ -168,6 +168,19 @@ func NormalizeSkillKey(key string) string {
 	return strings.ToLower(key)
 }
 
+// SetGlobalSkillPolicy stores one entry of the live global skill map (C-2,
+// sandbox.skill_policies) under its normalized key. It changes the loaded
+// config only; persisting it is the caller's write.
+func SetGlobalSkillPolicy(cfg *Config, key, value string) {
+	if cfg == nil {
+		return
+	}
+	if cfg.Sandbox.SkillPolicies == nil {
+		cfg.Sandbox.SkillPolicies = map[string]string{}
+	}
+	cfg.Sandbox.SkillPolicies[NormalizeSkillKey(key)] = value
+}
+
 // SkillUpgradeAgent is one agent's snapshot row for the C-19 plan.
 type SkillUpgradeAgent struct {
 	ID string `json:"id"`

@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/skillperm"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -16,4 +17,5 @@ func init() {
 	exactActionToolsOf = tools.ExactActionTools
 	injectScheduledAllowanceClock = (*agent.AgentLoop).SetAllowanceClock
 	bindNativeSkillEffectInputs = (*agent.AgentLoop).SetSkillEffectHooks
+	skillUpgradeRunOf = skillperm.Run
 }
