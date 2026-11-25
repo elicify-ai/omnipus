@@ -25,6 +25,11 @@ const STUCK: PendingToolApproval = {
   sessionId: 'sess-1',
   turnId: 'turn-1',
   expiresAt: Date.now() + 300_000,
+  // C-24 / C-26: write_file is a narrow card with time choices, so the server
+  // lists Approve Once, the three time choices, Deny and Cancel (both lists
+  // are required by ToolApprovalRequiredFrame).
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
 }
 
 const queue = () => useToolApprovalStore.getState().queue
@@ -70,11 +75,16 @@ describe('ToolApprovalPanel — an approval the server no longer holds (404 / 41
     )
   })
 
-  it('L1 §1.2 R6: 410 on Always Allow: same dismissal and warning as a 404', async () => {
+  // Regression row "Always Allow on approval cards" (skills-tools-redesign-spec,
+  // Regression Test Requirements): C-26 point 1 / S-119 removed Always Allow
+  // from every card, so this R6 case becomes its timed-choice equivalent. The
+  // 404/410 handling does not depend on which answer was sent, so the oracle
+  // (same dismissal, remembered as resolved, one warning toast) is unchanged.
+  it('L1 §1.2 R6 → C-26: 410 on "Allow for 1 hour": same dismissal and warning as a 404', async () => {
     setApprovalReply({ error: 'Gone' }, 410)
     show(STUCK)
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Allow for 1 hour/i }))
 
     await waitFor(() => expect(queue()).toHaveLength(0))
     expect(resolvedIds()).toContain('appr-stuck')

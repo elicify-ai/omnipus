@@ -18,8 +18,9 @@
 // session actions it renders the action + session instead of install fields.
 // Missing fields degrade honestly. Unknown or unsummarizable request content
 // re-reveals the raw JSON instead of being hidden by the summary. Standard
-// approval semantics (Approve/Deny/Always Allow/Cancel, raw JSON hidden in
-// replace mode) are preserved unchanged.
+// approval semantics (Approve Once / Deny / Cancel, raw JSON hidden in replace
+// mode) are preserved; environment_setup is an exact-action tool (C-26 point
+// 9), so its card offers no time choice and no Always Allow (R2-Q1).
 //
 // Specification sources (oracle):
 // - GENERIC-INSTALL-DECISION.md (option A): agent supplies the installation
@@ -54,7 +55,7 @@ import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
-import { useToolApprovalStore } from '@/store/toolApproval'
+import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 import type { ComponentType } from 'react'
 import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
 let ToolApprovalPanel: ComponentType
@@ -75,6 +76,19 @@ interface FixtureApproval {
   sessionId: string
   turnId: string
   expiresAt: number
+  offeredActions: PendingToolApproval['offeredActions']
+  allowDurations: PendingToolApproval['allowDurations']
+}
+
+// C-24 / C-26: a card renders exactly the answers the server listed when it
+// raised the card (`offered_actions`, `allow_durations`; both required by
+// contracts ToolApprovalRequiredFrame). environment_setup is an exact-action
+// tool (C-26 point 9): its card lists Approve Once, Deny and Cancel and no time
+// choice. Both fixtures carry what the server sends for it, so neither test
+// depends on a rule the client would apply when a list is missing.
+const EXACT_ACTION_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'deny', 'cancel'],
+  allowDurations: [],
 }
 
 /** A one-line package-manager style command (ES-FR-02 input form 1). */
@@ -101,6 +115,7 @@ const INSTALL_APPROVAL: FixtureApproval = {
   sessionId: 'sess-env',
   turnId: 'turn-env',
   expiresAt: Date.now() + 300_000,
+  ...EXACT_ACTION_TOOL_ANSWERS,
 }
 
 const POLL_APPROVAL: FixtureApproval = {
@@ -112,6 +127,7 @@ const POLL_APPROVAL: FixtureApproval = {
   sessionId: 'sess-env',
   turnId: 'turn-env-poll',
   expiresAt: Date.now() + 300_000,
+  ...EXACT_ACTION_TOOL_ANSWERS,
 }
 
 function seedAgent() {
@@ -339,20 +355,26 @@ describe('ToolApprovalPanel — environment_setup standard approval semantics pr
     expect(screen.queryByText(/"command"/)).not.toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6: offers standard Approve / Deny / Always Allow / Cancel and dispatches the standard approve action', async () => {
+  // Regression row "Always Allow on approval cards" (skills-tools-redesign-spec,
+  // Regression Test Requirements): C-26 point 1 / S-119 removed Always Allow
+  // from every card. environment_setup is an exact-action tool (C-26 point 9),
+  // so its card has no time choice either: Approve Once and Deny (Cancel stays,
+  // as on every card today), and a timed allowance can never cover it. The
+  // "no environment-specific button row, no hidden Approve" half of the R6 case
+  // is unchanged.
+  it('L1 §1.2 R6 → C-26: offers Approve Once / Deny / Cancel with no time choice and no Always Allow, and dispatches the standard approve action', async () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
     render(<ToolApprovalPanel />)
 
-    // Standard four-way semantics unchanged: no environment-specific button
-    // row, no hidden Approve, Cancel still offered. Always Allow remembers
-    // exactly these args.
-    expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
-    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Approve Once$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Deny$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Cancel$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Allow for/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Always Allow/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Approve Once$/i }))
     await waitFor(() => {
       expect(approvalPosts()).toContainEqual({ id: 'appr-env-install', body: { action: 'allow_once' } })
     })
