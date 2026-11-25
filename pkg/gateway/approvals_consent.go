@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -83,12 +84,16 @@ func (x *approvedCallIndex) take(sessionID, toolCallID string) (approvedCall, bo
 
 // consentDecision builds the call-bound audit identity of e.
 func consentDecision(e *approvalEntry, approver string, latency time.Duration) audit.AskDecision {
-	return audit.AskDecision{
+	d := audit.AskDecision{
 		ApprovalID: e.ApprovalID, ToolCallID: e.ToolCallID, ToolName: e.ToolName,
 		AgentID: e.AgentID, SessionID: e.SessionID, TurnID: e.TurnID,
 		ApproverUserID: approver, ArgsHash: consentArgsHash(e),
 		LatencyMS: latency.Milliseconds(),
 	}
+	if e.Skill != nil {
+		d.SkillKey = e.Skill.Key
+	}
+	return d
 }
 
 // consentArgsHash is the FR-080 digest of the arguments the card showed. A
@@ -130,15 +135,22 @@ func auditAskDecision(ctx context.Context, logger *audit.Logger, e *approvalEntr
 	d := consentDecision(e, outcome.ApproverUserID, latency)
 	if outcome.Approved {
 		if a := outcome.Allowance; a != nil {
-			audit.EmitToolPolicyAskGrantedForTime(ctx, logger, d, a.Duration, a.EndsAt)
+			action := a.Action
+			if action == "" {
+				action = string(gen.ToolApprovalActionRequestActionAllowFor)
+			}
+			audit.EmitToolPolicyAskGrantedForTime(ctx, logger, d, action, a.Duration, a.EndsAt)
 			return
 		}
 		audit.EmitToolPolicyAskGrantedForCall(ctx, logger, d, !outcome.RecordGrant)
 		return
 	}
 	reason := audit.AskDenyReason(outcome.Reason)
-	if outcome.Reason == denialReasonSessionCanceled {
+	switch {
+	case outcome.Reason == denialReasonSessionCanceled:
 		reason = audit.AskDenyReasonCancel
+	case outcome.Stale:
+		reason = audit.AskDenyReasonStale
 	}
 	audit.EmitToolPolicyAskDeniedForCall(ctx, logger, d, reason)
 }

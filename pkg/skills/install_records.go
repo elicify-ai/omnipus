@@ -280,3 +280,36 @@ func RecordsFingerprint(skillsDir string) string {
 	}
 	return fmt.Sprintf("%x", h.Sum64())
 }
+
+// CategorySetText is the refusal when the category of a skill is already
+// chosen (Skills & Tools C-21: set once).
+const CategorySetText = "The category is set at install and cannot be changed."
+
+// ErrCategorySet is returned by SetCategoryOnce when the stored category is
+// not uncategorised; callers show CategorySetText.
+var ErrCategorySet = errors.New("skills: the category is already set")
+
+// SetCategoryOnce stores the category of a skill whose stored category is
+// uncategorised (or absent), keeping the rest of its record (C-21). A skill
+// whose category is already chosen is refused with ErrCategorySet; an
+// unknown category with UnknownCategoryError.
+func SetCategoryOnce(skillsDir, slug, category string) error {
+	if !IsSkillCategory(category) || category == CategoryUncategorised {
+		return UnknownCategoryError(category)
+	}
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+	path := filepath.Join(systemDirFor(skillsDir), installRecordsName)
+	m, err := readJSONMap[InstallRecord](path)
+	if err != nil {
+		return err
+	}
+	key := SkillKey(slug)
+	rec := m[key]
+	if rec.Category != "" && rec.Category != CategoryUncategorised {
+		return ErrCategorySet
+	}
+	rec.Category = category
+	m[key] = rec
+	return writeJSONMap(path, m)
+}

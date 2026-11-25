@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -139,17 +140,15 @@ type ShellModeResolver interface {
 // calls this interface only once that check has missed, purely to reach the
 // interactive dialog machinery pkg/tools has no other way to invoke.
 //
-// recordGrant (review finding #5, MEDIUM, 2026-09-23 security fix lane) is
-// true only when approved is true AND the human's wire action was literally
-// "allow" (D4's three-button dialog), never "allow_once". The D7/D8
-// pre-flight escalation call sites (enforceFSPreflight/
-// enforceNetworkPreflight) gate their own RecordPathGrant/RecordNetworkGrant
-// calls on this value — before it existed, both wire actions resolved
-// through the identical approved==true outcome and these call sites
-// recorded a persistent session grant on ANY approval, "Allow once"
-// included.
+// allowFor (Skills & Tools C-26) is the time the person chose with "Allow
+// for …" on the card; zero for "Approve once" and for every refusal. The
+// D7/D8 pre-flight escalation call sites (enforceFSPreflight/
+// enforceNetworkPreflight) record their narrow allowance (one path with its
+// access, the named addresses) for the agent for exactly that long, and
+// record nothing for "Approve once" (review finding #5: an approval for one
+// call never leaves a standing allowance behind).
 type ShellApprovalRequester interface {
-	RequestShellApproval(ctx context.Context, sessionID, agentID, toolName, toolCallID, turnID string, args map[string]any) (approved bool, denialReason string, recordGrant bool)
+	RequestShellApproval(ctx context.Context, sessionID, agentID, toolName, toolCallID, turnID string, args map[string]any) (approved bool, denialReason string, allowFor time.Duration)
 }
 
 // shellPermissionResult is enforceShellPermissionMode's output: the mode
@@ -461,13 +460,13 @@ func shellDenialResult(ctx context.Context, reason, message string) *ToolResult 
 // can render it as a real list rather than parsing prose (founder decision
 // B, point 1: "puts them on the approval card: args note + field"). Always
 // nil for the D7 (filesystem) call sites — hosts is a network-only concept.
-func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string, hosts []string) (approved bool, reason string, recordGrant bool) {
+func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string, hosts []string) (approved bool, reason string, allowFor time.Duration) {
 	if ToolAutoDenyAsk(ctx) {
 		// Finding #7: see headlessShellDenyReason's doc comment.
-		return false, unattendedShellDenyReason(ctx), false
+		return false, unattendedShellDenyReason(ctx), 0
 	}
 	if t.approvalRequester == nil {
-		return false, "no_approver_configured", false
+		return false, "no_approver_configured", 0
 	}
 	args := map[string]any{
 		"command":     command,
@@ -571,23 +570,23 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		}
 		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
 			verdict.PolicyRule, fmt.Sprintf("%s access to %s", accessLabel(op.Access), resolved))
-		approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
+		approved, reason, allowFor := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
 			fmt.Sprintf("%s needs %s access the sandbox does not currently grant: %s", resolved, accessLabel(op.Access), verdict.PolicyRule), nil)
-		// willRecordGrant now reflects the human's ACTUAL choice (review
-		// finding #5): "Allow once" (recordGrant=false) widens the policy
-		// for THIS call only — the PathGrant below is still applied to the
+		// willRecordGrant reflects the person's actual choice (review
+		// finding #5): "Approve once" (allowFor=0) widens the policy for
+		// THIS call only — the PathGrant below is still applied to the
 		// in-flight `policy` value (so later {path,op} pairs in the SAME
-		// command see it), but is never persisted into approvalGrants, so
-		// the next command in the session re-prompts. "Allow"
-		// (recordGrant=true) persists it via RecordPathGrant, which itself
-		// emits the FR-032(c) shell.grant_recorded event.
-		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, recordGrant)
+		// command see it), but is never stored in approvalGrants, so the
+		// next command re-prompts. "Allow for …" (C-26) stores it for the
+		// agent until the chosen time ends, via RecordPathGrantFor, which
+		// itself emits the FR-032(c) shell.grant_recorded event.
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, allowFor > 0)
 		if !approved {
 			return nil, shellDenialResult(ctx, reason, preflightDenialMessage("filesystem", reason))
 		}
 		grant := fspolicy.PathGrant{Path: resolved, Access: op.Access}
-		if recordGrant {
-			t.approvalGrants.RecordPathGrant(sessionID, agentID, grant)
+		if allowFor > 0 {
+			t.approvalGrants.RecordPathGrantFor(agentID, grant, allowFor)
 		}
 		policy.PathGrants = append(policy.PathGrants, grant)
 	}
@@ -687,27 +686,24 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	}
 	t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightNetwork,
 		verdict.PolicyRule, networkEscalationNote(verdict.Hosts))
-	approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
+	approved, reason, allowFor := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
 		networkEscalationNote(verdict.Hosts), verdict.Hosts)
-	// willRecordGrant now reflects the human's actual choice (review
-	// finding #5): "Allow once" widens THIS command's network posture
-	// (the true return below) without persisting a session-wide grant;
-	// "Allow" persists it via RecordNetworkGrantWithHosts, which itself
-	// emits exactly ONE FR-032(c) shell.grant_recorded event for this one
-	// approval — not the two rows calling RecordNetworkGrant and
-	// RecordNetworkHosts separately used to emit (D-13 security-review
-	// fix, 2026-09-24).
+	recordGrant := allowFor > 0
+	// willRecordGrant reflects the person's actual choice (review finding
+	// #5): "Approve once" widens THIS command's network posture (the true
+	// return below) without storing an allowance; "Allow for …" stores it
+	// via RecordNetworkGrantFor, which itself emits exactly ONE FR-032(c)
+	// shell.grant_recorded event for this one approval (D-13).
 	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, recordGrant)
 	if !approved {
 		return false, "", shellDenialResult(ctx, reason, preflightDenialMessage("network", reason))
 	}
 	if recordGrant {
-		// D-13 fix: "Always Allow adds them for this chat session only,
-		// never written to the global config" (founder decision B, point
-		// 2) — ApprovalGrantStore is in-memory-only, cleared on session
-		// close (ClearSession), same lifetime as every other ADR-092
-		// session grant.
-		t.approvalGrants.RecordNetworkGrantWithHosts(sessionID, agentID, verdict.Hosts)
+		// C-26: "Allow for …" stores the named addresses (or, none named,
+		// the usual ports to any address) for the agent until the chosen
+		// time ends — in memory only, never written to the global config
+		// (D-13, founder decision B, point 2).
+		t.approvalGrants.RecordNetworkGrantFor(agentID, verdict.Hosts, allowFor)
 	}
 	return true, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, recordGrant), nil
 }

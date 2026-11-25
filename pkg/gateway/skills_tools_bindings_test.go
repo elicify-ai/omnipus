@@ -15,4 +15,5 @@ func init() {
 	bindNativeInstallReviewClock = (*restAPI).setInstallReviewClock
 	exactActionToolsOf = tools.ExactActionTools
 	injectScheduledAllowanceClock = (*agent.AgentLoop).SetAllowanceClock
+	bindNativeSkillEffectInputs = (*agent.AgentLoop).SetSkillEffectHooks
 }

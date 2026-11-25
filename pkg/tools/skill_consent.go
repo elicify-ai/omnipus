@@ -60,7 +60,9 @@ func InstalledSkillDecision(home string, settings config.PersistedSkillSettings,
 	if agentSkills != nil {
 		in.Agent = agentSkills.Policies[key]
 	}
-	return ResolveSkillDecision(in), nil
+	d := ResolveSkillDecision(in)
+	d.Revision, d.Verified = revision, verified
+	return d, nil
 }
 
 // SkillLoadDecision is the C-11 decision of one skill load: a project

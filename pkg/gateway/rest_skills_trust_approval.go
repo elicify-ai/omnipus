@@ -91,3 +91,42 @@ func (a *restAPI) recordTrustApproval(r *http.Request, skillsRoot, slug, revisio
 		map[string]any{"key": approval.Key, "revision": approval.Revision, "actor": approval.ApprovedBy})
 	return approval, nil
 }
+
+// setSkillCategory handles PUT /skills/{name}/category (C-21): the category
+// of a skill stored as uncategorised is chosen once; after that it is fixed.
+func (a *restAPI) setSkillCategory(w http.ResponseWriter, r *http.Request, name string) {
+	var req gen.SkillCategoryUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SkillCategoryUpdateRequest", &req, validateEnabled) {
+		return
+	}
+	if utils.ValidateSkillIdentifier(name) != nil {
+		jsonErr(w, http.StatusNotFound, trustApprovalUnknownText)
+		return
+	}
+	root := filepath.Join(a.homePath, "skills")
+	if _, _, err := skills.SkillVerified(root, name); errors.Is(err, skills.ErrNotFound) {
+		jsonErr(w, http.StatusNotFound, trustApprovalUnknownText)
+		return
+	}
+	category := string(req.Category)
+	if !skills.IsSkillCategory(category) || category == skills.CategoryUncategorised {
+		jsonErr(w, http.StatusBadRequest, skills.UnknownCategoryError(category).Error())
+		return
+	}
+	switch err := skills.SetCategoryOnce(root, name, category); {
+	case errors.Is(err, skills.ErrCategorySet):
+		jsonErr(w, http.StatusConflict, skills.CategorySetText)
+		return
+	case err != nil:
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save the category", err)
+		return
+	}
+	for _, s := range a.skillInventory() {
+		if s.Id == name {
+			jsonOK(w, s)
+			return
+		}
+	}
+	jsonErr(w, http.StatusNotFound, trustApprovalUnknownText)
+}

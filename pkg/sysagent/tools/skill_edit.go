@@ -13,13 +13,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-var editSkillActions = []string{"copy", "delete_file", "delete", "restore"}
+var editSkillActions = []string{"copy", "delete_file", "delete", "restore", "set_category"}
 
 // editSkillActionParams names the parameters each action accepts besides
 // action and skill (§5.4: unknown or misplaced parameters → INVALID_INPUT).
@@ -28,6 +29,9 @@ var editSkillActionParams = map[string]string{
 	"delete_file": "path",
 	"delete":      "",
 	"restore":     "version",
+	// set_category (Skills & Tools C-21): choose the category of an
+	// uncategorised skill, once.
+	"set_category": "category",
 }
 
 // SkillEditTool is §5.4's edit_skill.
@@ -50,7 +54,9 @@ func (t *SkillEditTool) Description() string {
 		"back a version listed by get_skill (version). To create a skill, write its SKILL.md with write_file; " +
 		"to change a file, use write_file or edit_file. delete_file, delete and restoring an existing skill " +
 		"need a current read of the skill in this session (get_skill, Skill, read_file or list_directory). " +
-		"Built-in skills are read-only: copy them first. A new copy is granted to no agent."
+		"Built-in skills are read-only: copy them first. A new copy is granted to no agent. " +
+		"action=set_category chooses the category of a skill that has none yet (category); it can be chosen " +
+		"only once and is never written into the skill files."
 }
 
 // Parameters implements tools.Tool (§5.4).
@@ -64,13 +70,17 @@ func (t *SkillEditTool) Parameters() map[string]any {
 			"to":      map[string]any{"type": "string", "description": "copy only: the new skill's id."},
 			"path":    map[string]any{"type": "string", "description": "delete_file only: the file, relative to the skill folder."},
 			"version": map[string]any{"type": "string", "description": "restore only: a version id from get_skill versions."},
+			"category": map[string]any{
+				"type": "string", "enum": settableSkillCategories(),
+				"description": "set_category only: the category to show the skill under.",
+			},
 		},
 		"required": []string{"action", "skill"},
 	}
 }
 
 type editSkillRequest struct {
-	action, skill, to, path, version string
+	action, skill, to, path, version, category string
 }
 
 func parseEditSkillArgs(args map[string]any) (editSkillRequest, error) {
@@ -84,7 +94,7 @@ func parseEditSkillArgs(args map[string]any) (editSkillRequest, error) {
 	for key := range args {
 		switch key {
 		case "action", "skill":
-		case "to", "path", "version":
+		case "to", "path", "version", "category":
 			if key != allowed {
 				return req, fmt.Errorf("parameter %q does not apply to action %s", key, action)
 			}
@@ -122,6 +132,8 @@ func parseEditSkillArgs(args map[string]any) (editSkillRequest, error) {
 			req.path = v
 		case "version":
 			req.version = v
+		case "category":
+			req.category = v
 		}
 	}
 	return req, nil
@@ -137,6 +149,9 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	root, ok := skillsRootOf(t.deps)
 	if !ok {
 		return tools.ErrorResult(errorJSON("NOT_AVAILABLE", "skills directory not configured", "ensure the gateway is started with a valid home"))
+	}
+	if req.action == "set_category" {
+		return setSkillCategoryOnce(root, req)
 	}
 	session := tools.ToolTranscriptSessionID(ctx)
 	change := skills.ChangeRequest{
@@ -233,4 +248,44 @@ func editSkillFailure(session, target string, err error) *tools.ToolResult {
 		skills.ForgetSeen(session, target)
 	}
 	return tools.ErrorResult(errorJSON(ce.Code.Error(), ce.Text, ""))
+}
+
+// settableSkillCategories are the categories set_category accepts: every
+// category except uncategorised.
+func settableSkillCategories() []string {
+	var out []string
+	for _, c := range skills.SkillCategories() {
+		if c != skills.CategoryUncategorised {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// setSkillCategoryOnce is edit_skill set_category (C-21): the same
+// once-only rule as PUT /skills/{name}/category. The category is stored in
+// Omnipus's own records, never in the skill files.
+func setSkillCategoryOnce(root string, req editSkillRequest) *tools.ToolResult {
+	if _, _, err := skills.SkillVerified(root, req.skill); errors.Is(err, skills.ErrNotFound) {
+		return tools.ErrorResult(errorJSON("NOT_FOUND", fmt.Sprintf("skill %q is not installed", req.skill),
+			"call list_skills for the installed skills"))
+	}
+	if !slices.Contains(settableSkillCategories(), req.category) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", skills.UnknownCategoryError(req.category).Error(),
+			"choose one of the listed categories"))
+	}
+	switch err := skills.SetCategoryOnce(root, req.skill, req.category); {
+	case errors.Is(err, skills.ErrCategorySet):
+		return tools.ErrorResult(errorJSON("CATEGORY_SET", skills.CategorySetText, "leave the category as it is"))
+	case err != nil:
+		return tools.ErrorResult(errorJSON("WRITE_FAILED", "the category could not be saved: "+err.Error(),
+			"try again; if it keeps failing, report it"))
+	}
+	return changeSuccess(map[string]any{
+		"success":  true,
+		"action":   req.action,
+		"skill":    req.skill,
+		"category": req.category,
+		"message":  fmt.Sprintf("Category of %s set to %s.", req.skill, req.category),
+	}, working("the category is stored in the skill records"))
 }

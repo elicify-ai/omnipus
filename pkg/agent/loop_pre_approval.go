@@ -5,6 +5,8 @@ package agent
 import (
 	"context"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -24,6 +26,9 @@ import (
 // result (ex.preApprovalRefusal), recorded by guardAndDispatch, and the tool
 // is not executed. ex.toolArgs is never changed.
 func (ex *agentLoopRunTurnToolsExecute) prepareApprovalRequest(tc providers.ToolCall, requestArgs map[string]any) (map[string]any, bool) {
+	if ex.preparedArgs != nil {
+		return ex.preparedArgs, false // staged before its trust card (C-12 row 8)
+	}
 	rt := ex.rx.rr.rq.ri.rf.rt
 	if rt.ts.agent == nil || rt.ts.agent.Tools == nil {
 		return requestArgs, false
@@ -43,6 +48,18 @@ func (ex *agentLoopRunTurnToolsExecute) prepareApprovalRequest(tc providers.Tool
 			return requestArgs, true
 		}
 		ex.approvalPin = pin
+		if ex.toolName == "install_skill" {
+			// C-9/C-12: the install card names the staged skill.
+			card, err := ex.installSkillCard(facts, ex.toctouPolicy == string(config.ToolPolicyAsk))
+			if err != nil {
+				logger.ErrorCF("agent", "install_skill: the staged skill could not be checked; the install is refused",
+					map[string]any{"agent_id": rt.ts.agentID, "error": err.Error()})
+				ex.discardApprovalPin()
+				ex.preApprovalRefusal = tools.ErrorResult("The skill could not be checked, so it was not installed.")
+				return requestArgs, true
+			}
+			ex.skillCard = card
+		}
 		return tools.WithApprovalFacts(requestArgs, facts), false
 	}
 	if refusal := tools.RefuseBeforeApproval(rt.turnCtx, tool, ex.toolArgs); refusal != nil {

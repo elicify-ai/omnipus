@@ -96,22 +96,17 @@ func IsPermissionFixedTool(name string) bool {
 	return ok
 }
 
-// SkillKeyInfo is one skill the self-heal runs over: its C-23 key and
-// whether it is a built-in skill shipped by a newer release (ST-Q10 A).
-type SkillKeyInfo struct {
-	Key               string
-	BuiltinNewRelease bool
-}
-
 // ReconcileSkillPolicyMaps is the C-2 self-heal for the two skill maps, the
 // skills twin of ReconcileToolPolicyCeiling: additive, never overwriting.
 // A skill with no stored permission gets ask (ST-Q3 B), or allow when it is
 // a built-in skill of a newer release (ST-Q10 A); a skill with no stored
 // level gets name_and_description. The inputs are not mutated; the returned
 // maps are fresh copies holding the stored entries plus the added ones.
+// installed maps each installed skill's C-23 key to whether it is a built-in
+// skill shipped by a newer release.
 func ReconcileSkillPolicyMaps(
 	policies, visibility map[string]string,
-	installed []SkillKeyInfo,
+	installed map[string]bool,
 ) (map[string]string, map[string]string) {
 	outPolicies := make(map[string]string, len(policies)+len(installed))
 	for k, v := range policies {
@@ -121,13 +116,13 @@ func ReconcileSkillPolicyMaps(
 	for k, v := range visibility {
 		outVisibility[k] = v
 	}
-	for _, s := range installed {
-		key := NormalizeSkillKey(s.Key)
+	for rawKey, builtinNewRelease := range installed {
+		key := NormalizeSkillKey(rawKey)
 		if key == "" {
 			continue
 		}
 		if _, ok := outPolicies[key]; !ok {
-			if s.BuiltinNewRelease {
+			if builtinNewRelease {
 				outPolicies[key] = string(ToolPolicyAllow)
 			} else {
 				outPolicies[key] = string(ToolPolicyAsk)

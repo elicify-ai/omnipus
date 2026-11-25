@@ -46,6 +46,14 @@ type agentLoopRunTurnToolsExecute struct {
 	// only a person's trust approval settles it, never Auto-approve or a
 	// standing allowance. Reset for every call.
 	skillTrustOpen bool
+	// skillCard is the skill a Skill load or install_skill card names
+	// (C-9) with its answer-time re-check (C-24); nil otherwise. Reset for
+	// every call.
+	skillCard *skillCard
+	// preparedArgs are the request arguments of an install_skill call
+	// staged before its trust card (C-12 row 8), so the card does not
+	// stage it twice. Reset for every call.
+	preparedArgs map[string]any
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
@@ -837,6 +845,11 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.ruleAskSettled = false
 	ex.preApprovalRefusal = nil
 	ex.approvalPin = nil
+	ex.preparedArgs = nil
+	if ex.toolName == "install_skill" {
+		ex.skillCard = nil
+	}
+	ex.stageInstallOnAllow(tc)
 	if ex.toctouPolicy != "ask" {
 		return agentLoopRunTurnToolsExecuteNext
 	}
@@ -855,6 +868,9 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	// an "awaiting approval" card for a call nobody was asked about.
 	ex.autoPin = ex.autoApproveFor()
 	if ex.skillTrustOpen {
+		if ex.autoPin.Run {
+			ex.skillCard.settlePermission() // Auto settles only the permission check (C-12)
+		}
 		ex.autoPin = tools.AutoVerdict{Class: tools.AutoVerdictClassAsks, Reason: "an unapproved skill version needs a person's trust approval"}
 	}
 	rules := bashCommandRuleVerdict(rt.ts, ex.toolName, ex.toolArgs)
@@ -946,7 +962,7 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// unconditionally, ahead of any grant consultation at all, so a call a
 	// grant already settles could still flash an "awaiting approval" card
 	// for a human nobody was actually about to ask.
-	if rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, requestArgs) {
+	if !ex.skillTrustOpen && rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, requestArgs) {
 		if ex.toolName == "bash" {
 			rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, true, "")
 		}
@@ -971,7 +987,7 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// rest_tool_registry.go::approvalGrantRecorder mechanism, driven directly
 	// by the wire action.
 	approved, denialReason, _ := rt.al.CheckGrantOrRequestApproval(
-		rt.turnCtx, rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, tc.ID, rt.ts.turnID, requestArgs,
+		withSkillCard(rt.turnCtx, ex.skillCard), rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, tc.ID, rt.ts.turnID, requestArgs,
 	)
 	if ex.toolName == "bash" {
 		// Review finding #8(b) (LOW): the classic ask-policy human decision
@@ -1033,6 +1049,14 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	}
 	cls, _ := ClassifyDenial(denialReason)
 	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
+	transcriptReason := denialReason
+	if ex.toolName == "Skill" {
+		// C-12: an unattended Skill load that needs a person reads the
+		// plain sentence, as its result and in the transcript.
+		transcriptReason, denyMsg = skillLoadUnattendedResult()
+	}
+	// A call staged before its card drops what it staged (C-12 row 8).
+	ex.discardApprovalPin()
 	// Build optional extra Details for the deny.attempted entry so
 	// both correlated records carry the schedule identity (O-3 / F-13
 	// / issue #342). scheduledJobContextFrom is a no-op read — safe to
@@ -1071,7 +1095,7 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// the audit log. settleAskToolCallTranscript appends when it
 	// finds no placeholder, which is exactly this case.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, transcriptReason)
 	// ADR-066 D4: denied results enter through the choke point on the
 	// builtin-failure surface (FR-009); it persists the line itself.
 	if err := ex.admitAndCheckpoint(toolResultAdmission{

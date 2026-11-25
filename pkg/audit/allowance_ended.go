@@ -27,6 +27,7 @@ type AllowanceEndedRecord struct {
 	Key       string `json:"key"`
 	Old       string `json:"old"`
 	New       string `json:"new"`
+	Reason    string `json:"reason"`
 }
 
 // AllowanceEnded is one ended allowance and the change that ended it.
@@ -52,6 +53,7 @@ func EmitAllowanceEnded(ctx context.Context, logger *Logger, e AllowanceEnded) e
 		Actor:     actor,
 		AgentID:   e.AgentID, Kind: e.Kind, Subject: e.Subject,
 		Key: e.Key, Old: e.Old, New: e.New,
+		Reason: "permission_changed",
 	})
 	if err != nil {
 		return fmt.Errorf("audit: marshal %s: %w", EventApprovalAllowanceEnded, err)

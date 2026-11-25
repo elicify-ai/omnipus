@@ -59,6 +59,11 @@ type SkillDecision struct {
 	Reason         SkillDenyReason
 	PermissionOpen bool // effective permission is ask
 	TrustOpen      bool // unverified, trust ask, revision not approved
+	// Revision and Verified are the facts the decision was read from (C-5),
+	// set by the readers that look at the skill's files (InstalledSkillDecision,
+	// SkillLoadDecision); an approval card names them (C-9).
+	Revision string
+	Verified bool
 }
 
 // ResolveSkillDecision is the one C-11 decision function.

@@ -386,6 +386,9 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// by the gateway's tool-approval REST path and the delegate tool's
 	// async/await paths. Always non-nil.
 	nal.al.approvalGrants = security.NewApprovalGrantStore()
+	// Skills & Tools C-26: skill decisions made outside a session (file
+	// authority, Full injection) read this loop's skill allowances.
+	tools.SetSkillAllowanceStore(nal.al.approvalGrants)
 	// Review finding #8(a) (LOW, 2026-09-23 security fix lane): wire the
 	// audit logger in AT CONSTRUCTION, not only on the first bash call
 	// (pkg/tools/shell_permission_mode.go::enforceShellPermissionMode also

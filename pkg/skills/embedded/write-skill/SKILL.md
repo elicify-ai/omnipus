@@ -12,9 +12,9 @@ metadata:
 ## Steps
 1. Ask the purpose and the steps the skill should encode.
 2. Draft the skill text.
-3. Present one card: preview of the skill text, which workspace's shelf it lands in (project) or global, and which agents get it. An edit to a project skill that exists in several workspaces names the one shelf it changes.
+3. Present one card: preview of the skill text, which workspace's shelf it lands in (project) or global, and which agents get it. An edit to a project skill that exists in several workspaces names the one shelf it changes. For a new skill or a copy, the card also asks which category the skill belongs to.
 4. One Go / Change / Cancel question. Never call a change tool before Go.
-5. After Go: create a new skill by writing its `SKILL.md` first with `tool:write_file` in a new folder of the target shelf, then any helper files; edit an existing skill's files with `tool:write_file` or `tool:edit_file`; use `tool:edit_skill` to copy a skill (built-ins included), delete a file, delete the skill or restore an earlier version. Then assign it to the agents the card named — a new skill or copy starts with no agent granted.
+5. After Go: create a new skill by writing its `SKILL.md` first with `tool:write_file` in a new folder of the target shelf, then any helper files; edit an existing skill's files with `tool:write_file` or `tool:edit_file`; use `tool:edit_skill` to copy a skill (built-ins included), delete a file, delete the skill or restore an earlier version. Then set the category the person chose with `tool:edit_skill` action `set_category` — never write the category into the skill files; it can be set only once. Then assign it to the agents the card named — a new skill or copy starts with no agent granted.
 
 ## Expected output
 The skill's activation check result — working / saved but not working: reason — and where it was created (shelf and assignees).

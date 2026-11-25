@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/skillperm"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -299,4 +300,35 @@ func removeGrantInMemory(a *config.AgentConfig, key string) bool {
 		delete(a.SkillGrants, key)
 	}
 	return changed
+}
+
+// healSkillPolicyMaps runs the C-2 skill-map self-heal and adds the healed
+// keys to the in-memory config. It never stops the gateway: a failure is
+// logged at error level and the heal runs again at the next start (its
+// record of known built-ins is only grown after config.json is written).
+func healSkillPolicyMaps(cfg *config.Config, homePath, configPath string, installedThisStart []string) {
+	policies, visibility, err := skillperm.SelfHeal(homePath, configPath, skills.DefaultSkillNames(), installedThisStart)
+	if err != nil {
+		slog.Error("gateway: skill permission self-heal did not finish; it runs again at the next start", "error", err)
+		return
+	}
+	if cfg == nil {
+		return
+	}
+	cfg.Sandbox.SkillPolicies = addMissingKeys(cfg.Sandbox.SkillPolicies, policies)
+	cfg.Sandbox.SkillVisibility = addMissingKeys(cfg.Sandbox.SkillVisibility, visibility)
+}
+
+// addMissingKeys returns dst with every key of src that dst does not hold.
+func addMissingKeys(dst, src map[string]string) map[string]string {
+	for k, v := range src {
+		if _, ok := dst[k]; ok {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string]string, len(src))
+		}
+		dst[k] = v
+	}
+	return dst
 }

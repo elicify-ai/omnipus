@@ -219,6 +219,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		OriginLabel:     approvalOriginLabel(entry),
 	}
 	frame.OfferedActions, frame.AllowDurations = offeredActions(entry)
+	frame.Skill = approvalSkill(entry)
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -469,6 +470,7 @@ func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionS
 		ActingAgentName: h.approvalActingAgentName(e.AgentID),
 		RoomRef:         approvalRoomRef(e),
 		OriginLabel:     approvalOriginLabel(e),
+		Skill:           approvalSkill(e),
 	}
 }
 

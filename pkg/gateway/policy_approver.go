@@ -56,6 +56,20 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
 // outcome, so we skip the WS broadcast and unblock immediately.
 func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
+	outcome := a.awaitOutcome(ctx, req)
+	return outcome.Approved, outcome.Reason, outcome.RecordGrant
+}
+
+// RequestApprovalFor implements agent.AllowanceApprover (C-26): the same
+// card, answered with the time the person chose with "Allow for …" (zero
+// for "Approve once" and every refusal).
+func (a *policyApproverAdapter) RequestApprovalFor(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, time.Duration) {
+	outcome := a.awaitOutcome(ctx, req)
+	return outcome.Approved, outcome.Reason, outcome.AllowFor
+}
+
+// awaitOutcome raises the card and waits for its outcome.
+func (a *policyApproverAdapter) awaitOutcome(ctx context.Context, req agent.PolicyApprovalReq) ApprovalOutcome {
 	// Keep room pre-admission cards tied to their room. For a member's own
 	// work, consumed channel input takes precedence; plain contexts retain
 	// the server-derived label supplied by the turn (FR-240 / K7).
@@ -73,12 +87,15 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		approvalExtras{RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission},
+		approvalExtras{
+			RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission,
+			Skill: req.Skill, SkillRecheck: req.SkillRecheck,
+		},
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).
 		slog.Error("policyApprover: requestApproval returned nil entry", "tool", req.ToolName)
-		return false, "internal_error", false
+		return ApprovalOutcome{Reason: "internal_error"}
 	}
 
 	// Every admission attempt writes its request record, a refused one too
@@ -109,7 +126,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		// FR-039: record approval latency on every terminal transition.
 		globalToolMetrics.ObserveApprovalLatency(outcome.Reason, time.Since(approvalStart).Seconds())
 		auditAskDecision(ctx, a.consentAudit(), entry, outcome, time.Since(approvalStart))
-		return outcome.Approved, outcome.Reason, outcome.RecordGrant
+		return outcome
 	case <-ctx.Done():
 		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
 		outcome := ApprovalOutcome{Reason: denialReasonCancel}
@@ -131,6 +148,6 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		}
 		auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry, outcome, time.Since(approvalStart))
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
-		return false, "cancel", false
+		return ApprovalOutcome{Reason: "cancel"}
 	}
 }

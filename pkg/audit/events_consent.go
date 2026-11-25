@@ -28,10 +28,13 @@ type AskDecision struct {
 	ApproverUserID string // "" for a system decision (timeout, restart, …)
 	ArgsHash       string
 	LatencyMS      int64
+	// SkillKey is the skill a Skill-load or install_skill card was about
+	// (Skills & Tools C-24, C-26); "" on every other card.
+	SkillKey string
 }
 
 func (d AskDecision) fields() map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"approval_id":      d.ApprovalID,
 		"tool_call_id":     d.ToolCallID,
 		"approver_user_id": d.ApproverUserID,
@@ -42,6 +45,10 @@ func (d AskDecision) fields() map[string]any {
 		"args_hash":        d.ArgsHash,
 		"latency_ms":       d.LatencyMS,
 	}
+	if d.SkillKey != "" {
+		fields["skill_key"] = d.SkillKey
+	}
+	return fields
 }
 
 // EmitToolPolicyAskGrantedForCall writes tool.policy.ask.granted for d.
@@ -52,13 +59,14 @@ func EmitToolPolicyAskGrantedForCall(ctx context.Context, logger *Logger, d AskD
 	Emit(ctx, logger, EventToolPolicyAskGranted, SeverityInfo, fields)
 }
 
-// EmitToolPolicyAskGrantedForTime writes tool.policy.ask.granted for an
-// "allow_for" answer (Skills & Tools C-26): the call is released and a
-// timed allowance of the given length runs until expiresAt.
-func EmitToolPolicyAskGrantedForTime(ctx context.Context, logger *Logger, d AskDecision, duration string, expiresAt time.Time) {
+// EmitToolPolicyAskGrantedForTime writes tool.policy.ask.granted for a
+// timed answer (Skills & Tools C-26): the call is released and a timed
+// allowance of the given length runs until expiresAt. action is the wire
+// answer ("allow_for", or "approve_version_allow_for" on a skill card).
+func EmitToolPolicyAskGrantedForTime(ctx context.Context, logger *Logger, d AskDecision, action, duration string, expiresAt time.Time) {
 	fields := d.fields()
 	fields["grant_recorded"] = true
-	fields["action"] = "allow_for"
+	fields["action"] = action
 	fields["duration"] = duration
 	fields["expires_at"] = expiresAt.UTC().Format(time.RFC3339Nano)
 	Emit(ctx, logger, EventToolPolicyAskGranted, SeverityInfo, fields)
