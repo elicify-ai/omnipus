@@ -28,6 +28,15 @@ func skillSession(t *testing.T, deps *systools.Deps, agent string) context.Conte
 	return tools.WithTranscriptSessionID(tools.WithAgentID(context.Background(), agent), meta.ID)
 }
 
+// Fix round 4, part E item 4: the Skills & Tools redesign (skills-tools-redesign-spec.md,
+// C-21's "skill category" row and FR-056) changes this contract in exactly two places:
+// `edit_skill` `copy` gains the optional `category`, and `edit_skill` gains the action
+// `set_category` (which takes `category`). The expectations below carry those two additions
+// and nothing else: the five r15 §5.4 parameters and the four r15 actions are asserted as
+// before, the four actions still in their original order. The spec does not say where
+// `set_category` sits in the list, so only its presence (exactly once) is required. This is
+// an expectation flip ordered by the spec's own text, not a weakening: the old exact set
+// would now fail the correct implementation.
 func TestEditSkill_PublicActionSet(t *testing.T) {
 	tool := systools.NewSkillEditTool(nil)
 	// Round-trip only the parameter schema, not a handwritten product carrier.
@@ -37,11 +46,25 @@ func TestEditSkill_PublicActionSet(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &schema))
 	props, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
-	assert.ElementsMatch(t, []string{"action", "skill", "to", "path", "version"}, mapKeys(props), "r15 §5.4 exact public parameter set")
+	assert.ElementsMatch(t, []string{"action", "skill", "to", "path", "version", "category"}, mapKeys(props),
+		"r15 §5.4 public parameter set plus `category` (C-21: copy gains category, set_category takes it; FR-056)")
 	require.Contains(t, props, "action", "BLOCKED: edit_skill action schema not implemented — r15 §5.4")
 	action, ok := props["action"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, []any{"copy", "delete_file", "delete", "restore"}, action["enum"])
+	enum, ok := action["enum"].([]any)
+	require.True(t, ok, "the action schema carries its enum")
+	var original []any
+	setCategory := 0
+	for _, name := range enum {
+		if name == "set_category" {
+			setCategory++
+			continue
+		}
+		original = append(original, name)
+	}
+	assert.Equal(t, 1, setCategory, "C-21: edit_skill gains the action set_category (listed exactly once); enum: %v", enum)
+	assert.Equal(t, []any{"copy", "delete_file", "delete", "restore"}, original,
+		"r15 §5.4: the four original actions are unchanged and keep their order")
 	assert.ElementsMatch(t, []any{"action", "skill"}, schema["required"])
 	assert.Equal(t, false, schema["additionalProperties"], "unknown parameters are not accepted by the public schema")
 }
@@ -65,6 +88,11 @@ func TestEditSkill_RejectsUnknownAndMisplacedParameters(t *testing.T) {
 		{"copy", "content", "body"}, {"copy", "revision", "obsolete"}, {"copy", "path", "notes.md"},
 		{"delete_file", "to", "dst"}, {"delete", "version", "v000001-20260101T000000Z"},
 		{"restore", "mystery", true},
+		// Fix round 4, part E item 4 (added rows, nothing above changed): the new `category`
+		// parameter belongs to `copy` (optional, FR-056) and to `set_category` only (C-21), so on
+		// every other action the r15 §5.4 rule for a misplaced parameter applies to it as well.
+		{"delete_file", "category", "research"}, {"delete", "category", "research"},
+		{"restore", "category", "research"},
 	} {
 		t.Run(tc.action+"/"+tc.key, func(t *testing.T) {
 			args := map[string]any{"action": tc.action, "skill": "foo", tc.key: tc.value}
