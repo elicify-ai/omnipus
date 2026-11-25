@@ -17,6 +17,9 @@ func FixtureToolApprovalRequiredFrame_Populated() ToolApprovalRequiredFrame {
 		SessionId:   "sess-550e8400-e29b-41d4-a716-446655440003",
 		TurnId:      "turn-550e8400-e29b-41d4-a716-446655440004",
 		ExpiresInMs: 30000,
+		// C-24, C-26: an ordinary tool card.
+		OfferedActions: []string{"allow_once", "allow_for", "deny", "cancel"},
+		AllowDurations: []string{"1h", "3h", "1d"},
 	}
 }
 
@@ -58,6 +61,9 @@ func FixtureToolApprovalRequiredFrame_Edge() ToolApprovalRequiredFrame {
 		SessionId:   "sess-edge-1",
 		TurnId:      "turn-edge-1",
 		ExpiresInMs: 86400000, // 24 hours
+		// C-24, C-26: an exact-action card offers no timed allowance.
+		OfferedActions: []string{"allow_once", "deny", "cancel"},
+		AllowDurations: []string{},
 	}
 }
 
@@ -84,6 +90,9 @@ func FixtureSessionStateFrame_Populated() SessionStateFrame {
 				ToolCallId: "tc-1",
 				TurnId:     "turn-1",
 				Args:       map[string]any{"command": "ls -la"},
+				// C-24, C-26: the same answers the live card offers.
+				OfferedActions: []string{"allow_once", "allow_for", "deny", "cancel"},
+				AllowDurations: []string{"1h", "3h", "1d"},
 			},
 		},
 	}
@@ -117,10 +126,13 @@ func FixtureSessionStateFrame_Edge() SessionStateFrame {
 		EmittedAtMs: func() *int64 { v := int64(1778976001999); return &v }(),
 		PendingApprovals: []SessionStatePendingApproval{
 			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1,
+				OfferedActions: []string{"allow_once", "deny", "cancel"}, AllowDurations: []string{},
 				ToolCallId: "tc-1", TurnId: "turn-1", Args: map[string]any{}},
 			{ApprovalId: "ap-2", SessionId: "sess-2", ToolName: "tool.b", AgentId: "ava", ExpiresInMs: 2,
+				OfferedActions: []string{"allow_once", "deny", "cancel"}, AllowDurations: []string{},
 				ToolCallId: "tc-2", TurnId: "turn-2", Args: map[string]any{"path": "notes.md"}},
 			{ApprovalId: "ap-3", SessionId: "sess-3", ToolName: "tool.c", AgentId: "rex", ExpiresInMs: 3,
+				OfferedActions: []string{"allow_once", "deny", "cancel"}, AllowDurations: []string{},
 				ToolCallId: "tc-3", TurnId: "turn-3", Args: map[string]any{"nested": map[string]any{"n": 1}}},
 		},
 	}
@@ -1828,6 +1840,24 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
 			},
 		},
+		// C-4/C-19: one project skill of a mounted workspace with the agent's
+		// own Allow under a global Ask. Every member is set: the component
+		// harness validates with JSON Schema, which ignores OpenAPI 3.0
+		// `nullable`, so a null project_workspace or configured_policy
+		// cannot pass it.
+		Skills: []AgentSkillEntry{
+			{
+				Key:              "project:w2/todo",
+				Name:             "todo",
+				DisplayName:      "Todo",
+				Granted:          false,
+				ProjectWorkspace: func() *string { v := "w2"; return &v }(),
+				ConfiguredPolicy: func() *AgentSkillEntryConfiguredPolicy { v := AgentSkillEntryConfiguredPolicyAllow; return &v }(),
+				GlobalPolicy:     ToolPolicyAsk,
+				EffectivePolicy:  ToolPolicyAllow,
+				Unverified:       true,
+			},
+		},
 	}
 }
 
@@ -1870,6 +1900,19 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 				ConfiguredPolicy: toolCfgDeny,
 				EffectivePolicy:  toolEffAsk,
 				ManifestTier:     AgentToolsResponseToolsManifestTierCompressed,
+			},
+		},
+		// C-4: a project skill the agent tightens to Deny.
+		Skills: []AgentSkillEntry{
+			{
+				Key:              "project:w1/notes",
+				Name:             "notes",
+				DisplayName:      "Notes",
+				ProjectWorkspace: func() *string { v := "w1"; return &v }(),
+				ConfiguredPolicy: func() *AgentSkillEntryConfiguredPolicy { v := AgentSkillEntryConfiguredPolicyDeny; return &v }(),
+				GlobalPolicy:     ToolPolicyAsk,
+				EffectivePolicy:  ToolPolicyDeny,
+				Unverified:       true,
 			},
 		},
 	}
