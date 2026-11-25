@@ -660,7 +660,7 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 // ErrLegacyStoreFormat — only unlock migrates it, so no read path ever opens a
 // nil-AAD entry and no write path stamps a legacy file with the new version.
 func (s *Store) loadFileInternal() (*storeFile, error) {
-	data, err := os.ReadFile(s.path)
+	data, err := os.ReadFile(s.path) // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or a fixed name beside it, never request or agent input; the store exists to read and write exactly this file.
 	if errors.Is(err, os.ErrNotExist) {
 		// Create empty store with fresh salt on first use.
 		salt := make([]byte, saltLen)
@@ -707,7 +707,7 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	if err != nil {
 		return fmt.Errorf("credentials: marshal store: %w", err)
 	}
-	if mkErr := os.MkdirAll(filepath.Dir(s.path), 0o700); mkErr != nil {
+	if mkErr := os.MkdirAll(filepath.Dir(s.path), 0o700); mkErr != nil { // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or a fixed name beside it, never request or agent input; the store exists to read and write exactly this file.
 		return fmt.Errorf("credentials: create store dir: %w", mkErr)
 	}
 	// The transaction's lock is on the sidecar credentials.json.lock, never

@@ -416,7 +416,7 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	// Ensure the parent directory exists with restrictive perms. The Omnipus
 	// home is normally 0700 already (per BRD SEC-27), but on a truly first
 	// boot we may be the one creating it.
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { // #nosec G703 -- path is defaultKeyPath, the fixed master.key beside the Store's own credentials.json (data directory set at boot), never request or agent input.
 		return nil, fmt.Errorf("mkdir parent: %w", err)
 	}
 
@@ -426,7 +426,7 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	// #nosec G304 -- generateAndPersistMasterKey has exactly one caller
 	// (Unlock, mode 4), which always passes defaultKeyPath — a fixed
 	// $OMNIPUS_HOME-derived constant, never request-derived.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703 -- path is defaultKeyPath, the fixed master.key beside the Store's own credentials.json (data directory set at boot), never request or agent input.
 	if err != nil {
 		return nil, fmt.Errorf("create key file %q: %w", path, err)
 	}
@@ -434,14 +434,14 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 		if closeErr := f.Close(); closeErr != nil {
 			_ = closeErr
 		}
-		rmErr := os.Remove(path)
+		rmErr := os.Remove(path) // #nosec G703 -- path is defaultKeyPath, the fixed master.key beside the Store's own credentials.json (data directory set at boot), never request or agent input.
 		if rmErr != nil {
 			return nil, fmt.Errorf("write key file %q: %w (cleanup remove failed: %w)", path, writeErr, rmErr)
 		}
 		return nil, fmt.Errorf("write key file %q: %w", path, writeErr)
 	}
 	if closeErr := f.Close(); closeErr != nil {
-		rmErr := os.Remove(path)
+		rmErr := os.Remove(path) // #nosec G703 -- path is defaultKeyPath, the fixed master.key beside the Store's own credentials.json (data directory set at boot), never request or agent input.
 		if rmErr != nil {
 			return nil, fmt.Errorf("close key file %q: %w (cleanup remove failed: %w)", path, closeErr, rmErr)
 		}
