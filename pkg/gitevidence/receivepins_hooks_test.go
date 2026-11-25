@@ -8,6 +8,7 @@ package gitevidence
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,7 +32,9 @@ func (f pushFixture) globalHooks(t *testing.T) string {
 	marker := filepath.Join(t.TempDir(), "hook-ran")
 	// Every receive-side hook leaves a marker; only post-receive also writes a
 	// ref (a ref write from reference-transaction would re-enter that hook).
-	note := "#!/bin/sh\ncat >/dev/null 2>&1\necho \"$0\" >> '" + filepath.ToSlash(marker) + "'\n"
+	// Each line names the hook and the repository it ran in (GIT_DIR is set
+	// for hooks), so a failure shows which side of the push ran it.
+	note := "#!/bin/sh\ncat >/dev/null 2>&1\necho \"$0 $1 in $(pwd) GIT_DIR=$GIT_DIR\" >> '" + filepath.ToSlash(marker) + "'\n"
 	for name, body := range map[string]string{
 		"pre-receive":           note + "exit 0\n",
 		"update":                note + "exit 0\n",
@@ -47,14 +50,54 @@ func (f pushFixture) globalHooks(t *testing.T) string {
 	return marker
 }
 
+// hookRunsIn returns the marker lines of hooks that ran inside repoDir (its
+// working tree or its .git). The pushing repository also runs hooks of its
+// own (git 2.56 runs reference-transaction on the sending side of a push), so
+// a line is only evidence about repoDir when the hook's directory is there.
+func hookRunsIn(t *testing.T, marker, repoDir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(marker)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read hook marker: %v", err)
+	}
+	roots := []string{filepath.ToSlash(repoDir)}
+	if real, rerr := filepath.EvalSymlinks(repoDir); rerr == nil {
+		roots = append(roots, filepath.ToSlash(real))
+	}
+	var runs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		_, dir, ok := strings.Cut(line, " in ")
+		if !ok {
+			t.Fatalf("hook marker line without its directory: %q", line)
+		}
+		dir, _, _ = strings.Cut(dir, " GIT_DIR=")
+		for _, root := range roots {
+			if dir == root || strings.HasPrefix(dir, root+"/") {
+				runs = append(runs, line)
+				break
+			}
+		}
+	}
+	return runs
+}
+
 func TestGitEvidence_ReceivePins_ControlGlobalHooksRunInAnUnpinnedRepo(t *testing.T) {
 	f := newPushFixture(t, false)
 	marker := f.globalHooks(t)
 	if out, err := realGit(t, f.mount, f.home, nil, "push", f.work, "HEAD:refs/heads/x"); err != nil {
 		t.Fatalf("control push: %v: %s", err, out)
 	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("control: the global hooks should have run in the unpinned repo (marker missing): %v", err)
+	runs := hookRunsIn(t, marker, f.work)
+	received := false
+	for _, line := range runs {
+		received = received || strings.Contains(line, "/pre-receive ")
+	}
+	if !received {
+		data, _ := os.ReadFile(marker)
+		t.Fatalf("control: the global pre-receive hook should have run in the unpinned receiving repo; marker: %q", data)
 	}
 }
 
@@ -67,9 +110,8 @@ func TestGitEvidence_ReceivePins_GlobalHooksPathDoesNotRunInTheEvidenceRepo(t *t
 	if err != nil {
 		t.Fatalf("push of a new ref: %v: %s", err, out)
 	}
-	if _, statErr := os.Stat(marker); statErr == nil {
-		data, _ := os.ReadFile(marker)
-		t.Fatalf("F6: a hook from the global core.hooksPath ran in the evidence repo: %s", data)
+	if runs := hookRunsIn(t, marker, f.work); len(runs) > 0 {
+		t.Fatalf("F6: a hook from the global core.hooksPath ran in the evidence repo: %q", runs)
 	}
 	if _, err := realGit(t, f.work, f.home, nil, "rev-parse", "--verify", "-q", "refs/heads/hooked"); err == nil {
 		t.Fatalf("F6: a hook created refs/heads/hooked in the evidence repo")
