@@ -50,6 +50,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowClockwise, CircleNotch, Plus, Prohibit, WarningCircle } from '@phosphor-icons/react'
 import { Command, CommandInput, CommandList } from '@/components/ui/command'
 import { Button } from '@/components/ui/button'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import type { CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import {
   buildPickerModel,
@@ -74,6 +75,13 @@ export const PICKER_VIEWPORT_HEIGHT = 480
 
 /** Default row height, in CSS px. */
 export const PICKER_ROW_HEIGHT = 40
+
+/**
+ * Row slot on a coarse pointer, in CSS px: the 44 px of the
+ * `--target-touch-minimum` token (FR-070, U4-5). The virtual list places rows
+ * absolutely, so the slot grows with the row or the 44 px rows would overlap.
+ */
+export const PICKER_TOUCH_ROW_HEIGHT = 44
 
 /**
  * Rows kept mounted either side of the visible window. SC-005's bound is
@@ -242,10 +250,12 @@ export function ProviderPicker({
     [entries],
   )
 
+  const coarsePointer = useMediaQuery('(pointer: coarse)')
+  const slotHeight = coarsePointer ? Math.max(rowHeight, PICKER_TOUCH_ROW_HEIGHT) : rowHeight
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowHeight,
+    estimateSize: () => slotHeight,
     overscan: PICKER_OVERSCAN,
   })
   const virtualItems = virtualizer.getVirtualItems()
@@ -606,7 +616,7 @@ export function ProviderPicker({
                       transform: `translateY(${item.start}px)`,
                       color: 'var(--color-secondary)',
                     }}
-                    className="flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+                    className="flex pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                   >
                     {row.disabled && <Prohibit size={14} aria-hidden="true" />}
                     <span>{row.company}</span>
