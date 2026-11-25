@@ -10,4 +10,5 @@ package config
 
 func init() {
 	migrateLegacySkillTrustOf = MigrateLegacySkillTrust
+	reconcileSkillMapsOf = ReconcileSkillPolicyMaps
 }
