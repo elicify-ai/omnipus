@@ -30,7 +30,9 @@ const AccordionTrigger = React.forwardRef<
       // Before {...props} so a caller-supplied tabIndex wins.
       tabIndex={0}
       className={cn(
-        'flex flex-1 items-center justify-between py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
+        // FR-070 (U3-2): the touch-minimum token sets the coarse-pointer height;
+        // the rem padding alone gives 43.6 px at the app's 14 px root font.
+        'flex flex-1 items-center justify-between pointer-coarse:min-h-[var(--target-touch-minimum)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
         className
       )}
       {...props}

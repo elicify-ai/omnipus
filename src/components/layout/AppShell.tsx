@@ -194,6 +194,13 @@ export function AppShell() {
         <a
           href="#main-content"
           tabIndex={1}
+          onClick={(e) => {
+            // U3-4 (US-9 AS4, WCAG 2.4.1): under hash routing a plain
+            // #main-content would become the route and blank the screen;
+            // move focus to the main region and leave the address alone.
+            e.preventDefault()
+            document.getElementById('main-content')?.focus()
+          }}
           className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"
         >
           Skip to content
