@@ -183,7 +183,7 @@ import type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  // ADR-066 D9 — global context-budget settings (Settings → Limits):
   ContextSettings,
   ContextSettingsUpdate,
   ContextModelOverride,
@@ -375,7 +375,7 @@ export type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  // ADR-066 D9 — global context-budget settings (Settings → Limits):
   ContextSettings,
   ContextSettingsUpdate,
   ContextModelOverride,

@@ -5333,7 +5333,7 @@ paths:
         (finite fraction of the resolved model window W, 0 < f ≤ 1, default
         0.5), the ingest bound, the global default context window and the
         per-(provider, model) window overrides. User-facing location:
-        Settings → Models; Tool-result share limit displays a percentage.
+        Settings → Limits; Tool-result share limit displays a percentage.
         Readable by any authenticated user (withAuth, the /settings/memory
         precedent — not RequireNotBypass).
       tags:

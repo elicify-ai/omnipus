@@ -17092,7 +17092,7 @@ type ContextModelOverride struct {
 	Provider string `json:"provider"`
 }
 
-// ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+// ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Limits. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 type ContextSettings struct {
 	// BuiltinFailureCap Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
 	BuiltinFailureCap int `json:"builtin_failure_cap"`
@@ -17112,7 +17112,7 @@ type ContextSettings struct {
 	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
 	ModelOverrides []ContextModelOverride `json:"model_overrides"`
 
-	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Limits displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
 	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 }
 
