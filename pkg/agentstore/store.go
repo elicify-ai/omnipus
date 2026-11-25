@@ -171,6 +171,9 @@ func (s *Store) Get(id string) (*config.AgentConfig, error) {
 	if err := confirmExactAgentID(filepath.Join(s.inner.Dir(), id+".json"), id, ""); err != nil {
 		return nil, fmt.Errorf("agentstore: get %q: %w", id, err)
 	}
+	if err := s.overlay(cfg); err != nil {
+		return nil, fmt.Errorf("agentstore: get %q: %w", id, err)
+	}
 	return cfg, nil
 }
 
@@ -190,7 +193,19 @@ func (s *Store) List() (agents []config.AgentConfig, skipped []string, err error
 	if err != nil {
 		return nil, nil, fmt.Errorf("agentstore: list: %w", err)
 	}
-	return agents, skipped, nil
+	// A record whose values the C-19 overlay cannot decide is served like
+	// one that failed to load: skipped, never with values it may not have.
+	kept := agents[:0]
+	for i := range agents {
+		if oerr := s.overlay(&agents[i]); oerr != nil {
+			logger.ErrorCF("agentstore", "agent record skipped: its upgraded skill values cannot be decided",
+				map[string]any{"agent_id": agents[i].ID, "error": oerr.Error()})
+			skipped = append(skipped, agents[i].ID)
+			continue
+		}
+		kept = append(kept, agents[i])
+	}
+	return kept, skipped, nil
 }
 
 // Create persists a new agent record under id. id must be non-empty; a
