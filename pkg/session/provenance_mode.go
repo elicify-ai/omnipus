@@ -56,6 +56,20 @@ var provenanceModeRows = []ProvenanceModeRow{
 		Producer: "the plan record"},
 	{Origin: OriginKindHuman, Mode: ProvenanceModeLineage,
 		Producer: "none: no producer row, so unresolved (fail closed)"},
+	// Turn-start path rows (S-83, ruling-check-delta "S-83 path rows"): what
+	// each handoff contributes to the receiving turn, from the spec's handoff
+	// table. The receiving session keeps its own mode (a steered main chat
+	// stays root for its own turns).
+	{TurnStartPath: "launch", Mode: ProvenanceModeLineage,
+		Producer: "the launching turn or work record, stamped at creation"},
+	{TurnStartPath: "steering", Mode: ProvenanceModeLineage,
+		Producer: "the steer message's provenance, joined into the receiving turn; a missing one is unresolved, never root"},
+	{TurnStartPath: "peer_request", Mode: ProvenanceModeLineage,
+		Producer: "the request ledger record"},
+	{TurnStartPath: "background_callback", Mode: ProvenanceModeLineage,
+		Producer: "the ProcessSession and its async callback"},
+	{TurnStartPath: "goal_follow_up", Mode: ProvenanceModeLineage,
+		Producer: "the goal record"},
 }
 
 // ProvenanceModeRows returns the classification table in row order.
