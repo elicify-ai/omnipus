@@ -53,12 +53,14 @@ You can also ask Omnipus in its chat to change an agent's permissions. Outside G
 
 ## How to change the installation-wide setting
 
-1. Open **Skills & Tools** and choose the **Omnipus tools** tab, or **External tools** for tools from connected servers.
+1. Open **Skills & Tools** and choose the **Omnipus tools** tab, or **External tools (MCP)** for tools from connected servers.
 2. Groups start collapsed. Type in the search field, or use the **Permission** and **What the model sees** filters, to open the groups with matches. Escape empties the search.
 3. Click **Allow**, **Ask** or **Deny** on a row. The change saves on its own: the row shows "Saving…", then "Saved". If the save is refused, the row shows the reason and the stored value, with **Retry**. If the value was saved but could not be applied yet, the row says so, with **Retry**.
-4. To change a whole group, open it and use **Set all…**. With a filter on, it reads "Set k of n matching…" and changes only the rows shown. Rows that cannot take the value are skipped. Setting `execute_plan` to Allow asks you to confirm autonomous plan execution first.
+4. To change a whole group, open it and use **Set all** (it shows how many rows it covers, for example "Set all 12"). With a filter on, it reads "Set k of n matching" and changes only the rows shown. Rows that cannot take the value are skipped: the menu then says so, for example "Set 11 of 12 to Allow", and after the save a note names them, for example "1 skipped: set_channel_outbound always asks." Setting `execute_plan` to Allow asks you to confirm autonomous plan execution first.
 
 If you leave the page before a save finishes, it still completes; a problem is reported once, with an **Open Skills & Tools** button.
+
+Auto-approve and God Mode are not set here: the **Open Settings** link at the top of the Omnipus tools tab opens Settings → Protection. The **Shell** group's **Shell safety rules (Settings)** link opens Settings → Sandbox & network.
 
 ### What the model sees
 
@@ -225,7 +227,7 @@ A connected server adds tools Omnipus was not born with — a company wiki, a de
 To connect one:
 
 1. Open **Skills & Tools** in the sidebar.
-2. Go to the **External tools** tab and click **Add service**.
+2. Go to the **External tools (MCP)** tab and click **Add service**.
 3. Choose **A network address** (an https address, for hosted services) or **A local program** (a command that runs on your server). A local program first asks "This runs a program on your server", with **Use a network address instead** as the main button.
 4. Save. The service appears as its own group on the tab, and every tool it has, now or later, starts at Ask unless a broader global rule already covers it.
 

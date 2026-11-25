@@ -355,7 +355,7 @@ When an agent loads or installs a skill, one card can ask for two things at once
 | Both | **Approve this version**, **Approve this version and allow for** a time, **Deny** |
 | An agent installs an unverified skill under Ask | **Install and approve this version**, **Deny** |
 
-Auto-approve and a running time allowance answer the permission part only; they never approve a version. If the skill changed, or was set to Deny, after the card appeared, your answer stores nothing and the card says why: "The skill changed after this request." or "This skill is now set to Deny." If the version approval cannot be saved, the card stays open with "Could not save the approval. Nothing was changed."
+When you pick a skill yourself with `/` in chat, that counts as your yes for its permission; an open trust check still shows the trust card first, and the skill's instructions stay out unless you approve this version. Auto-approve and a running time allowance answer the permission part only; they never approve a version. When a version is approved, the card closes with "Approved this version of <skill>." If the skill changed, or was set to Deny, after the card appeared, your answer stores nothing and the card says why: "The skill changed after this request." or "This skill is now set to Deny." If the version approval cannot be saved, the card stays open with "Could not save the approval. Nothing was changed." A choice the card no longer offers is refused with "This choice is no longer offered. Choose Approve Once or a time limit."
 
 These controls answer different questions.
 
