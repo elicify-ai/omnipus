@@ -423,10 +423,10 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	// O_EXCL guarantees atomic creation — if two processes race, one gets
 	// an error and re-probes via mode 3 on the next Unlock call.
 	hexKey := hex.EncodeToString(key)
-	// #nosec G304 -- generateAndPersistMasterKey has exactly one caller
+	// #nosec G304 G703 -- generateAndPersistMasterKey has exactly one caller
 	// (Unlock, mode 4), which always passes defaultKeyPath — a fixed
 	// $OMNIPUS_HOME-derived constant, never request-derived.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G703 -- path is defaultKeyPath, the fixed master.key beside the Store's own credentials.json (data directory set at boot), never request or agent input.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create key file %q: %w", path, err)
 	}
