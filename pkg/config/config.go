@@ -2754,6 +2754,13 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// migrateCLITokenOutOfUsers in cli_token_migration.go.
 	migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)
 
+	// Skills & Tools C-2: the skill-map self-heal, the skills twin of
+	// ReconcileToolPolicyCeiling, runs on every load once the C-19 upgrade
+	// is done (see skill_map_heal.go).
+	if err := healSkillMapsOnLoad(cfg, path, onSelfHeal); err != nil {
+		return nil, err
+	}
+
 	// Single-account diagnostic (single-user model follow-up): advisory
 	// only — every configured Gateway.Users account authenticates fine
 	// today (checkBearerAuth/authenticateWS/withOptionalAuth in

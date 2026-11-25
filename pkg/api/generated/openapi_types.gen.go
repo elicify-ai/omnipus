@@ -12149,6 +12149,24 @@ func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for SkillUpgradeUnfinishedAgentReason.
+const (
+	SkillUpgradeUnfinishedAgentReasonUnreadable  SkillUpgradeUnfinishedAgentReason = "unreadable"
+	SkillUpgradeUnfinishedAgentReasonWriteFailed SkillUpgradeUnfinishedAgentReason = "write_failed"
+)
+
+// Valid indicates whether the value is a known member of the SkillUpgradeUnfinishedAgentReason enum.
+func (e SkillUpgradeUnfinishedAgentReason) Valid() bool {
+	switch e {
+	case SkillUpgradeUnfinishedAgentReasonUnreadable:
+		return true
+	case SkillUpgradeUnfinishedAgentReasonWriteFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SlashCommandDelivery.
 const (
 	SlashCommandDeliveryAgent  SlashCommandDelivery = "agent"
@@ -15117,6 +15135,9 @@ type Agent struct {
 
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure AgentFigure `json:"figure"`
+
+	// FullSkillsTokens Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): what this agent's next turn would charge for Full skills, computed with the turn's own Full-skill selection and estimator over installed skills only (project skills depend on the chat's workspace and are left out). 0 when no Full skill would be injected; absent when it cannot be computed.
+	FullSkillsTokens *int `json:"full_skills_tokens,omitempty"`
 
 	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
 	Id string `json:"id"`
@@ -23876,6 +23897,9 @@ type PermissionSettings struct {
 	// SkillVisibility Global level of every installed and project skill (sandbox.skill_visibility), keyed like skill_policies.
 	SkillVisibility map[string]ModelVisibility `json:"skill_visibility"`
 
+	// UpgradeUnfinished Skills & Tools spec C-2, C-19 "The notice" (ruling spec-gaps-1): the agents the one-time skill-permissions upgrade has not finished for, read from the upgrade ledger on every request. Absent when there is nothing to list. Not part of PermissionSettingsPatch.
+	UpgradeUnfinished *[]SkillUpgradeUnfinishedAgent `json:"upgrade_unfinished,omitempty"`
+
 	// Visibility Global level of every tool (sandbox.tool_visibility): static tool names and mcp_<server>_* keys; an exact tool key overrides its server key.
 	Visibility map[string]ModelVisibility `json:"visibility"`
 }
@@ -27765,6 +27789,9 @@ type Skill struct {
 	Description *string `json:"description,omitempty"`
 	ErrorStage  *string `json:"error_stage,omitempty"`
 
+	// FullTokens Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): the estimate a chat turn charges for this skill's Full block ("### Skill: <id>" and its body), made with the turn's estimator. Served for every installed skill whatever its level. Absent when the skill file cannot be read (load_error is then set).
+	FullTokens *int `json:"full_tokens,omitempty"`
+
 	// HasLocalChanges true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins.
 	HasLocalChanges bool `json:"has_local_changes"`
 
@@ -28087,6 +28114,18 @@ type SkillTrustUpdateResponse struct {
 
 // SkillTrustUpdateResponseAppliedLevel The skill trust level now active.
 type SkillTrustUpdateResponseAppliedLevel string
+
+// SkillUpgradeUnfinishedAgent Skills & Tools spec C-19 "The notice" (ruling spec-gaps-1): one agent the one-time skill-permissions upgrade has not finished for. write_failed = its record could not be saved (it stays pending and the next start retries it); unreadable = its record could not be read at the snapshot, listed only while the record file still exists.
+type SkillUpgradeUnfinishedAgent struct {
+	// AgentId The agent's id.
+	AgentId string `json:"agent_id"`
+
+	// Reason Why the upgrade has not finished for this agent.
+	Reason SkillUpgradeUnfinishedAgentReason `json:"reason"`
+}
+
+// SkillUpgradeUnfinishedAgentReason Why the upgrade has not finished for this agent.
+type SkillUpgradeUnfinishedAgentReason string
 
 // SlashCommand A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries.
 type SlashCommand struct {

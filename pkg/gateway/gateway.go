@@ -782,14 +782,13 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	// retirement, before NewAgentLoop builds any agent, so the first live
 	// instance never holds a retired grant. Never fatal: a failure is logged
 	// and the step runs again at the next start.
-	skillsReport, skillsErr := bootSkills(rc.cfg, rc.homePath)
-	if skillsErr != nil {
+	if _, skillsErr := bootSkills(rc.cfg, rc.homePath); skillsErr != nil {
 		slog.Warn("gateway: skills start-up step did not complete; it runs again at the next start", "error", skillsErr)
 	}
 	// Skills & Tools C-2: the skill-map self-heal runs after the C-19 upgrade
 	// (top of this function) and after the built-in sync, so a built-in the
 	// sync just installed is known as one shipped by a newer release.
-	healSkillPolicyMaps(rc.cfg, rc.homePath, rc.configPath, skillsReport.Installed)
+	healSkillPolicyMaps(rc.cfg, rc.homePath, rc.configPath)
 
 	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
 	// For the Judge this closes an operator-reported UX gap: its soul only

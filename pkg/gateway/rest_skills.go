@@ -122,6 +122,15 @@ func (a *restAPI) skillInventory() []gen.Skill {
 		} else {
 			skill.Category = gen.SkillCategory(skills.CategoryUncategorised)
 		}
+		// C-14 "Page warning" (ruling spec-gaps-1): the size of the skill's
+		// Full block, with the turn's estimator, whatever its level. Absent
+		// when the skill cannot be read.
+		if skill.LoadError == nil {
+			if body, ok := skills.LoadSkillFile(s.Path); ok {
+				tokens := agent.FullSkillBlockTokens(s.ID, body)
+				skill.FullTokens = &tokens
+			}
+		}
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
 		if s.Version != "" {

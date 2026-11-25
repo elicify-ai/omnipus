@@ -1511,6 +1511,8 @@ components:
       $ref: ./components/schemas/PermissionSettings.yaml
     PermissionSettingsPatch:
       $ref: ./components/schemas/PermissionSettingsPatch.yaml
+    SkillUpgradeUnfinishedAgent:
+      $ref: ./components/schemas/SkillUpgradeUnfinishedAgent.yaml
     AgentSkillsCfg:
       $ref: ./components/schemas/AgentSkillsCfg.yaml
     AgentSkillEntry:

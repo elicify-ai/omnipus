@@ -98,6 +98,17 @@ properties:
       Skill origin: "builtin" = pre-installed/system skill (cannot be deleted),
       "global"/"workspace" = user-installed (community/3rd-party).
     example: "builtin"
+  full_tokens:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): the
+      estimate a chat turn charges for this skill's Full block
+      ("### Skill: <id>" and its body), made with the turn's estimator.
+      Served for every installed skill whatever its level. Absent when the
+      skill file cannot be read (load_error is then set).
+    example: 3240
   verified:
     type: boolean
     description: >

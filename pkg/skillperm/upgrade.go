@@ -81,12 +81,23 @@ type Snapshot struct {
 	StaticTools      []string                            `json:"static_tools"`
 }
 
-// Ledger is the upgrade's progress record.
+// Ledger is the upgrade's progress record. Failures names each pending
+// agent whose record write failed (reason ReasonWriteFailed); a successful
+// write removes its entry. Skipped lists the agent records the snapshot
+// skipped as unreadable; it stays after done (ruling spec-gaps-1).
 type Ledger struct {
-	State    string   `json:"state"`
-	Pending  []string `json:"pending"`
-	InFlight *string  `json:"in_flight"`
+	State    string            `json:"state"`
+	Pending  []string          `json:"pending"`
+	InFlight *string           `json:"in_flight"`
+	Failures map[string]string `json:"failures"`
+	Skipped  []string          `json:"skipped"`
 }
+
+// The reasons an agent is listed as not upgraded (C-19 "The notice").
+const (
+	ReasonWriteFailed = "write_failed"
+	ReasonUnreadable  = "unreadable"
+)
 
 const (
 	stateInProgress = "in_progress"
@@ -135,10 +146,16 @@ func runLocked(home, entities string, opts Options) error {
 		return err
 	}
 	if !ok {
-		led = Ledger{State: stateInProgress, Pending: agentIDs(snap)}
+		led = Ledger{State: stateInProgress, Pending: agentIDs(snap), Failures: map[string]string{}, Skipped: skippedIDs(snap)}
 		if err := writeJSON(filepath.Join(entities, ledgerName), led); err != nil {
 			return err
 		}
+	}
+	if led.Failures == nil {
+		led.Failures = map[string]string{} // a ledger from before ruling spec-gaps-1
+	}
+	if led.Skipped == nil {
+		led.Skipped = skippedIDs(snap)
 	}
 	opts.at(PointLedger, "")
 	if err := applyConfigPlan(home, snap); err != nil {
@@ -149,7 +166,7 @@ func runLocked(home, entities string, opts Options) error {
 		return err
 	}
 	opts.at(PointBeforeDone, "")
-	led = Ledger{State: stateDone, Pending: []string{}}
+	led = Ledger{State: stateDone, Pending: []string{}, Failures: map[string]string{}, Skipped: led.Skipped}
 	if err := writeJSON(filepath.Join(entities, ledgerName), led); err != nil {
 		return err
 	}
@@ -189,6 +206,16 @@ func retireSnapshot(entities string) error {
 		return fmt.Errorf("skillperm: retire snapshot: %w", err)
 	}
 	return nil
+}
+
+// skippedIDs is the sorted ids of the agent records the snapshot skipped.
+func skippedIDs(snap Snapshot) []string {
+	ids := slices.Clone(snap.SkippedAgents)
+	if ids == nil {
+		ids = []string{}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func agentIDs(snap Snapshot) []string {
@@ -247,11 +274,13 @@ func applyAgentPlans(home, entities string, snap Snapshot, led *Ledger, opts Opt
 			logger.ErrorCF(logComponent, "skill permissions upgrade: agent record not written; it stays pending and its old skill limits still apply",
 				map[string]any{"agent": id, "error": err.Error()})
 			failed = append(failed, fmt.Errorf("agent %s: %w", id, err))
+			led.Failures[id] = ReasonWriteFailed
 			led.InFlight = nil
 			continue
 		}
 		opts.at(PointRecordWritten, id)
 		led.Pending = slices.DeleteFunc(led.Pending, func(p string) bool { return p == id })
+		delete(led.Failures, id)
 		led.InFlight = nil
 		if err := writeJSON(filepath.Join(entities, ledgerName), led); err != nil {
 			return err

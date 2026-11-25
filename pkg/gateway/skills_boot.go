@@ -306,8 +306,8 @@ func removeGrantInMemory(a *config.AgentConfig, key string) bool {
 // keys to the in-memory config. It never stops the gateway: a failure is
 // logged at error level and the heal runs again at the next start (its
 // record of known built-ins is only grown after config.json is written).
-func healSkillPolicyMaps(cfg *config.Config, homePath, configPath string, installedThisStart []string) {
-	policies, visibility, err := skillperm.SelfHeal(homePath, configPath, skills.DefaultSkillNames(), installedThisStart)
+func healSkillPolicyMaps(cfg *config.Config, homePath, configPath string) {
+	policies, visibility, _, err := skillperm.SelfHeal(homePath, configPath, skills.DefaultSkillNames())
 	if err != nil {
 		slog.Error("gateway: skill permission self-heal did not finish; it runs again at the next start", "error", err)
 		return

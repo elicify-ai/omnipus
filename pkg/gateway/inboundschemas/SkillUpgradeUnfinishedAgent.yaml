@@ -1,0 +1,24 @@
+title: SkillUpgradeUnfinishedAgent
+description: >
+  Skills & Tools spec C-19 "The notice" (ruling spec-gaps-1): one agent the
+  one-time skill-permissions upgrade has not finished for. write_failed =
+  its record could not be saved (it stays pending and the next start
+  retries it); unreadable = its record could not be read at the snapshot,
+  listed only while the record file still exists.
+type: object
+additionalProperties: false
+required:
+  - agent_id
+  - reason
+properties:
+  agent_id:
+    type: string
+    description: The agent's id.
+    example: mia
+  reason:
+    type: string
+    enum:
+      - write_failed
+      - unreadable
+    description: Why the upgrade has not finished for this agent.
+    example: write_failed
