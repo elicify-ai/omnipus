@@ -439,7 +439,7 @@ func importAliases(f *ast.File) map[string]string {
 			continue
 		}
 		suffix := path[i+len(omnipusModulePrefix):] // e.g. "/pkg/bus"
-		name := ""
+		var name string
 		if imp.Name != nil {
 			name = imp.Name.Name
 		} else {

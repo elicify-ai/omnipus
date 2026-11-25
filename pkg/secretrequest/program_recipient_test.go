@@ -232,7 +232,6 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		restored, err := boot.Get(rec.Card.RequestId, matrixOwner)
 		require.NoError(t, err)
 		require.Equal(t, committed, s1ProgramGeneration(t, restored.Card, "recovered Card"))
-
 	})
 
 	t.Run("S99_chat_card_uses_program_token_rules", func(t *testing.T) {
@@ -340,5 +339,4 @@ func TestRequestSecret_ProgramRecipient(t *testing.T) {
 		// This verifies backend association/recovery, not rendered text. The
 		// real card's Connected-as text is tested on the UI boundary separately.
 	})
-
 }
