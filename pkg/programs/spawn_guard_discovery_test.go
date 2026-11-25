@@ -27,6 +27,12 @@
 // example sandbox.Run, which the git version probe uses) are not discovered.
 // The tree-wide detector in spawn_guard_tree_test.go bounds that risk for
 // program variables; the runtime campaigns in pkg/gateway observe the sinks.
+//
+// Launcher recognition is by function name alone: a plain call or a method
+// call on any value whose name a "launcher" row lists counts as a launch,
+// whatever its package or receiver type. A same-named function elsewhere in
+// the scanned tree is therefore judged like a launcher (the guard asks for the
+// caller's same-command Attach), which over-reports and does not hide a launch.
 
 package programs
 
