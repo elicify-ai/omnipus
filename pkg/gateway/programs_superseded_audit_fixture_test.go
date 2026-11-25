@@ -124,7 +124,26 @@ func pgAuditHasSupersededOutcome(value any) bool {
 	return false
 }
 
-func pgAssertOneSupersededAudit(t *testing.T, f *pgGateFixture) {
+// pgSupersededWant is what the real audit file must say about the finished and the
+// superseded checks once every check of a superseded-check scenario has joined
+// (FR-021, ruling H50, ruling-check-delta item 5).
+type pgSupersededWant struct {
+	// results is every program.check_result row, once each: one per check that
+	// published a result. A superseded check is not in it.
+	results []pgResultWant
+	// superseded is the generation of every program.check_superseded row, once each:
+	// one per superseded check.
+	superseded []int64
+	// unreported lists generations that must have no result row at all, because their
+	// only check was superseded (S90, S139: A's generation).
+	unreported []int64
+}
+
+// pgAssertSupersededAudit asserts the audit file after every check has joined: the
+// superseded check is audited superseded exactly once, the exact multiset of
+// program.check_result and program.check_superseded rows by generation and
+// check_revision, and no result row for a generation whose check was superseded.
+func pgAssertSupersededAudit(t *testing.T, f *pgGateFixture, want pgSupersededWant) {
 	t.Helper()
 	rows := pgSupersededAuditRows(t, f)
 	count := 0
@@ -140,4 +159,22 @@ func pgAssertOneSupersededAudit(t *testing.T, f *pgGateFixture) {
 	}
 	assert.Equal(t, 1, count, "S90/S114/FR-021: actual A must be audited superseded exactly once, not merely discarded")
 	t.Logf("actual person routes/check children joined; product_audit_rows=%d superseded_outcomes=%d", product, count)
+
+	results := pgAuditRowsOf(t, f.api.homePath, s50EventResult)
+	got := make([]pgResultWant, 0, len(results))
+	for _, row := range results {
+		result := pgResultOfRow(t, row, "github")
+		for _, generation := range want.unreported {
+			assert.NotEqual(t, generation, result.generation, "ruling H50: the check of generation %d was superseded and must write no %s row: %s", generation, s50EventResult, row.line)
+		}
+		got = append(got, result)
+	}
+	assert.ElementsMatch(t, want.results, got, "FR-021/H50: the %s rows are exactly one per check that published a result, and none for a superseded check", s50EventResult)
+
+	superseded := pgAuditRowsOf(t, f.api.homePath, pgEventSuperseded)
+	generations := make([]int64, 0, len(superseded))
+	for _, row := range superseded {
+		generations = append(generations, pgNumberOf(t, row, "generation"))
+	}
+	assert.ElementsMatch(t, want.superseded, generations, "FR-021/H50: the %s rows are exactly one per superseded check, by generation", pgEventSuperseded)
 }

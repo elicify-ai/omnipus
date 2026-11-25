@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -65,17 +64,9 @@ func s50Fields(t *testing.T, row json.RawMessage) map[string]any {
 
 func s50Number(n int64) json.Number { return json.Number(strconv.FormatInt(n, 10)) }
 
-// s50TokenPiece returns the first 8-byte piece of the token that text holds. Any
-// longer fragment of the token holds an 8-byte piece, so 8 bytes is the whole
-// check (H50 ruling, item 4).
-func s50TokenPiece(text string) (string, bool) {
-	for start := 0; start+8 <= len(s50Token); start++ {
-		if piece := s50Token[start : start+8]; strings.Contains(text, piece) {
-			return piece, true
-		}
-	}
-	return "", false
-}
+// s50TokenPiece returns the first 8-byte piece of the token that text holds (H50
+// ruling, item 4; the piece search is shared with the check-result rows).
+func s50TokenPiece(text string) (string, bool) { return pgTokenPieceOf(s50Token, text) }
 
 func TestProgramSentinel_AllSinks(t *testing.T) {
 	t.Run("S50_audit_rows_value_free", func(t *testing.T) {
@@ -145,6 +136,12 @@ func TestProgramSentinel_AllSinks(t *testing.T) {
 				assert.Equal(t, s50Number(wantGeneration), details["generation"], "S50/FR-021: the result row carries the generation of the check that finished")
 				assert.Equal(t, s50Number(wantRevision), details["check_revision"], "S50/FR-021: the result row carries the check_revision of the check that finished")
 				assert.Equal(t, "connected", details["outcome"], "S50/FR-021: the result row carries the outcome the person sees")
+				// CHECK F-3, ruling-check-delta item 5: a connected check's row carries
+				// its reason class: exactly account_named, and, like every result row,
+				// present, not empty, short and a ratified class of its outcome.
+				assert.Equal(t, "account_named", details["reason"], "S50/FR-021: the result row of a connected check carries the reason class account_named")
+				shown, _ := json.Marshal(details)
+				pgAssertReasonClass(t, details["outcome"], details["reason"], string(shown))
 			}
 		}
 		// joined waits for the checks in flight, confirms the person sees the
