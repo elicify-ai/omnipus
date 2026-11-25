@@ -249,10 +249,7 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	if rc.rx.rr.rq.ri.rf.rt.ts.origin == nil {
 		rc.rx.rr.rq.ri.rf.rt.ts.origin = tools.NewTurnOrigin()
 	}
-	rc.rx.rr.rq.ri.rf.rt.ts.opts.InputOrigin.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
-	for _, consumed := range rc.rx.rr.rq.ri.rf.rt.ts.opts.ConsumedInputOrigins {
-		consumed.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
-	}
+	rc.rx.rr.rq.ri.rf.rt.al.recordTurnInputs(&rc.rx.rr.rq.ri.rf.rt.ts.opts, rc.rx.rr.rq.ri.rf.rt.ts.origin)
 	// I-2: a lineage session's stored provenance is joined into every turn
 	// (wake, restart, a person's message into a task session); a root
 	// stores none, so only the inputs this turn consumed count.

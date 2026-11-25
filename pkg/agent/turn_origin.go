@@ -73,6 +73,27 @@ func (o inputOrigin) recordInto(al *AgentLoop, origin *tools.TurnOrigin) {
 	}
 }
 
+// recordTurnInputs starts a turn's origin from its inputs (§6.18 / FR-240,
+// I-2: a turn's provenance is the join of the inputs it consumes): the
+// triggering input, then the queued inputs a continuation turn was started to
+// consume. A continuation that only consumes queued inputs has no triggering
+// input of its own (no message, a zero InputOrigin); recording that zero
+// value would join an input that never existed, as unresolved, and so make
+// a person's queued web message unresolved whenever it arrived just as the
+// previous turn was retiring. Every consumed input is still recorded, so one
+// without provenance keeps the turn unresolved (fail closed).
+func (al *AgentLoop) recordTurnInputs(opts *processOptions, origin *tools.TurnOrigin) {
+	own := opts.InputOrigin
+	continuationOnly := opts.UserMessage == "" && len(opts.ConsumedInputOrigins) > 0 &&
+		own.provenance.IsUnresolved() && own.channelPerson == "" && own.peerAgentID == ""
+	if !continuationOnly {
+		own.recordInto(al, origin)
+	}
+	for _, consumed := range opts.ConsumedInputOrigins {
+		consumed.recordInto(al, origin)
+	}
+}
+
 // recordConsumedInputOrigins adds the origins of steering inputs the running
 // turn on scope is consuming, so a channel person's message read mid-turn
 // makes that turn channel-triggered (§6.18: "any input").
