@@ -24,6 +24,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// Settings redesign #1519 reconciliation: the wireframe renames the rows
+// ("Model calls per hour", "Tool calls per minute"); FR-010 removes the
+// debounce autosave, so the PUT fires only after Save changes; a failed save
+// is now the FR-015/FR-020 outcome (bar says "could not be saved", server
+// message under the field, drafts kept, never a "Saved" state) instead of
+// the removed AutoSaveIndicator region. The #1882 routing oracle is
+// unchanged: one PUT to the rate-limit route with exactly the two values,
+// and no security key in any PUT /config body.
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -37,10 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
@@ -62,9 +67,7 @@ import {
   fetchGatewayStatus,
   fetchCredentials,
   fetchBuiltinTools,
-  fetchGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   fetchAppState,
   fetchSandboxConfig,
   fetchSandboxStatus,
@@ -162,17 +165,23 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
     </QueryClientProvider>,
   )
 }
 
-/** Open Advanced and return the two rate-limit inputs once they exist. */
-async function openAdvanced() {
+/**
+ * Return the two rate-limit inputs once they exist. The Protection view shows
+ * them in plain view; the legacy layout kept them behind a collapsed Advanced
+ * disclosure, which is gone with that layout (skills-tools-redesign C-22 row
+ * 6), so there is nothing to open.
+ */
+async function findRateLimitInputs() {
   await waitFor(() => expect(screen.getByTestId('security-health-header')).toBeInTheDocument())
-  fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-  const llm = (await screen.findByLabelText('LLM calls / hour')) as HTMLInputElement
-  const tool = (await screen.findByLabelText('Tool calls / minute')) as HTMLInputElement
+  // Settings redesign #1519: the wireframe (the wording authority) renames
+  // the rows — "Model calls per hour", "Tool calls per minute".
+  const llm = (await screen.findByLabelText('Model calls per hour')) as HTMLInputElement
+  const tool = (await screen.findByLabelText('Tool calls per minute')) as HTMLInputElement
   return { llm, tool }
 }
 
@@ -184,11 +193,13 @@ async function settleTo(input: HTMLInputElement, want: string) {
   )
 }
 
-async function editAndSave(llm: HTMLInputElement, tool: HTMLInputElement) {
+async function editDrafts(llm: HTMLInputElement, tool: HTMLInputElement) {
   fireEvent.change(llm, { target: { value: String(TYPED_LLM) } })
   fireEvent.change(tool, { target: { value: String(TYPED_TOOL) } })
-  // The screen saves automatically after the debounce window (500 ms).
-  await new Promise((resolve) => setTimeout(resolve, 1400))
+  // FR-010 replaced the debounce autosave: typing stores nothing — the two
+  // drafts wait in the Save bar until Save changes is pressed.
+  expect(rateLimitPuts().length, '#1882/FR-010: typing must not save; rate limits wait for Save changes').toBe(0)
+  await screen.findByText(/2 unsaved changes/)
 }
 
 const APP_STATE = { onboarding_complete: true, identity: { mode: 'platform', edition: 'hosted', signed_in: true } } as AppState
@@ -201,9 +212,7 @@ beforeEach(() => {
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
   vi.mocked(fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' as const })
   vi.mocked(fetchAppState).mockResolvedValue(APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
@@ -218,10 +227,16 @@ afterEach(() => {
 })
 
 describe('#1882 R1(a) — rate limits save through the rate-limit route', () => {
-  it('sends ONE PUT to the rate-limit route with exactly the two values, and no security key in any PUT /config body', async () => {
+  it('sends ONE PUT to the rate-limit route with exactly the two values only after Save changes, and no security key in any PUT /config body', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
-    await editAndSave(llm, tool)
+    const { llm, tool } = await findRateLimitInputs()
+    await editDrafts(llm, tool)
+
+    // FR-010: the write happens only when Save changes is pressed.
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => {
+      expect(rateLimitPuts().length).toBeGreaterThanOrEqual(1)
+    })
 
     const puts = rateLimitPuts()
     expect.soft(
@@ -256,7 +271,7 @@ describe('#1882 R1(a) — rate limits save through the rate-limit route', () => 
 describe('#1882 R1(b) — the screen shows the values the rate-limit route returns', () => {
   it('shows the GET /api/v1/security/rate-limits values, not config.security.rate_limits', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
 
@@ -269,42 +284,19 @@ describe('#1882 R1(b) — the screen shows the values the rate-limit route retur
   })
 })
 
-describe('#1882 R1(c) — a failed rate-limit save shows the existing error state', () => {
-  it('shows the save-error alert and no saved state when the rate-limit PUT fails', async () => {
+describe('#1882 R1(c) — a failed rate-limit save shows the error, never success', () => {
+  it('keeps the typed values, shows the server message, and never claims saved (FR-015/FR-020)', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     putStatus = 400
-    // T2-1: before the save, no error alert is on the screen, so an alert
-    // seen afterwards cannot be a leftover or an unrelated one.
-    const alertsBefore = screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim())
-    expect(
-      alertsBefore,
-      '#1882: no error alert may be on the screen before the save is attempted',
-    ).toEqual([])
-    // T4: the rate-limit save status is found through the inputs own
-    // aria-describedby, never by position or text. Both inputs must point at
-    // the same node, and it is the same node checked after the save.
-    const describedByLlm = llm.getAttribute('aria-describedby')
-    const describedByTool = tool.getAttribute('aria-describedby')
-    expect(
-      describedByLlm,
-      '#1882: the "LLM calls / hour" input must have aria-describedby naming its save-status region',
-    ).toBeTruthy()
-    expect(
-      describedByTool,
-      '#1882: the "Tool calls / minute" input must have aria-describedby naming the same save-status region',
-    ).toBe(describedByLlm)
-    const indicatorBefore = document.getElementById(describedByLlm as string)
-    expect(
-      indicatorBefore,
-      `#1882: the save-status region named by aria-describedby "${describedByLlm}" must be mounted before the save`,
-    ).not.toBeNull()
-    expect(
-      indicatorBefore?.getAttribute('role'),
-      '#1882: the save-status region must not already be an alert before the save',
-    ).not.toBe('alert')
-    await editAndSave(llm, tool)
+    // T2-1 discipline kept: no failure text is on the screen before the save,
+    // so anything seen afterwards belongs to THIS save.
+    expect(screen.queryByText(PUT_ERROR_TEXT)).not.toBeInTheDocument()
+    expect(screen.queryByText(/could not be saved/)).not.toBeInTheDocument()
+
+    await editDrafts(llm, tool)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
 
     expect(
       rateLimitPuts().length,
@@ -318,41 +310,29 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
       `#1882: every recorded rate-limit PUT must have been answered 400 by the stub, saw ${JSON.stringify(rateLimitPuts().map((r) => r.status))}`,
     ).toEqual(rateLimitPuts().map(() => 400))
 
-    // AutoSaveIndicator error branch is the existing error state
-    // (role="alert"). The alert must be the rate-limit save own indicator
-    // (named by the inputs aria-describedby): the same node that was mounted before the save, now in its error state
-    // with a message. Its wording is not pinned (the real client shows its
-    // own sentence, not the stub one); an alert elsewhere on the screen does not count.
-    // T5/T6: re-read the LIVE links after the failed save, from the inputs
-    // currently on screen. They are queried again by their labels, never reused
-    // from before the save, so a build that remounts the inputs on error (new
-    // nodes without the links) cannot pass on the old detached nodes.
-    const liveLlm = screen.getByLabelText('LLM calls / hour')
-    const liveTool = screen.getByLabelText('Tool calls / minute')
-    const liveLlmLink = liveLlm.getAttribute('aria-describedby')
-    const liveToolLink = liveTool.getAttribute('aria-describedby')
+    // The old per-field AutoSaveIndicator error region was part of the
+    // removed autosave UI. FR-015 replaces it: the bar says the changes
+    // could not be saved, and FR-020 outcome (3) keeps the draft with the
+    // server's message under the field.
     expect(
-      liveLlmLink,
-      '#1882: after the failed save the "LLM calls / hour" input must still have aria-describedby pointing at the save-status region',
-    ).toBe(describedByLlm)
+      await screen.findByText('2 changes could not be saved'),
+      '#1882/FR-015: the bar must say both changes could not be saved',
+    ).toBeInTheDocument()
     expect(
-      liveToolLink,
-      '#1882: after the failed save the "Tool calls / minute" input must still have aria-describedby pointing at the same save-status region',
-    ).toBe(liveLlmLink)
-    const indicatorAfter = document.getElementById(liveLlmLink as string)
-    expect(indicatorAfter, '#1882: the rate-limit save-status indicator must still be mounted after the save').toBe(indicatorBefore)
-    expect(
-      indicatorAfter?.getAttribute('role'),
-      `#1882: a failed rate-limit save must put the rate-limit save-status indicator in its error state (role="alert"); it showed "${indicatorAfter?.textContent ?? ''}", other alerts: ${JSON.stringify(screen.queryAllByRole('alert').map((el) => (el.textContent ?? '').trim()))}`,
-    ).toBe('alert')
-    expect(
-      (indicatorAfter?.textContent ?? '').trim(),
-      '#1882: the rate-limit error indicator must carry a message',
-    ).not.toBe('')
+      screen.getAllByText(PUT_ERROR_TEXT).length,
+      '#1882/FR-020: the server message must show under the fields (both drafts share the refused write)',
+    ).toBeGreaterThanOrEqual(1)
+    // T5/T6 discipline kept: re-read the LIVE inputs after the failed save,
+    // queried again by their labels — the drafts keep their typed values
+    // (FR-020 outcome 3), they are not reverted.
+    const liveLlm = screen.getByLabelText('Model calls per hour') as HTMLInputElement
+    const liveTool = screen.getByLabelText('Tool calls per minute') as HTMLInputElement
+    expect(liveLlm, '#1882/FR-020: the LLM draft must keep its typed value').toHaveValue(TYPED_LLM)
+    expect(liveTool, '#1882/FR-020: the tool-calls draft must keep its typed value').toHaveValue(TYPED_TOOL)
 
-    // T1-5 b: the success state must be absent after the failed save. The
-    // AutoSaveIndicator's saved text starts with "Saved"; no element on the
-    // whole screen may show it, and no live region may announce it.
+    // T1-5 b kept: the success state must be absent after the failed save.
+    // The saved signal starts with "Saved"; no element on the whole screen
+    // may show it.
     expect(
       screen.queryAllByText(/^Saved\b/).map((el) => el.textContent),
       '#1882: a failed rate-limit save must not report success; expected no "Saved" text on the screen',
@@ -363,7 +343,7 @@ describe('#1882 R1(c) — a failed rate-limit save shows the existing error stat
 describe('#1882 R1(d) — fields with no server behind them are not shown or sent (chief ruling Q1 A)', () => {
   it('does not show "Exec timeout" or "Background timeout" on the Security section', async () => {
     renderSection()
-    await openAdvanced()
+    await findRateLimitInputs()
 
     expect(
       screen.queryByLabelText(/exec timeout/i),
@@ -379,8 +359,8 @@ describe('#1882 R1(d) — fields with no server behind them are not shown or sen
 
   it('a save never sends exec_timeout_seconds or max_background_seconds anywhere', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
-    await editAndSave(llm, tool)
+    const { llm, tool } = await findRateLimitInputs()
+    await editDrafts(llm, tool)
 
     const everyBody = [
       ...vi.mocked(updateConfig).mock.calls.map((args) => JSON.stringify(args[0])),

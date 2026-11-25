@@ -29,12 +29,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     rotateCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
     runDoctor: vi.fn(),
-    fetchSkillTrust: vi.fn(),
-    updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     reAuth: vi.fn(),
     fetchRateLimits: vi.fn(),
@@ -57,9 +53,7 @@ import {
   fetchCredentials,
   addCredential,
   fetchBuiltinTools,
-  fetchGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   fetchAppState,
   reAuth,
   fetchRateLimits,
@@ -98,9 +92,6 @@ const BUILTIN_TOOLS: RegistryTool[] = [
   { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
 ]
 
-const GLOBAL_POLICIES = { policies: {} }
-const SKILL_TRUST_RESPONSE = { level: 'warn_unverified' as const }
-
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
@@ -129,9 +120,7 @@ beforeEach(() => {
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
   vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_TOOLS)
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue(GLOBAL_POLICIES)
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(LOCAL_APP_STATE)
   vi.mocked(fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
 })

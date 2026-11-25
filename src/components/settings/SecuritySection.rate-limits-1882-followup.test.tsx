@@ -11,14 +11,14 @@
  *     0 for that field while the untouched field keeps the value the
  *     GET /api/v1/security/rate-limits route returned.
  *   - F-PTA-2: on a failing rate-limits GET the section must show its
- *     load-failure banner and must send no rate-limit save: the limits never
- *     hydrate, autosave stays off, and the banner is the only signal (the
- *     exact silent-failure class #1882 was filed to fix).
- *     The banner's exact wording is NOT given by docs/settings.md (checked);
- *     it is pinned from the product copy source and marked
- *     `characterization test` — the behavioural assertions (banner shown on
- *     GET failure, no save sent) are the verification; a wording change
- *     updates the pin.
+ *     load-failure notice and must send no rate-limit save: the limits never
+ *     hydrate, and under FR-010 there is no autosave to leak one, so the
+ *     group is blocked from saving (FR-066: only the group needing the
+ *     failed read is blocked) — the exact silent-failure class #1882 was
+ *     filed to fix. The notice's exact wording is product copy, so the pin
+ *     is by parts (names the failure, gives one thing to do); the
+ *     behavioural assertions (notice shown on GET failure, nothing saved)
+ *     are the verification.
  *
  * Harness: the sibling SecuritySection.rate-limits-1882.test.tsx mock set
  * (the two rate-limit client functions are not mocked — they go through the
@@ -42,10 +42,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
@@ -67,9 +64,7 @@ import {
   fetchGatewayStatus,
   fetchCredentials,
   fetchBuiltinTools,
-  fetchGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   fetchAppState,
   fetchSandboxConfig,
   fetchSandboxStatus,
@@ -92,9 +87,6 @@ const ROUTE_TOOL = 9
  * it. The behavioural oracle of F-PTA-2 — the banner shows on a failing GET
  * and no save is sent — is verified regardless of the wording.
  */
-const LOAD_FAILURE_BANNER_TEXT =
-  'The current limits could not be loaded, so changes here are not saved. Reload the page to try again.'
-
 const CONFIG = {
   security: {
     exec_timeout_seconds: 0,
@@ -173,17 +165,23 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
     </QueryClientProvider>,
   )
 }
 
-/** Open Advanced and return the two rate-limit inputs once they exist. */
-async function openAdvanced() {
+/**
+ * Return the two rate-limit inputs once they exist. The Protection view shows
+ * them in plain view; the legacy layout kept them behind a collapsed Advanced
+ * disclosure, which is gone with that layout (skills-tools-redesign C-22 row
+ * 6), so there is nothing to open.
+ */
+async function findRateLimitInputs() {
   await waitFor(() => expect(screen.getByTestId('security-health-header')).toBeInTheDocument())
-  fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-  const llm = (await screen.findByLabelText('LLM calls / hour')) as HTMLInputElement
-  const tool = (await screen.findByLabelText('Tool calls / minute')) as HTMLInputElement
+  // Settings redesign #1519: the wireframe (the wording authority) renames
+  // the rows — "Model calls per hour", "Tool calls per minute".
+  const llm = (await screen.findByLabelText('Model calls per hour')) as HTMLInputElement
+  const tool = (await screen.findByLabelText('Tool calls per minute')) as HTMLInputElement
   return { llm, tool }
 }
 
@@ -193,11 +191,6 @@ async function settleTo(input: HTMLInputElement, want: string) {
     () => expect(input.value, `#1882: the field must settle to the GET ${RATE_LIMITS_PATH} value "${want}", saw "${input.value}"`).toBe(want),
     { timeout: 1500 },
   )
-}
-
-/** Wait out the autosave debounce window (500 ms) plus round-trip slack. */
-async function waitPastDebounce() {
-  await new Promise((resolve) => setTimeout(resolve, 1400))
 }
 
 const APP_STATE = { onboarding_complete: true, identity: { mode: 'platform', edition: 'hosted', signed_in: true } } as AppState
@@ -210,9 +203,7 @@ beforeEach(() => {
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
   vi.mocked(fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' as const })
   vi.mocked(fetchAppState).mockResolvedValue(APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
@@ -229,14 +220,19 @@ afterEach(() => {
 describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) through the rate-limit route', () => {
   it('clearing "LLM calls / hour" PUTs max_agent_llm_calls_per_hour: 0 and keeps the tool value', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
-    // Both fields must show the route's stored values BEFORE the edit, so
-    // the "keeps the other field's value" half of the oracle is grounded:
-    // the 9 in the PUT body can only come from the GET hydration.
+    const { llm, tool } = await findRateLimitInputs()
+    // Both fields show the route's stored values before the edit. F3 /
+    // FR-015: keeping the tool limit means leaving it OUT of this partial
+    // update, never echoing the tab's possibly stale cached 9.
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
     fireEvent.change(llm, { target: { value: '' } })
-    await waitPastDebounce()
+    // FR-010 replaced the debounce autosave: clearing stores nothing — the
+    // draft waits for Save changes.
+    expect(rateLimitPuts().length, '#1882 F-PTA-1/FR-010: clearing must not save; it waits for Save changes').toBe(0)
+    await screen.findByText(/1 unsaved change/)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(rateLimitPuts().length).toBeGreaterThanOrEqual(1))
 
     const puts = rateLimitPuts()
     expect.soft(
@@ -246,21 +242,23 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
     if (puts.length === 1) {
       expect(
         JSON.parse(puts[0].body ?? 'null'),
-        `#1882 F-PTA-1: the cleared LLM field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched tool field must keep the route value ${ROUTE_TOOL}; saw body ${puts[0].body}`,
-      ).toEqual({
-        max_agent_llm_calls_per_hour: 0,
-        max_agent_tool_calls_per_minute: ROUTE_TOOL,
-      })
+        `#1882 F-PTA-1 / F3 / FR-015: the cleared LLM field must save 0 (Unlimited); the untouched tool limit must be absent; saw body ${puts[0].body}`,
+      ).toEqual({ max_agent_llm_calls_per_hour: 0 })
+      expect(tool).toHaveValue(ROUTE_TOOL)
     }
   })
 
   it('clearing "Tool calls / minute" PUTs max_agent_tool_calls_per_minute: 0 and keeps the LLM value', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
     fireEvent.change(tool, { target: { value: '' } })
-    await waitPastDebounce()
+    // FR-010: clearing stores nothing until Save changes.
+    expect(rateLimitPuts().length, '#1882 F-PTA-1/FR-010: clearing must not save; it waits for Save changes').toBe(0)
+    await screen.findByText(/1 unsaved change/)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(rateLimitPuts().length).toBeGreaterThanOrEqual(1))
 
     const puts = rateLimitPuts()
     expect.soft(
@@ -270,11 +268,9 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
     if (puts.length === 1) {
       expect(
         JSON.parse(puts[0].body ?? 'null'),
-        `#1882 F-PTA-1: the cleared tool field must save 0 (the route's spelling of Unlimited, docs/settings.md) and the untouched LLM field must keep the route value ${ROUTE_LLM}; saw body ${puts[0].body}`,
-      ).toEqual({
-        max_agent_llm_calls_per_hour: ROUTE_LLM,
-        max_agent_tool_calls_per_minute: 0,
-      })
+        `#1882 F-PTA-1 / F3 / FR-015: the cleared tool field must save 0 (Unlimited); the untouched model limit must be absent; saw body ${puts[0].body}`,
+      ).toEqual({ max_agent_tool_calls_per_minute: 0 })
+      expect(llm).toHaveValue(ROUTE_LLM)
     }
   })
 })
@@ -283,7 +279,7 @@ describe('#1882 follow-up F-PTA-2 — a failing rate-limits GET shows the load-f
   it('shows the load-failure banner and sends no rate-limit save after edits when the GET fails', async () => {
     rateLimitsGetStatus = 500
     renderSection()
-    await openAdvanced()
+    await findRateLimitInputs()
 
     // Instrument check: the failure must come from the real GET having been
     // made and answered 500 — not from a never-fired request.
@@ -293,20 +289,28 @@ describe('#1882 follow-up F-PTA-2 — a failing rate-limits GET shows the load-f
       `#1882 F-PTA-2: expected the screen to GET ${RATE_LIMITS_PATH} and be answered 500; requests seen: ${JSON.stringify(recorded.map((r) => `${r.method} ${r.path} -> ${r.status}`))}`,
     ).toEqual([500])
 
-    // Before the edit, no banner may be present that predates the failure,
-    // and after the failure the banner must be the one shown. (The GET is
-    // stubbed to fail from the start, so the banner must already be up here.)
-    const banner = screen.getByText(LOAD_FAILURE_BANNER_TEXT)
-    expect(banner, '#1882 F-PTA-2: the load-failure banner must be shown when the rate-limits GET fails').toBeInTheDocument()
+    // The notice must be up (the GET is stubbed to fail from the start).
+    // FR-066: the notice names what failed and gives one thing to do; its
+    // exact wording is product copy, so the pin is by parts.
+    const notice = await screen.findByText(/could not be loaded/)
+    expect(notice, '#1882 F-PTA-2/FR-066: the load-failure notice must be shown when the rate-limits GET fails').toBeInTheDocument()
+    expect(
+      screen.getByText(/reload the page/i),
+      '#1882 F-PTA-2/FR-066: the notice must give one thing to do',
+    ).toBeInTheDocument()
 
-    // The person edits both fields while the limits are unloaded. The limits
-    // never hydrated and autosave stays off, so no save may be sent — for
-    // the edited fields and the untouched ones alike (a save of the untouched
-    // fields would write 0 over caps the screen never read).
-    fireEvent.change(screen.getByLabelText('LLM calls / hour'), { target: { value: '25' } })
-    fireEvent.change(screen.getByLabelText('Tool calls / minute'), { target: { value: '60' } })
-    await waitPastDebounce()
+    // The person tries to edit both fields while the limits are unloaded.
+    // The limits never hydrated, so the group is blocked from saving
+    // (FR-066): no draft can be counted and no save may be sent — for the
+    // edited fields and the untouched ones alike (a save would write 0 over
+    // caps the screen never read).
+    fireEvent.change(screen.getByLabelText('Model calls per hour'), { target: { value: '25' } })
+    fireEvent.change(screen.getByLabelText('Tool calls per minute'), { target: { value: '60' } })
 
+    expect(
+      screen.queryByText(/unsaved change/),
+      '#1882 F-PTA-2/FR-066: the unloaded group must be blocked from saving — no draft may be counted',
+    ).not.toBeInTheDocument()
     expect(
       rateLimitPuts(),
       `#1882 F-PTA-2: with the limits unloaded, no save may be sent after edits; saw ${JSON.stringify(rateLimitPuts().map((r) => r.body))}`,

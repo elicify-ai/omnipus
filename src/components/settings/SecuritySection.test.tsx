@@ -2,15 +2,56 @@
  * SecuritySection tests.
  *
  * Coverage:
- *   US-B1 — two-layer IA: jargon hidden until Advanced is expanded (#327)
- *   US-B3 — ToolPolicyEditor replaces GlobalToolPoliciesSection (#329)
+ *   US-B1 — the plain Protection page carries no jargon (#327; the Advanced
+ *     layer that used to hold it is gone, see "Moved off the legacy layout")
  *   US-B4 — score deduction links to fix; score=100 reassurance (#330)
- *   #340   — SkillTrustSection is mounted in the Security tab
+ *
+ * Retired in Skills & Tools fix round 4 (CHECK round 4, candidates 9, 11, 22):
+ * eleven cases that drove SecuritySection's legacy layout, which
+ * skills-tools-redesign C-22 row 6 deletes together with its global tool grid
+ * and skill trust card (the Skills & Tools page holds both, C-22 row 1). No
+ * case with a replacement was dropped without moving it:
+ *   US-B3 preset buttons (1)  — presets are retired (FR-022, T-Q6 A; Regression
+ *     row "Presets | preset cases ... | Deleted with the feature").
+ *   US-B3 system.* flat grid, Mixed pill (2) — the same invariants stay pinned
+ *     on the editor itself in ToolPolicyEditor.test.tsx and AgentTools.test.tsx.
+ *   #340 SkillTrustSection mounted, three radios (2) — the trust block with
+ *     Allow / Ask / Deny is SkillsToolsPage.trust.test.tsx (S-26, S-32); the
+ *     Block / Warn / Allow vocabulary is retired (FR-027).
+ *   global tool-policy save (1) — "saves directly, no confirmation" is
+ *     SkillsToolsPage.autosave.test.tsx (T-Q3 B); its apply/recovery checks are
+ *     SaveQueue.states.test.ts (C-16).
+ *   MCP tools in the global editor (5) — External tools tab rows (S-03, S-04,
+ *     S-45, C-2): src/components/skills/SkillsToolsPage.external.test.tsx; the
+ *     spec's test plan also maps S-03 to tests/e2e/skills-tools.spec.ts.
+ *
+ * Moved off the legacy layout in Skills & Tools fix round 4, Part C item 1
+ * (item 11): SettingsSectionBody always passes view="protection" or
+ * view="keys" (spec C-22, "The Settings base" table, Global tool grid row),
+ * and C-22 "What this landing does" row 6 deletes "SecuritySection's legacy
+ * layout" — the layout with no view, with its Advanced disclosure that held
+ * the rate limits, the Auto-approve Save bar and the jargon. Every case below
+ * renders the view its content lives in; no assertion was weakened:
+ *   - the Auto-approve, rate-limit hydration and US-B4 cases render
+ *     view="protection" and no longer open an Advanced disclosure (it is gone);
+ *   - the credential vault cases render view="keys";
+ *   - "does not render the retired Shell command approval or Enable deny
+ *     patterns controls" keeps its absence checks on the Protection view, where
+ *     the page that held them now lives; its instrument waits for the rows that
+ *     sat beside them instead of waiting for the jargon the Advanced layer held;
+ *   - RETIRED, one case: "expanding Advanced reveals jargon (Landlock / SSRF)
+ *     that was hidden" drove only the removed disclosure (C-22 row 6). Its
+ *     other half, "no jargon on the plain page", stays pinned by "shows
+ *     Security health header without jargon in the initial render" above, now on
+ *     the Protection view; the jargon itself belongs to the Sandbox section
+ *     (SandboxSection.test.tsx), outside SecuritySection.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import type { ReactNode } from 'react'
 
 // ── Mocks (must be hoisted before any import that uses them) ──────────────────
 
@@ -25,14 +66,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     addCredential: vi.fn(),
     deleteCredential: vi.fn(),
     rotateCredentials: vi.fn(),
-    fetchBuiltinTools: vi.fn(),
-    fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
     runDoctor: vi.fn(),
-    fetchSkillTrust: vi.fn(),
-    updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
     // layer, unlike SandboxSection (Advanced, collapsed by default) — its
@@ -67,11 +102,7 @@ import {
   fetchCredentials,
   addCredential,
   deleteCredential,
-  fetchBuiltinTools,
-  fetchGlobalToolPolicies,
-  updateGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   rotateCredentials,
   fetchAppState,
   fetchSandboxConfig,
@@ -83,7 +114,9 @@ import {
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SecuritySection } from './SecuritySection'
-import type { RegistryTool } from '@/lib/api'
+import { SettingsShellContext, type SettingsShellApi } from './SettingsShellContext'
+import { useSavePasswordPrompt } from './useSavePasswordPrompt'
+import { ApiError } from '@/lib/api-error'
 
 // Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
 // ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
@@ -116,26 +149,6 @@ const MINIMAL_CONFIG = {
   },
 }
 
-const BUILTIN_TOOLS: RegistryTool[] = [
-  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'read_file', description: 'Read file content', category: 'file', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'system.status', description: 'System status', category: 'system', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-]
-
-/**
- * Mixed payload: same builtin tools PLUS two MCP tools from 'testsvr'.
- * Used in the MCP-tool-in-global-editor tests below.
- */
-const BUILTIN_AND_MCP_TOOLS: RegistryTool[] = [
-  ...BUILTIN_TOOLS,
-  { name: 'mcp_testsvr_list', description: 'List resources', category: 'search', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'mcp_testsvr_read', description: 'Read a resource', category: 'web', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
-]
-
-const GLOBAL_POLICIES = {
-  policies: {},
-}
-
 const DOCTOR_RESULT_ISSUES = {
   score: 75,
   checked_at: new Date().toISOString(),
@@ -158,8 +171,6 @@ const DOCTOR_RESULT_PERFECT = {
   issues: [],
 }
 
-const SKILL_TRUST_RESPONSE = { level: 'warn_unverified' as const }
-
 // ── Helper ─────────────────────────────────────────────────────────────────────
 
 function makeClient() {
@@ -168,10 +179,61 @@ function makeClient() {
   })
 }
 
+/** Settings → Protection: the layout SettingsSectionBody passes (view="protection"). */
 function renderSection(client = makeClient()) {
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
+    </QueryClientProvider>
+  )
+}
+
+/** Settings → Keys & secrets: the credential vault (view="keys"). */
+function renderKeysSection(client = makeClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <SecuritySection view="keys" />
+    </QueryClientProvider>
+  )
+}
+
+/**
+ * Settings redesign #1519: the Save bar's one password step per Save lives in
+ * the shell (FR-026) — SettingsScreen wires `useSavePasswordPrompt()` into
+ * SettingsShellContext, and outside the shell `requestPassword` is undefined,
+ * so a password-marked Save would skip its confirmation entirely. This
+ * provider supplies the real hook (the real ConfirmDialog in platform mode,
+ * the real ReAuthDialog in local mode), so the whole chain from click to PUT
+ * is the production chain.
+ */
+function SettingsShellProvider({ children }: { children: ReactNode }) {
+  const { requestPassword, dialog } = useSavePasswordPrompt()
+  const api = useMemo<SettingsShellApi>(
+    () => ({
+      announce: () => {},
+      setDraftCount: () => {},
+      offerRestart: () => {},
+      refreshPendingRestart: () => {},
+      requestPassword,
+      saveBarVisible: false,
+      setSaveBarVisible: () => {},
+    }),
+    [requestPassword],
+  )
+  return (
+    <SettingsShellContext.Provider value={api}>
+      {children}
+      {dialog}
+    </SettingsShellContext.Provider>
+  )
+}
+
+function renderSectionWithShell(client = makeClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <SettingsShellProvider>
+        <SecuritySection view="protection" />
+      </SettingsShellProvider>
     </QueryClientProvider>
   )
 }
@@ -186,10 +248,7 @@ beforeEach(() => {
   vi.mocked(fetchConfig).mockResolvedValue(MINIMAL_CONFIG as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
-  vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_TOOLS)
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue(GLOBAL_POLICIES)
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
@@ -210,7 +269,8 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
       expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
     })
 
-    // Jargon words must NOT appear until Advanced is expanded
+    // Jargon words must NOT appear on the plain Protection page (the technical
+    // layer that held them behind Advanced is the Sandbox section now)
     const bodyText = document.body.textContent ?? ''
     expect(bodyText).not.toMatch(/Landlock/)
     expect(bodyText).not.toMatch(/SSRF/)
@@ -240,43 +300,117 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
 
     // Both wrote fields the backend never read (security.exec_approval,
     // security.enable_deny_patterns) — deleted outright, not just hidden.
-    // Expand Advanced too, since "Enable deny patterns" used to live there.
-    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
-    fireEvent.click(advancedTrigger)
-    await waitFor(() => {
-      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
-    })
+    // "Enable deny patterns" used to live in the Advanced layer, which is gone
+    // with the legacy layout (C-22 row 6): the Protection view shows its whole
+    // content at once. The instrument: the rows that sat beside it — the
+    // per-agent rate limits, the prompt-injection defence and the audit log —
+    // must be on the page before the absence checks mean anything.
+    expect(await screen.findByRole('heading', { name: 'Rate limits per agent' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Prompt injection defense' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View Log' })).toBeInTheDocument()
 
     expect(screen.queryByText(/shell command approval/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/enable deny patterns/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/enable deny patterns/i)).not.toBeInTheDocument()
   })
-
-  it('expanding Advanced reveals jargon (Landlock / SSRF) that was hidden', async () => {
-    renderSection()
-
-    // Wait for the component to settle
-    await waitFor(() => {
-      expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
-    })
-
-    // Jargon hidden before expand
-    expect(document.body.textContent).not.toMatch(/Landlock/i)
-
-    // Find and click the Advanced/technical details trigger
-    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
-    fireEvent.click(advancedTrigger)
-
-    // After expanding, jargon is visible
-    await waitFor(() => {
-      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
-    })
-  })
 })
 
 // ── ADR-092: global Auto-approve switch ───────────────────────────────────────
+//
+// Settings redesign #1519 reconciliation (item 15 of ta-old-tests-items.md,
+// team-lead's FR-010 ruling): the retired instant-save mode is gone — every
+// reachable path waits for Save changes, and the old Security view passes the
+// same drafts as Protection. The five cases below that clicked the switch and
+// expected the retired "Turn Auto-approve on?" confirmation + instant save
+// move to the draft-and-Save-bar oracle. Each replaced assertion cites the
+// FR (or dataset row) that replaces it:
+//   - FR-010 (spec :1914): a toggle stores nothing and opens no dialog —
+//     a confirmation opens only when Save changes is pressed;
+//   - FR-011 (:1915): the change counts — "1 unsaved change", "1 needs your
+//     password";
+//   - FR-032 + BDD "Platform mode asks for a confirmation instead"
+//     (:1016-1021): Save changes opens a confirmation listing "Auto-approve"
+//     with no password field, and no POST /auth/reauth is sent;
+//   - D-8 row 3 (:1753): the section's one protected write — exactly one
+//     PUT /security/sandbox-config carrying { auto_approve } — and, in
+//     platform mode, no consent token (FR-027's one-request rule, platform
+//     form: no reauth ran to mint one);
+//   - D-11 rows 6 and 9: platform Cancel sends 0 reauth and 0 writes and
+//     keeps every draft (FR-029's Cancel rule, with FR-032 substituting the
+//     confirmation for the prompt);
+//   - a refused write is the FR-015/FR-020 outcome — the bar says "1 change
+//     could not be saved", the server's message shows under the row and the
+//     draft is kept — replacing the retired per-mutation error toast;
+//   - spec :554 (ADR-092): "Auto-approve keeps its password; the help text
+//     says each chat can still turn it off with its Auto button." — the help
+//     text, not a dialog, carries the explanation now.
+//
+// Harness: the real chain — SecuritySection (Protection view) + useSaveBar +
+// useSavePasswordPrompt + the real ConfirmDialog — with the @/lib/api client
+// functions mocked at the API edge and a global fetch recorder (404 default)
+// proving no POST /auth/reauth and no other un-mocked state change. The
+// platform dialog wording itself is pinned once, by passwordOncePerSave.test
+// (D-11 rows 6/9); this file owns the section's side of that boundary.
+
+let fetchCalls: { method: string; path: string }[] = []
+
+/** Recorder at the process edge: every un-mocked request lands here, 404 by default. */
+function stubFetchRecorder() {
+  fetchCalls = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const isRequest = typeof Request !== 'undefined' && input instanceof Request
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url
+      const path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
+      const method = (init?.method ?? (isRequest ? input.method : 'GET')).toUpperCase()
+      fetchCalls.push({ method, path })
+      return new Response(JSON.stringify({ error: 'not stubbed' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }),
+  )
+}
+
+const reauthPosts = () => fetchCalls.filter((c) => c.method === 'POST' && c.path.includes('/auth/reauth'))
 
 describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
+  // Only the five rewritten cases need the fetch recorder; the other cases in
+  // this describe run on the file-level mocks alone, as before.
+  beforeEach(() => {
+    stubFetchRecorder()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * Toggle Auto-approve and reach the Save bar. The Protection view carries
+   * the section's one Save bar in plain view; the legacy layout kept it inside
+   * a collapsed Advanced disclosure, which is gone (C-22 row 6), so there is
+   * nothing to expand — the counting itself happens at the toggle.
+   */
+  async function draftAndOpenBar() {
+    renderSectionWithShell()
+    // useSavePasswordPrompt's platform/local decision comes from the
+    // ['app-state'] query — wait for it so Save changes takes the mode this
+    // harness pins (fail-toward-the-stronger-control until the mode is known).
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    // FR-010: nothing is stored by the toggle itself.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+
+    // FR-011: the change counts, and counts as needing the password
+    // (FR-025: Auto-approve is a Password-badged row).
+    await screen.findByText('1 unsaved change')
+    expect(screen.getByText('1 needs your password')).toBeInTheDocument()
+  }
+
   it('reflects the persisted auto_approve value from sandbox-config', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: true } as never)
     renderSection()
@@ -295,45 +429,56 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     })
   })
 
-  it('toggling opens a confirmation, and confirming saves through the re-auth-gated endpoint', async () => {
+  it('toggling only drafts: Save changes confirms once ("Auto-approve", no password field) and then sends the one sandbox-config PUT', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     vi.mocked(updateSandboxConfig).mockResolvedValue({ auto_approve: true, saved: true } as never)
-    renderSection()
-    // useStepUp's mode (password vs. confirm) depends on the SEPARATE
-    // ['app-state'] query resolving — wait for it explicitly so the click
-    // below doesn't race ahead and open the wrong dialog.
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
 
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Turn Auto-approve on?')
+    // FR-032 + spec :1016-1021 ("Platform mode asks for a confirmation
+    // instead"): the confirmation lists "Auto-approve" and has no password
+    // field. The retired instant "Turn Auto-approve on?" dialog is gone with
+    // the instant-save mode (FR-010 ruling, item 15).
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    expect(screen.getByText('This saves: Auto-approve.')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
+    // FR-016: the confirm runs before any write.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
+    // D-8 row 3: exactly one protected write, carrying the section's one
+    // password-marked value. FR-032: platform mode mints no consent token,
+    // so the token argument carries no token.
     await waitFor(() => {
-      expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][1]).toBeFalsy()
+    // Spec :1021: and no POST /auth/reauth is sent.
+    expect(reauthPosts()).toEqual([])
   })
 
-  it('cancelling the confirmation performs no save', async () => {
+  it('cancelling the platform confirmation sends no reauth and no write, and keeps the draft (D-11 row 9)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
     })
+    // D-11 row 9: platform-mode Cancel — 0 reauth, 0 writes.
+    expect(reauthPosts()).toEqual([])
     expect(updateSandboxConfig).not.toHaveBeenCalled()
+    // FR-029's Cancel rule (the confirmation substitutes the prompt,
+    // FR-032): the draft is kept — the switch still holds the toggled
+    // position and the bar still counts it.
+    expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('1 unsaved change')).toBeInTheDocument()
   })
 
   it('shows an error state when the sandbox-config fetch fails', async () => {
@@ -341,25 +486,35 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
+      // F12 / FR-066, team-lead's ninth-file ruling: name the failed read,
+      // retain its injected cause and expose Retry in the actual Callout.
+      const callout = screen.getByRole('alert')
+      expect(callout).toHaveAttribute('data-slot', 'callout')
+      expect(callout).toHaveAttribute('data-variant', 'error')
+      expect(callout).toHaveTextContent(/approvals/i)
+      expect(callout).toHaveTextContent('network error')
+      expect(within(callout).getByRole('button', { name: 'Retry' })).toBeEnabled()
     })
     expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
   })
 
-  it('cancelling the confirmation shows no toast at all (re-auth cancel stays silent)', async () => {
+  it('cancelling the platform confirmation shows no toast at all (cancel stays silent)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    await draftAndOpenBar()
 
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
     })
+    // FR-020 classifies write outcomes only; a cancelled Save produced no
+    // write, so nothing may be announced as an error. The retired re-auth
+    // cancel stayed silent for the same reason.
     expect(mockAddToast).not.toHaveBeenCalled()
+    expect(reauthPosts()).toEqual([])
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
   // Founder feedback (2026-09-24): the old card put the full grouped list of
@@ -491,134 +646,60 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(within(content).queryByText('Mounting a folder, or files outside your workspace')).not.toBeInTheDocument()
   })
 
-  it('the turn-on confirmation dialog is short (2-3 sentences) and points at the card’s own collapsed list rather than restating it', async () => {
+  it('toggling opens no explainer dialog — the card’s own help text naming the per-chat Auto button replaces the retired turn-on dialog', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
+    renderSectionWithShell()
     await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
 
     const toggle = await screen.findByTestId('auto-approve-global-switch')
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
     fireEvent.click(toggle)
 
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
-    // The dialog must NOT restate the full 28-tool list inline — it points
-    // at the card's own disclosure instead.
-    expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
-    expect(dialog).not.toHaveTextContent(/mounted folder/i)
-    // UAT defect D-02 (founder decision 2026-09-24): the dialog used to
-    // point at "Still asks every time", a heading that promised something
-    // false — several of these tools are on Allow by default and never
-    // ask. It now points at the renamed heading, and the old phrase must
-    // not survive anywhere in the dialog.
-    expect(dialog).toHaveTextContent(/always asks when set to ask/i)
-    expect(dialog).not.toHaveTextContent(/still asks every time/i)
-    // Founder correction (2026-09-24): the dialog's own summary clause
-    // must use the same wording as the card, with no "and the sandbox"
-    // (false once Auto runs with no sandbox enforcing).
-    // #920 D3 (2026-09-27): reads are no longer workspace-bound under Auto —
-    // the dialog must say so, in the same words as the card. The wording
-    // avoids "mounted folder" so the no-inline-list guard above still holds.
-    expect(dialog).toHaveTextContent(
-      /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it\./i,
-    )
-    expect(dialog).not.toHaveTextContent(/they stay inside your workspace/i)
-    expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)
-    // The old "not available on Windows" wording is gone — replaced by the
-    // same no-sandbox caveat the card itself shows.
-    expect(dialog).not.toHaveTextContent(/needs the sandbox/i)
-    expect(dialog).not.toHaveTextContent(/not available on windows/i)
-    expect(dialog).toHaveTextContent(
-      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
-    )
-    expect(dialog).not.toHaveTextContent(/checked by reading the command text only/i)
+    // FR-010 (spec :1019-1021): a confirmation opens only when the person
+    // SAVES a change to Auto-approve. The retired "Turn Auto-approve on?"
+    // explainer — with its inline summary, D-02 heading pointer and
+    // no-sandbox caveat — is gone with the instant-save mode; neither it nor
+    // any Save-time dialog may appear on a bare toggle.
+    expect(screen.queryByText('Save these settings?')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    // Spec :554 (ADR-092): "Auto-approve keeps its password; the help text
+    // says each chat can still turn it off with its Auto button." The card's
+    // help text, not a dialog, carries the per-chat explanation now.
+    const help = screen.getByText(/auto button/i)
+    expect(help).toHaveTextContent(/chat/i)
   })
 
-  it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
+  it('a refused save is the FR-015/FR-020 outcome — bar counts it, server message under the row, draft kept — not a toast', async () => {
+    const SERVER_REFUSAL = 'Auto-approve could not be saved: the sandbox write was refused.'
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    vi.mocked(updateSandboxConfig).mockRejectedValue(new Error('gateway unreachable'))
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
-
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-
-    const dialog = await screen.findByRole('alertdialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
-
-    await waitFor(() => {
-      expect(mockAddToast).toHaveBeenCalledTimes(1)
-    })
-    expect(mockAddToast).toHaveBeenCalledWith(
-      expect.objectContaining({ variant: 'error' }),
+    vi.mocked(updateSandboxConfig).mockRejectedValue(
+      new ApiError(400, SERVER_REFUSAL, { body: JSON.stringify({ error: SERVER_REFUSAL }) }),
     )
-  })
-})
+    await draftAndOpenBar()
 
-// ── US-B3: ToolPolicyEditor replaces GlobalToolPoliciesSection ────────────────
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    // FR-032: the platform confirmation still precedes the write.
+    expect(await screen.findByText('Save these settings?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-describe('SecuritySection — US-B3 ToolPolicyEditor in advanced section', () => {
-  it('ToolPolicyEditor renders inside Advanced section with preset buttons', async () => {
-    renderSection()
-
-    // Expand Advanced
+    // The 400 was the answer to THIS save's write (D-8 row 3: one PUT).
     await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
 
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-
-    // Preset buttons: Cautious / Balanced / Full access
-    expect(screen.getByTestId('preset-cautious')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-full_access')).toBeInTheDocument()
-  })
-
-  it('system.* tool appears in the flat category grid (no separate system-disclosure-wrapper)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-
-    // The old system-disclosure-wrapper must NOT exist (#357 flat list fix).
-    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
-
-    // The category-grid must contain a 'system' category pill (system tools in the grid).
-    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
-    expect(screen.getByTestId('category-pill-system')).toBeInTheDocument()
-  })
-
-  it('a category with mixed policies shows a Mixed pill', async () => {
-    // Set exec to 'ask' and read_file to 'allow' — both in different categories,
-    // so each category is uniform. We only test that the ToolPolicyEditor is
-    // wired up and renders category pills; mixed-pill logic is tested in ToolPolicyEditor.test.tsx.
-    vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({
-      policies: {},
-    })
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('category-grid')).toBeInTheDocument()
-    })
-
-    // Categories present (exec = code, read_file = file)
-    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
+    // FR-015: the bar says the change could not be saved. The old oracle —
+    // exactly one error toast from the instant-save mutation — is retired
+    // with the autosave path it belonged to (FR-010 ruling).
+    expect(await screen.findByText('1 change could not be saved')).toBeInTheDocument()
+    // FR-020 outcome (3): the server's message shows under the row.
+    const alert = screen.getAllByRole('alert').find((el) => el.textContent?.includes(SERVER_REFUSAL))
+    expect(alert, 'FR-020: the server refusal must show under the Auto-approve row').toBeDefined()
+    // FR-020 outcome (3): the draft is kept — the switch still shows on.
+    expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
+    // Never a saved signal after a refused write.
+    expect(screen.queryAllByText(/^Saved\b/)).toEqual([])
   })
 })
 
@@ -673,66 +754,11 @@ describe('SecuritySection — US-B4 score control surface', () => {
   })
 
   it('Credential Vault shows encryption reassurance line', async () => {
-    renderSection()
+    renderKeysSection()
 
     await waitFor(() => {
       expect(screen.getByText(/encrypted and stored only on this server/i)).toBeInTheDocument()
     })
-  })
-})
-
-// ── #340: SkillTrustSection mounted in Security ───────────────────────────────
-
-describe('SecuritySection — #340 SkillTrustSection mounted', () => {
-  it('renders SkillTrustSection (Skill Trust heading) inside Security tab', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText(/skill trust/i)).toBeInTheDocument()
-    })
-  })
-
-  it('renders the three trust-level radios (Block / Warn / Allow)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      const radios = screen.getAllByRole('radio')
-      expect(radios.length).toBeGreaterThanOrEqual(3)
-    })
-  })
-})
-
-// ── Global tool policies — no step-up, and no confirmation (FR-OB-046) ───────
-//
-// rest_tool_policies.go:69 removed this endpoint's server gate deliberately, so
-// the client used to ask for a password the server never demanded. It is not one
-// of ADR-0008 ruling 6's six controls, so it gets no confirmation either.
-
-describe('SecuritySection — global tool-policy save', () => {
-  it('saves directly with no confirmation and no consent token', async () => {
-    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({ policies: {} } as never)
-
-    renderSection()
-
-    // Expand Advanced to reveal the ToolPolicyEditor.
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
-    })
-
-    // Switch the default policy ask → allow; this triggers the debounced PUT.
-    fireEvent.click(screen.getByTestId('preset-balanced'))
-
-    await waitFor(() => {
-      expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(1)
-    })
-    // One argument only — the consent-token parameter is gone.
-    expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0]).toHaveLength(1)
-    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
 
@@ -745,7 +771,7 @@ describe('SecuritySection — global tool-policy save', () => {
 
 describe('SecuritySection — credential vault confirmations', () => {
   async function openAddCredentialForm() {
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByText('Add key'))
     fireEvent.change(await screen.findByPlaceholderText('e.g. OPENAI_API_KEY'), {
       target: { value: 'MY_KEY' },
@@ -792,20 +818,24 @@ describe('SecuritySection — credential vault confirmations', () => {
 
   async function openDeleteConfirmation() {
     vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'MY_KEY' }] as never)
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByTestId('delete-cred-MY_KEY'))
   }
 
   it('delete: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openDeleteConfirmation()
 
+    // Wireframe round 4 (app.js "delete-key" dialog): title "Delete this
+    // key?", ok "Delete key", destructive: true — FR-056 keeps exactly one
+    // confirm before the delete. The old "Remove this credential?" /
+    // non-destructive styling is replaced by the wireframe.
     const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent('Remove this credential?')
+    expect(dialog).toHaveTextContent('Delete this key?')
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' })).toHaveTextContent('Remove credential')
+    expect(within(dialog).getByRole('button', { name: 'Delete key' })).toHaveTextContent('Delete key')
     expect(within(dialog).getAllByRole('button')).toHaveLength(2)
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(within(dialog).getByRole('button', { name: 'Remove credential' }).className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Delete key' }).className).toMatch(/color-error/)
     expect(deleteCredential).not.toHaveBeenCalled()
   })
 
@@ -813,7 +843,8 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(deleteCredential).mockResolvedValue(undefined as never)
 
     await openDeleteConfirmation()
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove credential' }))
+    // Wireframe ok button "Delete key" (app.js delete-key dialog, FR-056).
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete key' }))
 
     await waitFor(() => {
       expect(vi.mocked(deleteCredential).mock.calls).toEqual([['MY_KEY', undefined]])
@@ -831,7 +862,7 @@ describe('SecuritySection — credential vault confirmations', () => {
   })
 
   async function openRotateConfirmation() {
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByTestId('rotate-master-key'))
     fireEvent.change(await screen.findByTestId('rotate-passphrase-input'), {
       target: { value: 'new-pass-phrase' },
@@ -874,105 +905,6 @@ describe('SecuritySection — credential vault confirmations', () => {
   })
 })
 
-// ── MCP tools in the global Settings → Security editor ───────────────────────
-
-describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
-  /**
-   * Helper: render SecuritySection with MCP tools included in fetchBuiltinTools,
-   * expand the top-level Advanced disclosure, and wait for the ToolPolicyEditor.
-   */
-  async function renderWithMcpAndExpand() {
-    // Override the default stub so MCP tools are returned alongside builtins.
-    vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_AND_MCP_TOOLS)
-
-    renderSection()
-
-    // Wait for the section to load and find the single top-level Advanced trigger.
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    // Wait for the ToolPolicyEditor to mount and its data to settle.
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-  }
-
-  it('MCP tools render in the mcp-tools-section inside the global editor', async () => {
-    await renderWithMcpAndExpand()
-
-    // The mcp-tools-section must be present inside the ToolPolicyEditor.
-    expect(screen.getByTestId('mcp-tools-section')).toBeInTheDocument()
-  })
-
-  it('MCP server disclosure is present for the testsvr MCP server', async () => {
-    await renderWithMcpAndExpand()
-
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    // 'mcp_testsvr_list' and 'mcp_testsvr_read' both belong to server 'testsvr' →
-    // exactly one server disclosure in the MCP section.
-    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
-    expect(triggers.length).toBe(1)
-  })
-
-  it('expanding the MCP server disclosure shows both MCP tool rows', async () => {
-    await renderWithMcpAndExpand()
-
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
-    fireEvent.click(serverTrigger)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
-      expect(screen.getByTestId('tool-row-mcp_testsvr_read')).toBeInTheDocument()
-    })
-  })
-
-  it('MCP tools do NOT appear in the builtin category grid', async () => {
-    await renderWithMcpAndExpand()
-
-    const categoryGrid = screen.getByTestId('category-grid')
-    // MCP tool names must not appear as category-grid tool rows
-    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_list')).not.toBeInTheDocument()
-    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_read')).not.toBeInTheDocument()
-  })
-
-  it('changing an MCP tool policy fires updateGlobalToolPolicies directly', async () => {
-    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({
-      policies: {},
-    } as never)
-
-    await renderWithMcpAndExpand()
-
-    // Expand the MCP server disclosure to access the tool rows.
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
-    fireEvent.click(serverTrigger)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
-    })
-
-    // Click Deny on the MCP tool row.
-    const listRow = screen.getByTestId('tool-row-mcp_testsvr_list')
-    fireEvent.click(within(listRow).getByRole('button', { name: /deny/i }))
-
-    // The auto-save debounce fires updateGlobalToolPolicies with the MCP tool name.
-    await waitFor(
-      () => {
-        expect(vi.mocked(updateGlobalToolPolicies)).toHaveBeenCalled()
-        const [calledValue] = vi.mocked(updateGlobalToolPolicies).mock.calls[0]
-        expect(calledValue).toMatchObject({
-          policies: expect.objectContaining({ mcp_testsvr_list: 'deny' }),
-        })
-      },
-      { timeout: 3000 },
-    )
-  })
-
-})
-
 // D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
 //
 // Root cause: the security fields start at hardcoded useState defaults ('').
@@ -1002,14 +934,13 @@ describe('SecuritySection — D3: hydration must not trigger a spurious PUT', ()
     } as never)
     renderSection()
 
-    // Wait for the component to settle (config fetched, disclosure rendered).
+    // Wait for the component to settle (config fetched, section rendered).
     await waitFor(() => {
       expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
     })
-    // The numeric security fields render inside the collapsed
-    // AdvancedDisclosure — expand it so the hydrated values are in the DOM.
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
+    // The numeric rate-limit fields render in the Protection view itself — the
+    // collapsed Advanced disclosure that used to hold them is gone (C-22 row 6)
+    // — so the hydrated values reach the DOM without an expansion step.
     await waitFor(() => {
       expect(screen.getByDisplayValue(String(HYDRATED_LLM))).toBeInTheDocument()
       expect(screen.getByDisplayValue(String(HYDRATED_TOOL))).toBeInTheDocument()
