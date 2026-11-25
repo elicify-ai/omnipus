@@ -222,7 +222,7 @@ func (a *restAPI) syncTaskGoalRecord(
 		}
 		return gs.Create(g)
 	}
-	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
 				return sErr
@@ -234,7 +234,7 @@ func (a *restAPI) syncTaskGoalRecord(
 			}
 		}
 		return nil
-	})
+	}})
 	return err
 }
 

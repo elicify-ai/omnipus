@@ -355,7 +355,7 @@ func c1PerformanceBootLive(t *testing.T) {
 	w := mtiPutPerf(t, api, `{"goal_reminder_quiet_seconds":120}`)
 	require.Equal(t, http.StatusOK, w.Code, "normal authenticated PUT must apply C1 live: %s", w.Body.String())
 	last := time.Now().UTC().Add(-90 * time.Second)
-	_, err = goal.NewStore(f.home).Update(gid, func(g *goal.Goal) error { g.LastActivityAt = last; g.StartedAt = &last; return nil })
+	_, err = goal.NewStore(f.home).Update(gid, goal.Write{Mutate: func(g *goal.Goal) error { g.LastActivityAt = last; g.StartedAt = &last; return nil }})
 	require.NoError(t, err)
 	require.Empty(t, f.mb.InboundChan())
 	same.Tick(context.Background())

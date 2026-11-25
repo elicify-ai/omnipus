@@ -687,12 +687,12 @@ func (te *TaskExecutor) spendInnerTry(t *task.Task, taskSessionID, why string, s
 		return false, "", err
 	}
 	if rec != nil {
-		if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+		if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 			cur.Round++
 			cur.LatestReason = why
 			cur.LastActivityAt = time.Now().UTC()
 			return nil
-		}); uerr != nil {
+		}}); uerr != nil {
 			return false, "", fmt.Errorf("task %s: persist a spent goal try: %w", t.ID, uerr)
 		}
 	}
@@ -803,12 +803,12 @@ func endRunGoalForRestart(taskID, reason string) {
 		return
 	}
 	endReason := "the run failed and the task restarts in a fresh run: " + reason
-	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if !cur.IsActive() {
 			return nil
 		}
 		return cur.Terminate(generated.GoalStateExhausted, endReason, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		logger.WarnCF("task_executor", "goal: could not end the run's goal record before the restart",
 			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "error": uerr.Error()})
 	}

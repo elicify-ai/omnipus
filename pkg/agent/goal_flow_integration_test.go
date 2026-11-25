@@ -850,10 +850,10 @@ func rewindGoalLastActivity(t *testing.T, _ *session.UnifiedStore, sid string) {
 	t.Helper()
 	g := mustActiveGoalRecord(t, sid)
 	past := time.Now().Add(-2 * time.Hour).UTC()
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = past
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("rewindGoalLastActivity(%q): %v", sid, err)
 	}
 }

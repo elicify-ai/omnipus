@@ -20,7 +20,7 @@ var errGoalReminderObsolete = errors.New("goal reminder outcome no longer belong
 // updateGoalReminderStreak counts assessed COMPLETED outcomes, never publication.
 // The existing persisted field is a consecutive-outcome streak, not a total quota.
 func updateGoalReminderStreak(sessionID, goalID string, progress, completed bool) (*goal.Goal, error) {
-	return resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+	return resolveGoalRecordStore().Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive || cur.ActiveSessionID != sessionID {
 			return errGoalReminderObsolete
 		}
@@ -36,7 +36,7 @@ func updateGoalReminderStreak(sessionID, goalID string, progress, completed bool
 			cur.LatestReason = goalReminderPauseNotice
 		}
 		return nil
-	})
+	}})
 }
 
 func goalReminderBrakePaused(rec *goal.Goal) bool {
@@ -225,7 +225,7 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 		return
 	}
 	wasPaused := goalReminderBrakePaused(fresh)
-	_, err = resolveGoalRecordStore().Update(fresh.GoalID, func(cur *goal.Goal) error {
+	_, err = resolveGoalRecordStore().Update(fresh.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive || cur.ActiveSessionID != opts.TranscriptSessionID {
 			return errGoalReminderObsolete
 		}
@@ -234,7 +234,7 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 			cur.LatestReason = ""
 		}
 		return nil
-	})
+	}})
 	if err != nil {
 		work.mu.Unlock()
 		if !errors.Is(err, errGoalReminderObsolete) {

@@ -149,7 +149,7 @@ func TestUpdateTask_PromptAndGoalSync(t *testing.T) {
 		g, err := gs.GetByOwner(generated.GoalOwnerKindTask, tk.ID)
 		require.NoError(t, err)
 		const originalGoal = "the original goal instruction"
-		g, err = gs.Update(g.GoalID, func(record *goal.Goal) error { record.Prompt = originalGoal; return nil })
+		g, err = gs.Update(g.GoalID, goal.Write{Mutate: func(record *goal.Goal) error { record.Prompt = originalGoal; return nil }})
 		require.NoError(t, err)
 		goalPath := filepath.Join(gs.Dir(), g.GoalID+".json")
 		before, err := os.ReadFile(goalPath)
@@ -160,7 +160,7 @@ func TestUpdateTask_PromptAndGoalSync(t *testing.T) {
 		lockPath := filepath.Join(gs.Dir(), g.GoalID+".lock")
 		require.NoError(t, os.Remove(lockPath))
 		require.NoError(t, os.Mkdir(lockPath, 0o700))
-		_, fault := gs.Update(g.GoalID, func(*goal.Goal) error { return nil })
+		_, fault := gs.Update(g.GoalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }})
 		var pathErr *os.PathError
 		require.ErrorAs(t, fault, &pathErr, "instrument: an actual goal-store write fails, not a chmod assumption")
 		assert.Equal(t, lockPath, pathErr.Path)

@@ -170,10 +170,10 @@ func persistTaskGoalDoDProjection(taskID string, projectedDoD []task.AcceptanceC
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return
 	}
-	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.DoD = projectedDoD
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		logger.WarnCF("task_executor",
 			"goal: could not persist the Definition-of-Done verdict projection onto the goal record (GOAL-FR-036)",
 			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "error": uerr.Error()})
@@ -225,13 +225,13 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 		// terminal has no round to advance. Not a fault.
 		return
 	}
-	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if uc, ud, stats := projectGoalVerdict(cur.Criteria, cur.DoD, verdict); stats.Applied > 0 {
 			cur.Criteria = uc
 			cur.DoD = ud
 		}
 		return cur.RecordVerdict(verdict, reason, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		logger.WarnCF("task_executor",
 			"goal: could not record this round's verdict on the paired goal record",
 			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "error": uerr.Error()})

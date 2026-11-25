@@ -122,7 +122,7 @@ func SyncTaskGoalRecord(
 		}
 		return gs.Create(g)
 	}
-	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
 				return sErr
@@ -134,7 +134,7 @@ func SyncTaskGoalRecord(
 			}
 		}
 		return nil
-	})
+	}})
 	return err
 }
 
@@ -241,9 +241,9 @@ func RemoveTaskGoalRecords(gs *goal.Store, taskID string) error {
 			continue
 		}
 		goalID := goals[i].GoalID
-		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
+		if _, uErr := gs.Update(goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 			return terminateGoalForOwnerDeletion(g, now)
-		}); uErr != nil {
+		}}); uErr != nil {
 			// Record the fault and still remove the record: a goal that cannot
 			// be transitioned must not therefore be left behind ACTIVE and
 			// unreferenced, which is the worse of the two outcomes.
@@ -416,7 +416,7 @@ func TerminateTaskGoalRecord(
 	now := time.Now().UTC()
 	terminalReason := TerminalGoalReasonForTask(status, reason)
 	transitioned := false
-	updated, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	updated, uErr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive {
 			// Another writer ended it between the read above and this
 			// lock-held mutate. Not a fault — see the idempotence note.
@@ -427,7 +427,7 @@ func TerminateTaskGoalRecord(
 		}
 		transitioned = true
 		return nil
-	})
+	}})
 	if uErr != nil {
 		slog.Warn("task goal: the paired goal record of a terminated task could not be transitioned — "+
 			"it is still ACTIVE (GOAL-FR-015)",

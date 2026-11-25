@@ -129,10 +129,10 @@ func assertLiveOutcomeMatchesEntry(t *testing.T, events *eventCollector, sid str
 
 func setGoalLatestReason(t *testing.T, goalID, reason string) {
 	t.Helper()
-	if _, err := resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestReason = reason
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("set latest reason: %v", err)
 	}
 }
@@ -434,10 +434,10 @@ func TestGoalOutcome_TaskGoalEndingWritesIntoTheTaskSessionOnce(t *testing.T) {
 			taskID := "t-goal-outcome-" + tc.name
 			g := seedTaskGoal(t, taskID, "the CSV has a header row", "no secrets in the export")
 			activateSeededTaskGoal(t, g.GoalID, sid)
-			if _, err := resolveGoalRecordStore().Update(g.GoalID, func(cur *goal.Goal) error {
+			if _, err := resolveGoalRecordStore().Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 				cur.Round = 2
 				return nil
-			}); err != nil {
+			}}); err != nil {
 				t.Fatalf("set round: %v", err)
 			}
 

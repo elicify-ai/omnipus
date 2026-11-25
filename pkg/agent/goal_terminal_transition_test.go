@@ -71,7 +71,7 @@ func terminalTestCriterion(text string) task.AcceptanceCriterion {
 func seedCriteriaOntoActiveGoal(t *testing.T, sid, prompt string, criteria []task.AcceptanceCriterion) *goal.Goal {
 	t.Helper()
 	g := goalRecordForSession(t, sid)
-	updated, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	updated, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Prompt = prompt
 		if serr := cur.SetCriteria(criteria, time.Now().UTC()); serr != nil {
 			return serr
@@ -80,7 +80,7 @@ func seedCriteriaOntoActiveGoal(t *testing.T, sid, prompt string, criteria []tas
 		// canned judge providers answer for — required, because the judged
 		// set is criteria UNION DoD (ADR-080 D-DOD).
 		return cur.SetDoD(newFloorDoD(), time.Now().UTC())
-	})
+	}})
 	if err != nil {
 		t.Fatalf("seedCriteriaOntoActiveGoal(%q): %v", sid, err)
 	}
@@ -92,10 +92,10 @@ func seedCriteriaOntoActiveGoal(t *testing.T, sid, prompt string, criteria []tas
 // arrange step (GOAL-FR-024: MaxRounds lives on the record).
 func setGoalRecordMaxRounds(t *testing.T, goalID string, n int) {
 	t.Helper()
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.MaxRounds = n
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("setGoalRecordMaxRounds(%q, %d): %v", goalID, n, err)
 	}
 }
@@ -315,10 +315,10 @@ func TestTerminalGoalRetainsRecord_IdleExpired(t *testing.T) {
 	// record's own last_activity_at") is what drives this — set it directly
 	// via Store.Update rather than through New's now-at-creation default.
 	expiredTime, _ := time.Parse(time.RFC3339, expiredAt)
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = expiredTime
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("seeding record LastActivityAt: %v", err)
 	}
 

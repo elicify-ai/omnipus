@@ -1200,17 +1200,17 @@ func TestSetGoalUpdate_CannotLowerPersistedClauseCountWithVerdictOnRecord(t *tes
 	if cerr := gstore.Create(g); cerr != nil {
 		t.Fatalf("Create: %v", cerr)
 	}
-	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, aerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())
-	}); aerr != nil {
+	}}); aerr != nil {
 		t.Fatalf("Activate: %v", aerr)
 	}
-	if _, verr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, verr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestVerdict = &task.JudgeVerdict{
 			PerCriterion: []task.CriterionVerdict{{CriterionID: oldCriterionID, Met: false, Reason: "not yet demonstrated"}},
 		}
 		return nil
-	}); verr != nil {
+	}}); verr != nil {
 		t.Fatalf("seed verdict: %v", verr)
 	}
 
@@ -1287,9 +1287,9 @@ func TestSetGoalUpdate_ClauseCountLoweredWithoutVerdict_IsAllowed(t *testing.T) 
 	if cerr := gstore.Create(g); cerr != nil {
 		t.Fatalf("Create: %v", cerr)
 	}
-	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, aerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())
-	}); aerr != nil {
+	}}); aerr != nil {
 		t.Fatalf("Activate: %v", aerr)
 	}
 	// Deliberately NO LatestVerdict seeded — the guard must not fire.

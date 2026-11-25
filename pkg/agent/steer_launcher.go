@@ -717,9 +717,9 @@ func (l *SteerLauncher) createLaunchGoal(
 	if err := store.Create(g); err != nil {
 		return "", fmt.Errorf("steer: launch: %w: create goal: %w", steer.ErrStoreWrite, err)
 	}
-	if _, err := store.Update(g.GoalID, func(current *goal.Goal) error {
+	if _, err := store.Update(g.GoalID, goal.Write{Mutate: func(current *goal.Goal) error {
 		return current.Activate(childID, now)
-	}); err != nil {
+	}}); err != nil {
 		_ = store.Delete(g.GoalID)
 		return "", fmt.Errorf("steer: launch: %w: activate goal: %w", steer.ErrStoreWrite, err)
 	}

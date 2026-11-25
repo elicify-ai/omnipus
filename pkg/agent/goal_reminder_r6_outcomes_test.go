@@ -174,11 +174,11 @@ func grBrakeClaimToolNotProgress(t *testing.T) {
 func grNewRecordlessBrake(t *testing.T) *grHarness {
 	t.Helper()
 	h := grNewRecordedBrake(t)
-	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+	_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.Criteria = nil
 		g.Definition = ""
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 	require.Empty(t, goalRecordForSession(t, h.id).Criteria)
 	return h

@@ -661,13 +661,13 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	// ADR-086: the registration the working agent's set_goal would perform
 	// lands on the goal's OWN record (GOAL-FR-003, typed lists), not on the
 	// retired GoalCriteriaJSON session-meta string.
-	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(meta.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(meta.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.SetCriteria([]task.AcceptanceCriterion{{
 			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
 			Text:   "the contract-first layer is landed",
 			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: agentInst.ID},
 		}}, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatal(uerr)
 	}
 	meta = goalRecordForSession(t, sid)

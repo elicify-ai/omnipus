@@ -179,10 +179,16 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			newCondition := strings.TrimSpace(gl.args)
 			now := time.Now().UTC()
 			var superseded bool
-			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
-				changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
-				superseded = changed
-				return rerr
+			// I-2/S-111: a restate changes the goal's definition, so the
+			// restating message's provenance is joined in the same write.
+			restatedBy := provenanceOrigins(gl.opts.InputOrigin.provenance)
+			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, goal.Write{
+				Provenance: &restatedBy,
+				Mutate: func(cur *goal.Goal) error {
+					changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
+					superseded = changed
+					return rerr
+				},
 			})
 			if err != nil {
 				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
@@ -462,9 +468,9 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 	if cerr := gstore.Create(g); cerr != nil {
 		return fmt.Errorf("goal: could not create the durable goal record at activation: %w", cerr)
 	}
-	if _, aerr := gstore.Update(goalID, func(cur *goal.Goal) error {
+	if _, aerr := gstore.Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sessionID, time.Now().UTC())
-	}); aerr != nil {
+	}}); aerr != nil {
 		return fmt.Errorf("goal: could not activate the durable goal record: %w", aerr)
 	}
 	return nil
@@ -497,14 +503,14 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	if len(dod) == 0 {
 		dod = newFloorDoD()
 	}
-	if _, err := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Prompt = condition
 		cur.Definition = compiled.Definition
 		if serr := cur.SetCriteria(compiled.Criteria, now); serr != nil {
 			return serr
 		}
 		return cur.SetDoD(dod, now)
-	}); err != nil {
+	}}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist restated goal",
 			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return "Could not update the goal (internal error persisting the goal record)."

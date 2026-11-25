@@ -265,9 +265,9 @@ func TestDeletingAnActiveTaskRemovesItsGoalRecord_GOALFR044(t *testing.T) {
 	require.NoError(t, err)
 
 	// Drive the record into the active phase, as starting the task would.
-	_, err = gs.Update(rec.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(rec.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		return g.Activate("session-under-test", time.Now().UTC())
-	})
+	}})
 	require.NoError(t, err)
 
 	w := deleteTaskRec(t, api, id)

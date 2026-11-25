@@ -38,7 +38,7 @@ func TestGoalReminderR6CompletedCounterWriteRetainsOutcomeUntilRepair(t *testing
 	// Existing root-independent, ONE-goal sidecar fault. Get/List stay real;
 	// no transcript, metadata, lifecycle or other goal is made unwritable.
 	failGoalRecordWrites(t, h.goalID)
-	_, err := store.Update(h.goalID, func(*goal.Goal) error { return nil })
+	_, err := store.Update(h.goalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }})
 	require.ErrorIs(t, err, syscall.EISDIR, "SETUP: the exact goal's accounting write must be faulted")
 	r6GateRequireStorageHealth(t, h)
 	for tick := 0; tick < 3; tick++ {
@@ -60,7 +60,7 @@ func TestGoalReminderR6CompletedCounterWriteRetainsOutcomeUntilRepair(t *testing
 	// succeeds without manufacturing a completion, changing its count or
 	// replacing the session/goal/owner. The retained real outcome does the rest.
 	require.NoError(t, os.Remove(goalRecordLockPath(h.goalID)))
-	repaired, err := store.Update(h.goalID, func(*goal.Goal) error { return nil })
+	repaired, err := store.Update(h.goalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }})
 	require.NoError(t, err, "SETUP: the repaired goal must accept a real write")
 	require.Equal(t, 4, repaired.ZeroOutputPushes)
 	h.al.goalQuietWindowSettle(time.Now())

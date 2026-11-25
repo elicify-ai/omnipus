@@ -261,14 +261,14 @@ func TestReRunOfTerminatedTaskReactivatesItsGoal(t *testing.T) {
 	// Give run 1 some state worth losing, so "the counters were reset" is an
 	// observable event rather than a comparison of two zeroes.
 	gs := goal.NewStore(config.OmnipusHomeDir())
-	if _, err := gs.Update(seeded.GoalID, func(cur *goal.Goal) error {
+	if _, err := gs.Update(seeded.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.AttemptsUsed = 2
 		cur.Round = 3
 		cur.LatestReason = "run 1 fell short"
 		cur.ZeroOutputPushes = 1
 		cur.QuestionRoundsUsed = 1
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("seed run-1 counters: %v", err)
 	}
 
@@ -360,13 +360,13 @@ func seedTaskGoal(t *testing.T, taskID, criterionText, dodText string) *goal.Goa
 	// failing on goal.Create's "owner already has a goal record" — the oracle
 	// is the seeded content, not which code path put the record there.
 	if existing, err := store.GetByOwner(generated.GoalOwnerKindTask, taskID); err == nil {
-		if _, uerr := store.Update(existing.GoalID, func(cur *goal.Goal) error {
+		if _, uerr := store.Update(existing.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 			now := time.Now().UTC()
 			if serr := cur.SetCriteria(criteria, now); serr != nil {
 				return serr
 			}
 			return cur.SetDoD(dod, now)
-		}); uerr != nil {
+		}}); uerr != nil {
 			t.Fatalf("seedTaskGoal: update existing record: %v", uerr)
 		}
 		updated, gerr := store.GetByOwner(generated.GoalOwnerKindTask, taskID)
@@ -393,9 +393,9 @@ func seedTaskGoal(t *testing.T, taskID, criterionText, dodText string) *goal.Goa
 // task_executor.go::activateTaskGoal does when the task starts.
 func activateSeededTaskGoal(t *testing.T, goalID, sessionID string) {
 	t.Helper()
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sessionID, time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("activateSeededTaskGoal: %v", err)
 	}
 }

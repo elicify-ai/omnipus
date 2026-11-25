@@ -85,9 +85,9 @@ func activateTestGoalRecord(t *testing.T, sid, intent string) string {
 	if cerr := gs.Create(g); cerr != nil {
 		t.Fatalf("activateTestGoalRecord: Create: %v", cerr)
 	}
-	if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("activateTestGoalRecord: Activate: %v", uerr)
 	}
 	return gid
@@ -150,10 +150,10 @@ func mustGoalRecord(t *testing.T, gid string) *goal.Goal {
 func setGoalRecordRound(t *testing.T, sid string, n int) {
 	t.Helper()
 	g := goalRecordForSession(t, sid)
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = n
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("setGoalRecordRound(%q, %d): %v", sid, n, err)
 	}
 }
@@ -168,9 +168,9 @@ func setGoalRecordRound(t *testing.T, sid string, n int) {
 func clearGoalRecordCriteria(t *testing.T, sid string) {
 	t.Helper()
 	g := goalRecordForSession(t, sid)
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.SetCriteria(nil, time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("clearGoalRecordCriteria(%q): %v", sid, err)
 	}
 }
@@ -1656,11 +1656,11 @@ func TestGoalBudgets_ResetAcrossGenerations(t *testing.T) {
 	// (FR-010) and the zero-output push streak exhausted (FR-014b). ADR-086
 	// GOAL-FR-004 relocated both counters off session meta onto the goal's
 	// OWN record, so they are spent there.
-	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(metaA.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(metaA.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.QuestionRoundsUsed = 1
 		cur.ZeroOutputPushes = goalZeroOutputPushMax
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatal(uerr)
 	}
 

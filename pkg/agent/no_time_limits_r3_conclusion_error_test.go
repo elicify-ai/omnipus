@@ -120,7 +120,7 @@ func TestR3ConclusionFailure_SaveReadAndUpdateUseTypedSafeWireNotice(t *testing.
 					if err != nil || cur == nil || cur.GoalID != rec.GoalID {
 						t.Fatalf("SETUP goal must still READ successfully: rec=%+v err=%v", cur, err)
 					}
-					if _, err := gs.Update(cur.GoalID, func(*goal.Goal) error { return nil }); err == nil {
+					if _, err := gs.Update(cur.GoalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }}); err == nil {
 						t.Fatal("SETUP damaged reference must fail a real goal Update")
 					}
 				}
@@ -182,10 +182,10 @@ func TestR3ConclusionFailure_RouteReadMissingBusAndPublishUseTypedSafeWireNotice
 					r3CorruptGoalDirectory(t)
 				} else {
 					gid := goalRecordForSession(t, sid).GoalID
-					if _, err := resolveGoalRecordStore().Update(gid, func(g *goal.Goal) error {
+					if _, err := resolveGoalRecordStore().Update(gid, goal.Write{Mutate: func(g *goal.Goal) error {
 						g.RouteChannel, g.RouteChatID = "", ""
 						return nil
-					}); err != nil {
+					}}); err != nil {
 						t.Fatalf("SETUP remove persisted route: %v", err)
 					}
 				}

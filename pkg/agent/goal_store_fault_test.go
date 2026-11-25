@@ -110,7 +110,7 @@ func failGoalRecordWrites(t *testing.T, goalID string) {
 	// Prove the arrange bites, against the record the test actually uses —
 	// never against a synthetic id, whose ErrNotFound would pass here with
 	// the store fully writable.
-	_, uerr := store.Update(goalID, func(*goal.Goal) error { return nil })
+	_, uerr := store.Update(goalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }})
 	if uerr == nil {
 		t.Fatalf("failGoalRecordWrites: a no-op Update on %q still SUCCEEDED — the storage-fault arrange "+
 			"did not take, so every assertion after it would pass for the wrong reason. pkg/entity's "+
@@ -244,10 +244,10 @@ func TestGoalRecordWriteFaultBitesRegardlessOfUID(t *testing.T) {
 
 	failGoalRecordWrites(t, g.GoalID)
 
-	_, err := store.Update(g.GoalID, func(cur *goal.Goal) error {
+	_, err := store.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestReason = "this must never be persisted"
 		return nil
-	})
+	}})
 	if err == nil {
 		t.Fatalf("running as uid %d: an Update against a write-faulted record SUCCEEDED. The whole "+
 			"silent-failure guard suite depends on this fault being uid-independent", os.Geteuid())
@@ -295,10 +295,10 @@ func TestGoalRecordWriteFaultIsScopedToOneRecord(t *testing.T) {
 
 	failGoalRecordWrites(t, faulted.GoalID)
 
-	if _, err := store.Update(neighbour.GoalID, func(cur *goal.Goal) error {
+	if _, err := store.Update(neighbour.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestReason = "the neighbour is still writable"
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("a write to an UNfaulted record failed: %v — the fault must be scoped to one record", err)
 	}
 	got, gerr := store.Get(neighbour.GoalID)

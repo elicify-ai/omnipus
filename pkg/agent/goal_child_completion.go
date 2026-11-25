@@ -321,7 +321,7 @@ func (work *goalDeferredAdjudicationWork) recordConclusionOnGoal(conclusion stri
 		return nil, errors.New("the adjudicated goal was never identified")
 	}
 	applied := false
-	updated, err := resolveGoalRecordStore().Update(work.goalID, func(cur *goal.Goal) error {
+	updated, err := resolveGoalRecordStore().Update(work.goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.GoalID != work.goalID {
 			// The record was addressed by this goal's own ID, so a different
 			// ID inside it is damage, not a replacement goal (a replacement
@@ -336,7 +336,7 @@ func (work *goalDeferredAdjudicationWork) recordConclusionOnGoal(conclusion stri
 		cur.LatestReason = conclusion
 		applied = true
 		return nil
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}

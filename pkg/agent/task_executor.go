@@ -1005,7 +1005,7 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 	// The run loop (task_run_loop.go::runGoalMaxTries) enforces this snapshot, so a later Settings
 	// change never moves the bound of a run already in progress.
 	tryLimit := goalTryLimit(te.agentLoop)
-	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		switch {
 		case cur.IsDefining():
 			if err := cur.Activate(taskSessionID, now); err != nil {
@@ -1039,7 +1039,7 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 				map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
 			return nil
 		}
-	}); uerr != nil {
+	}}); uerr != nil {
 		return te.reportTaskGoalActivationFailure(t, taskSessionID, g.GoalID,
 			fmt.Errorf("task_executor: activate goal record %q for task %q: %w", g.GoalID, t.ID, uerr))
 	}

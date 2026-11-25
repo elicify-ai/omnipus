@@ -141,10 +141,10 @@ func SyncTaskGoalPrompt(gs *goal.Store, t *task.Task) error {
 	if existing.Prompt == want {
 		return nil
 	}
-	if _, err := gs.Update(existing.GoalID, func(g *goal.Goal) error {
+	if _, err := gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.Prompt = want
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		return fmt.Errorf("update paired goal prompt: %w", err)
 	}
 	return nil

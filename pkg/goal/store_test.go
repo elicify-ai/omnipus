@@ -102,9 +102,9 @@ func TestStore_UpdateRoundTrip(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	updated, err := s.Update(g.GoalID, func(gg *Goal) error {
+	updated, err := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		return gg.Activate("sess-1", now)
-	})
+	}})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -148,10 +148,10 @@ func TestStore_UpdateAttemptsUsedObservableAfterCall(t *testing.T) {
 		t.Fatalf("AttemptsUsed before any RecordAttempt = %d, want 0", before.AttemptsUsed)
 	}
 
-	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, updErr := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		gg.RecordAttempt(time.Now().UTC())
 		return nil
-	}); updErr != nil {
+	}}); updErr != nil {
 		t.Fatalf("Update: %v", updErr)
 	}
 
@@ -169,7 +169,7 @@ func TestStore_UpdateAttemptsUsedObservableAfterCall(t *testing.T) {
 // a "read".
 func TestStore_UpdateNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Update("does-not-exist", func(g *Goal) error { return nil })
+	_, err := s.Update("does-not-exist", Write{Mutate: func(g *Goal) error { return nil }})
 	if !errors.Is(err, entity.ErrNotFound) {
 		t.Fatalf("Update error = %v, want errors.Is(err, entity.ErrNotFound)", err)
 	}
@@ -185,10 +185,10 @@ func TestStore_UpdateMutateErrorAbortsWrite(t *testing.T) {
 	}
 
 	sentinel := errors.New("mutate refused")
-	_, err := s.Update(g.GoalID, func(gg *Goal) error {
+	_, err := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		gg.LatestReason = "should never be persisted"
 		return sentinel
-	})
+	}})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Update error = %v, want errors.Is(err, sentinel)", err)
 	}

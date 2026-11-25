@@ -77,7 +77,7 @@ func TestGoalSessionLockOrder(t *testing.T) {
 	assertAcquireThenRelease(t, events, createID)
 
 	events = withLockObserver(t, func() {
-		if _, err := s.Update(createID, func(gg *Goal) error { return nil }); err != nil {
+		if _, err := s.Update(createID, Write{Mutate: func(gg *Goal) error { return nil }}); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
 	})
@@ -134,10 +134,10 @@ func TestGoalSessionLockOrder_ConcurrentDifferentIDsDoNotDeadlock(t *testing.T) 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if _, err := s.Update(id, func(gg *Goal) error {
+				if _, err := s.Update(id, Write{Mutate: func(gg *Goal) error {
 					gg.RecordAttempt(gg.LastActivityAt)
 					return nil
-				}); err != nil {
+				}}); err != nil {
 					t.Errorf("Update(%s): %v", id, err)
 				}
 			}()

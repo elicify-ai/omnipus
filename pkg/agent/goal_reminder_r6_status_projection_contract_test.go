@@ -31,11 +31,11 @@ func TestGoalReminderPauseStatusProjectionContract(t *testing.T) {
 	})
 	t.Run("EmptyReasonWithPreviousRoundsDoesNotDenyThoseRounds", func(t *testing.T) {
 		h := grNewRecordedBrake(t)
-		_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+		_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 			g.Round = 2 // formatting fixture: an existing persisted previous-round count
 			g.LatestReason = ""
 			return nil
-		})
+		}})
 		require.NoError(t, err)
 		before := goalRecordForSession(t, h.id)
 		calls := h.root.count()

@@ -444,10 +444,10 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	// brake. This explicit aged-goal policy, not stopping, ends the goal.
 	now := time.Now()
 	gs := resolveGoalRecordStore()
-	if _, uerr := gs.Update(rec.GoalRef, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(rec.GoalRef, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = now.Add(-7 * 24 * time.Hour)
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("backdate activity: %v", uerr)
 	}
 
@@ -531,10 +531,10 @@ func TestGoal984_RoundBoundArmRoutesChildThroughTail(t *testing.T) {
 
 	// Push the record to one round before its bound so this single unmet
 	// verdict exhausts the budget.
-	if _, uerr := resolveGoalRecordStore().Update(rec.GoalRef, func(cur *goal.Goal) error {
+	if _, uerr := resolveGoalRecordStore().Update(rec.GoalRef, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = cur.MaxRounds - 1
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("Update(Round): %v", uerr)
 	}
 

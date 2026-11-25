@@ -253,7 +253,7 @@ func armActiveSessionGoal(t *testing.T, sessionID string) string {
 		t.Fatalf("create goal for %s: %v", sessionID, err)
 	}
 	gid := g.GoalID
-	if _, err := gs.Update(gid, func(cur *goal.Goal) error { return cur.Activate(sessionID, time.Now().UTC()) }); err != nil {
+	if _, err := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error { return cur.Activate(sessionID, time.Now().UTC()) }}); err != nil {
 		t.Fatalf("activate goal %s: %v", gid, err)
 	}
 	return gid

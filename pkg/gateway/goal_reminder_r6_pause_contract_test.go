@@ -41,7 +41,7 @@ func TestGoalReminderR6PauseIsPublicThroughRESTAndLiveHub(t *testing.T) {
 	// Boundary isolation complements the agent pack's full five-outcome replay.
 	// Four prior assessed outcomes are durable; THIS actually executing fifth
 	// reminder must finish before any pause decision can be made.
-	_, err = goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, func(g *goal.Goal) error { g.ZeroOutputPushes = 4; return nil })
+	_, err = goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, goal.Write{Mutate: func(g *goal.Goal) error { g.ZeroOutputPushes = 4; return nil }})
 	require.NoError(t, err)
 	beforePause := r6ReplayFrames(t, f.frames)
 	require.NotEmpty(t, beforePause, "positive instrument: real admitted reminder reaches the real hub/send queue")

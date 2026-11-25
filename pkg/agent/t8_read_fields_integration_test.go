@@ -196,7 +196,7 @@ func TestT8ReadFields_RealStoredLongText(t *testing.T) {
 		tk := f.task(t, "long-goal", "reader-a", "reader-a", testHarnessWorkspaceMembershipID)
 		g := f.taskGoal(t, tk)
 		text := strings.Repeat("L ", 25000)
-		_, err := f.gs.Update(g.GoalID, func(v *goal.Goal) error { v.LatestReason = text; return nil })
+		_, err := f.gs.Update(g.GoalID, goal.Write{Mutate: func(v *goal.Goal) error { v.LatestReason = text; return nil }})
 		require.NoError(t, err)
 		out := t8ReadObject(t, f.call(t, "reader-a", testHarnessWorkspaceMembershipID, "get_goal", map[string]any{"task_id": tk.ID, "fields": []any{"latest_reason"}}))
 		assert.Equal(t, map[string]any{"goal_id": g.GoalID, "latest_reason": text[:8000] + "…[cut: 8,000 of 50,000 characters]", "truncated_fields": []any{"latest_reason"}}, out)
@@ -241,7 +241,7 @@ func TestT8ReadFields_RealOversizeArraysAndSmallerRetry(t *testing.T) {
 		tk := f.task(t, "array-goal", "reader-a", "reader-a", testHarnessWorkspaceMembershipID)
 		g := f.taskGoal(t, tk)
 		now := time.Now().UTC()
-		_, err := f.gs.Update(g.GoalID, func(v *goal.Goal) error {
+		_, err := f.gs.Update(g.GoalID, goal.Write{Mutate: func(v *goal.Goal) error {
 			if err := v.Activate("history-session-0", now); err != nil {
 				return err
 			}
@@ -254,7 +254,7 @@ func TestT8ReadFields_RealOversizeArraysAndSmallerRetry(t *testing.T) {
 				}
 			}
 			return nil
-		})
+		}})
 		require.NoError(t, err)
 		stored, err := f.gs.Get(g.GoalID)
 		require.NoError(t, err)

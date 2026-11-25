@@ -312,10 +312,10 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 		return
 	}
 	newCount := d.questionRoundsUsed + 1
-	if _, err := resolveGoalRecordStore().Update(d.goalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(d.goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.QuestionRoundsUsed = newCount
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist the spent question-round budget",
 			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "error": err.Error()})
 		return

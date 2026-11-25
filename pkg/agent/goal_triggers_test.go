@@ -78,14 +78,14 @@ func armGoalRecord(
 			t.Fatalf("armGoalRecord: Create: %v", cerr)
 		}
 		gid = g.GoalID
-		if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+		if _, uerr := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 			return cur.Activate(sid, time.Now().UTC())
-		}); uerr != nil {
+		}}); uerr != nil {
 			t.Fatalf("armGoalRecord: Activate: %v", uerr)
 		}
 	}
 
-	if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Prompt = condition
 		cur.MaxRounds = armedGoalMaxRounds
 		cur.Round = roundsUsed
@@ -99,7 +99,7 @@ func armGoalRecord(
 		cur.StartedAt = &started
 		cur.LastActivityAt = past
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("armGoalRecord: arm: %v", uerr)
 	}
 	return gid
@@ -670,10 +670,10 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 
 	// Sanity: confirm the goal-record write now actually fails (otherwise the
 	// test cannot prove the persist-failure path).
-	if _, perr := gstore.Update(rec.GoalID, func(cur *goal.Goal) error {
+	if _, perr := gstore.Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestReason = "probe"
 		return nil
-	}); perr == nil {
+	}}); perr == nil {
 		t.Fatalf("setup invariant: the goal-record write unexpectedly succeeded on the read-only store; cannot prove the M3 path")
 	}
 
@@ -861,10 +861,10 @@ func TestBareClaim_RoundAdvancePersistFailure_Aborts_M3Sibling(t *testing.T) {
 	gid := goalRecordForSession(t, sid).GoalID
 	restore := blockSessionDirWrites(t, gstore.Dir())
 	t.Cleanup(restore)
-	if _, perr := gstore.Update(gid, func(cur *goal.Goal) error {
+	if _, perr := gstore.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LatestReason = "probe"
 		return nil
-	}); perr == nil {
+	}}); perr == nil {
 		t.Fatalf("setup invariant: the goal-record write unexpectedly succeeded on the read-only store; cannot prove the M3 path")
 	}
 

@@ -75,7 +75,7 @@ func startTaskWithActiveGoal(t *testing.T, api *restAPI, wsID, title string) (ta
 	require.NoError(t, err, "fixture: the task must have a paired goal record")
 
 	now := time.Now().UTC()
-	_, err = gs.Update(rec.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(rec.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		if aErr := g.Activate(runOneSessionID, now); aErr != nil {
 			return aErr
 		}
@@ -91,7 +91,7 @@ func startTaskWithActiveGoal(t *testing.T, api *restAPI, wsID, title string) (ta
 			g.DoD[i].Status = task.CritMet
 		}
 		return nil
-	})
+	}})
 	require.NoError(t, err, "fixture: activating and seeding the run-1 goal record")
 
 	seeded, err := gs.GetByOwner(gen.GoalOwnerKindTask, taskID)
@@ -195,9 +195,9 @@ func TestPatchTaskToFailedLeavesTheGoalReactivatable_R04(t *testing.T) {
 
 	// --- the re-run: the exact transition activateTaskGoal's IsTerminal arm
 	// performs when the task is dispatched again -------------------------------
-	reRun, err := gs.Update(goalID, func(g *goal.Goal) error {
+	reRun, err := gs.Update(goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		return g.Reactivate(runTwoSessionID, time.Now().UTC())
-	})
+	}})
 	require.NoError(t, err, "R-04: a terminated task's goal must be able to re-enter active on re-run")
 
 	assert.Equal(t, gen.GoalStateActive, reRun.State)
@@ -237,9 +237,9 @@ func TestPatchTaskToFailedLeavesTheGoalReactivatable_R04(t *testing.T) {
 
 	// --- negative control: the state the defect actually leaves behind --------
 	stillActiveTaskID, stillActiveGoalID := startTaskWithActiveGoal(t, api, wsID, "never terminated")
-	_, err = gs.Update(stillActiveGoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(stillActiveGoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		return g.Reactivate(runTwoSessionID, time.Now().UTC())
-	})
+	}})
 	require.Error(t, err,
 		"control: Goal.Reactivate must REFUSE a record still ACTIVE (task %q). This is why leaving "+
 			"the record active is not a cosmetic leak — in production activateTaskGoal never even "+

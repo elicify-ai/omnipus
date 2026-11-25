@@ -57,9 +57,9 @@ func TestActiveGoalExists_C25(t *testing.T) {
 		t.Fatal("ActiveGoalExists = false for an active goal")
 	}
 
-	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, updErr := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		return gg.Terminate(generated.GoalStateMet, "done", time.Now().UTC())
-	}); updErr != nil {
+	}}); updErr != nil {
 		t.Fatalf("Update (terminate): %v", updErr)
 	}
 
@@ -112,9 +112,9 @@ func TestListActive_OnlyActiveGoals(t *testing.T) {
 
 	// A terminal task-owned goal — must NOT appear.
 	terminalGoal := mustCreateActive(t, s, generated.GoalOwnerKindTask, "task-terminal")
-	if _, err := s.Update(terminalGoal.GoalID, func(g *Goal) error {
+	if _, err := s.Update(terminalGoal.GoalID, Write{Mutate: func(g *Goal) error {
 		return g.Terminate(generated.GoalStateExhausted, "budget", time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("Update (terminate): %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestGetByOwner_TaskUniqueAcrossPhases(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error { return gg.Activate("sess-1", now) }); updErr != nil {
+	if _, updErr := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error { return gg.Activate("sess-1", now) }}); updErr != nil {
 		t.Fatalf("Update (activate): %v", updErr)
 	}
 	found, err = s.GetByOwner(generated.GoalOwnerKindTask, "task-1")
@@ -222,9 +222,9 @@ func TestCreate_RefusesSecondGoalForSameTask(t *testing.T) {
 func TestCreate_AllowsMultipleGoalsForSameSession(t *testing.T) {
 	s := newTestStore(t)
 	first := mustCreateActive(t, s, generated.GoalOwnerKindSession, "session-1")
-	if _, err := s.Update(first.GoalID, func(g *Goal) error {
+	if _, err := s.Update(first.GoalID, Write{Mutate: func(g *Goal) error {
 		return g.Terminate(generated.GoalStateMet, "done", time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("Update (terminate first): %v", err)
 	}
 

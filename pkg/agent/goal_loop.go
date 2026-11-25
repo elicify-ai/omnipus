@@ -282,9 +282,9 @@ func terminateGoalRecordAt(goalID string, state generated.GoalState, reason stri
 		return fmt.Errorf("goal: terminal transition requires a goal id")
 	}
 	store := resolveGoalRecordStore()
-	if _, err := store.Update(goalID, func(cur *goal.Goal) error {
+	if _, err := store.Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Terminate(state, reason, now)
-	}); err != nil {
+	}}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist terminal transition on goal record",
 			map[string]any{"goal_id": goalID, "state": string(state), "error": err.Error()})
 		return fmt.Errorf("goal: terminal transition on %q: %w", goalID, err)

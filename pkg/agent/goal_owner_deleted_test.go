@@ -37,9 +37,9 @@ func TestEndGoalsOfDeletedAgent_EndsOnlyThatAgentsActiveChatGoals_UATE3(t *testi
 		bus.InboundMessage{Content: "/goal write e3-marker.txt", UserInitiated: true}, agentInst, &optsA)
 	gA := seedCriteriaOntoActiveGoal(t, sidA, "write e3-marker.txt",
 		[]task.AcceptanceCriterion{terminalTestCriterion("e3-marker.txt exists")})
-	if _, err := gs.Update(gA.GoalID, func(cur *goal.Goal) error {
+	if _, err := gs.Update(gA.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.RecordClaim(generated.GoalLatestClaimStatusBlocked, "", time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("fixture: record blocked claim: %v", err)
 	}
 	al.goalSetBlocked(gA.GoalID, true)
@@ -134,10 +134,10 @@ func TestDispatchGoalAsyncFollowUp_ColdBootRouteRunsAsTheGoalsOwnAgent(t *testin
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	_, sid := newGoalTestSession(t, al, agentInst.ID)
 	gid := activateTestGoalRecord(t, sid, "keep going")
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(gid, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.SetRoute("telegram", "chat-9")
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("fixture: persist route: %v", err)
 	}
 

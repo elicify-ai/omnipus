@@ -226,9 +226,9 @@ func seedActiveTaskGoalForClaimGuard(t *testing.T, taskID, sessionID string) *go
 	if cerr := gs.Create(g); cerr != nil {
 		t.Fatalf("seedActiveTaskGoalForClaimGuard: Create: %v", cerr)
 	}
-	activated, uerr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	activated, uerr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sessionID, now)
-	})
+	}})
 	if uerr != nil {
 		t.Fatalf("seedActiveTaskGoalForClaimGuard: Activate: %v", uerr)
 	}
