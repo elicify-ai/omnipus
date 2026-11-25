@@ -104,6 +104,15 @@ func (al *AgentLoop) sessionLineageProvenance(sessionID string, declared session
 		return bus.UnresolvedProvenance(), false
 	}
 	if rec == nil {
+		// FR-050 row 4: a session the plan engine owns (owner or supervision
+		// session, minted without a lifecycle record) carries its plan's
+		// stored provenance, read fresh so a later join is seen.
+		if stored, owned := al.planSessionProvenance(sessionID); owned {
+			if stored.IsUnresolved() {
+				return unresolved("owning plan has no stored provenance", nil)
+			}
+			return stored, true
+		}
 		return unresolved("lineage session has no lifecycle record", nil)
 	}
 	stored := storedProvenance(rec.Provenance)
@@ -227,10 +236,29 @@ func (al *AgentLoop) sessionInstructionOrigin(sessionID string) inputOrigin {
 		return inputOrigin{}
 	}
 	rec, err := lifecycle.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		// A plan owner or supervision turn's instruction is the plan's
+		// (FR-050 row 4, handoff "plan created by a tool call").
+		if stored, owned := al.planSessionProvenance(sessionID); owned {
+			return inputOrigin{provenance: stored}
+		}
+	}
 	if err != nil {
 		return inputOrigin{}
 	}
 	return launchInputOrigin(rec)
+}
+
+// planSessionProvenance is the stored provenance of the plan that owns
+// sessionID as its owner or supervision session (I-2, S-144): owned is false
+// when no plan owns it. A plan written before Plan.Provenance existed has
+// none and is unresolved (fail closed).
+func (al *AgentLoop) planSessionProvenance(sessionID string) (bus.Provenance, bool) {
+	p, owned := al.planOwningSession(sessionID)
+	if !owned {
+		return bus.UnresolvedProvenance(), false
+	}
+	return storedProvenance(p.Provenance), true
 }
 
 // goalWakeProvenance is the provenance of a goal keeper's wake into sessionID

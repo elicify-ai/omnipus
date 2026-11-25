@@ -1847,8 +1847,9 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 			TranscriptSessionID: sessionID,
 			SourceKind:          sourceKind,
 			Content:             content,
-			// A plan wake adds no origin: the plan session's stored lineage, or
-			// unresolved (the plan record stores none yet, I-2).
+			// A plan wake adds no origin: the plan session's stored lineage,
+			// which for a plan-owned session is the plan's own provenance
+			// (I-2, planSessionProvenance); unresolved when it has none.
 			Provenance: pe.agentLoop.wakeProvenance(sessionID),
 		})
 		if err == nil {
