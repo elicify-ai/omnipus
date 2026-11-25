@@ -221,7 +221,8 @@ export function DefaultModelCard({
                     tabIndex={0}
                     href={modelOverrideHref(defaultModel.provider, defaultModel.model)}
                     data-testid="default-model-window-unknown-link"
-                    className="underline underline-offset-2"
+                    data-inline-touch=""
+                    className="relative underline underline-offset-2"
                     style={{ color: 'var(--color-accent)' }}
                   >
                     {MODEL_OVERRIDE_LINK_TEXT}

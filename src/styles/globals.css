@@ -214,6 +214,23 @@ html {
   }
 }
 
+/* Inline text link hit region (FR-070, U5-3; no inline-link exemption). A
+   link inside a sentence keeps its text size; under a coarse pointer its tap
+   area grows to the touch minimum around it, so the sentence does not reflow.
+   Mark the link with data-inline-touch and the class relative. */
+@media (pointer: coarse) {
+  a[data-inline-touch]::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, var(--target-touch-minimum));
+    height: max(100%, var(--target-touch-minimum));
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+  }
+}
+
 body {
   margin: 0;
   background-color: var(--color-primary);

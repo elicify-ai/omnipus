@@ -162,7 +162,8 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
               tabIndex={0}
               href={modelOverrideHref(providerId, row.id)}
               data-testid={`model-limit-window-unknown-link-${providerId}-${row.id}`}
-              className="underline underline-offset-2"
+              data-inline-touch=""
+              className="relative underline underline-offset-2"
               style={{ color: 'var(--color-accent)' }}
             >
               {MODEL_OVERRIDE_LINK_TEXT}
