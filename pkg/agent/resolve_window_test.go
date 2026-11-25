@@ -501,7 +501,7 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 		// read through the generated catalogue); pin its shape, not a paste.
 		msg := UserMessageForCode(CodeContextWindowUnknown)
 		assert.Equal(t, generated.LLMErrorUserMessages["context_window_unknown"], msg)
-		assert.Contains(t, msg, "Settings → Models → Model overrides", "the copy names the exact field to set")
+		assert.Contains(t, msg, "Settings → Limits → Model overrides", "Settings spec D-9 id 2 / US-1 AS1: the copy names the current place to set the field")
 		assert.NotContains(t, strings.ToLower(msg), "try again", "config-attributed copy must not tell the user to retry")
 		llm := TranslateTurnError(ErrContextWindowUnknown)
 		assert.Equal(t, CodeContextWindowUnknown, llm.Code)
