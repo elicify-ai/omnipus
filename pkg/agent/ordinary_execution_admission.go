@@ -162,7 +162,7 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 	}
 	rec, err := store.Load(sessionID)
 	if errors.Is(err, session.ErrLifecycleNotFound) {
-		rec, err = al.ensureOrdinaryRootRecord(store, sessionID, opts.TranscriptStore)
+		rec, err = al.ensureRootRecordStoring(store, sessionID, opts.TranscriptStore, scheduledRecordProvenance(opts, revival))
 	}
 	if err != nil {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)

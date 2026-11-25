@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +194,14 @@ type CronJob struct {
 	CreatedBy string `json:"createdBy,omitempty"`
 	// SessionID is the stable per-schedule session id for continue mode (W-2).
 	SessionID string `json:"sessionId,omitempty"`
+	// Provenance is where the work this schedule carries came from
+	// (connected-programs I-2, FR-041): the creating writer's origins
+	// ("independent" for a schedule a person or the heartbeat reconciler
+	// created, the writer turn's origins for an agent), joined with every
+	// later agent change to its instructions. Empty is unresolved (fail
+	// closed). UpdateJob never replaces or shrinks it. Server-set only; not
+	// on the wire (toSchedule never maps it).
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // cloneJob returns a deep copy of job that shares no memory with it: every
@@ -211,6 +220,9 @@ func cloneJob(job CronJob) CronJob {
 	if job.State.History != nil {
 		out.State.History = make([]CronRunRecord, len(job.State.History))
 		copy(out.State.History, job.State.History)
+	}
+	if job.Provenance != nil {
+		out.Provenance = append([]string(nil), job.Provenance...)
 	}
 	return out
 }
@@ -1272,6 +1284,10 @@ type JobSpec struct {
 	// SessionModeContinue / GetOrCreateScheduledSession) rather than minting a
 	// fresh session on each fire.
 	SessionID string
+	// Provenance is the created job's CronJob.Provenance (I-2, S-111): the
+	// writer turn's origins for an agent, {independent} for a person or the
+	// heartbeat reconciler. Empty is unresolved.
+	Provenance []string
 }
 
 // AddJobFull persists a complete job (including owner/mode/timeout) in a single
@@ -1324,6 +1340,7 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		RunIsolated:    spec.RunIsolated,
 		CreatedBy:      spec.CreatedBy,
 		SessionID:      spec.SessionID,
+		Provenance:     append([]string(nil), spec.Provenance...),
 	}
 	if !enabled {
 		job.State.NextRunAtMS = nil
@@ -1454,13 +1471,22 @@ func (cs *CronService) runStateSnapshot(jobID string) (int, CronRunRecord) {
 	return 0, CronRunRecord{}
 }
 
+// UpdateJob replaces the stored job with job, except its provenance: the
+// stored provenance is joined with job.Provenance, never replaced or shrunk
+// (I-2, S-111), and an empty job.Provenance (a person's edit, a state change)
+// leaves it unchanged.
 func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == job.ID {
+			provenance := cs.store.Jobs[i].Provenance
+			if len(job.Provenance) > 0 {
+				provenance = joinOrigins(provenance, job.Provenance)
+			}
 			cs.store.Jobs[i] = *job
+			cs.store.Jobs[i].Provenance = provenance
 			cs.store.Jobs[i].UpdatedAtMS = cs.clockNowUnsafeMS()
 
 			cs.notify()
@@ -1625,4 +1651,29 @@ func (cs *CronService) JobDispatchInFlight(jobID string) bool {
 		}
 	}
 	return false
+}
+
+// joinOrigins is the I-2 join of two stored origin lists (the same rule as
+// task.JoinOrigins, which pkg/cron does not import): the sorted union, or
+// nil (unresolved) when either side is unresolved or holds an empty origin.
+func joinOrigins(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, o := range list {
+			if o == "" {
+				return nil
+			}
+			if _, dup := seen[o]; dup {
+				continue
+			}
+			seen[o] = struct{}{}
+			out = append(out, o)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

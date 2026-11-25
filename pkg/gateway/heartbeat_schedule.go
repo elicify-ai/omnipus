@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -220,6 +221,9 @@ func ReconcileHeartbeatSchedules(
 			AgentID:     d.agentID,
 			SessionMode: cron.SessionModeMain,
 			Enabled:     &enabled,
+			// I-2/S-111: a heartbeat is work a person configured with no
+			// starting message.
+			Provenance: []string{string(bus.OriginIndependent)},
 		})
 		if err != nil {
 			recordErr(fmt.Errorf("heartbeat reconcile: add %s: %w", name, err))
