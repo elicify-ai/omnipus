@@ -1,7 +1,13 @@
 // U1-4; independent oracle: settings-redesign-spec.md::US-9 AS1,
 // Loading names the section (all eleven examples), and Reduced motion (FR-075).
-// HTTP and the motion preference are the only seams. DOM contracts are not
-// browser geometry or computed-animation proof; the latter stays with UAT.
+// U1-C8: the eleven section rows already passed in the original RED run
+// (1 failed /11 passed); retain them as REGRESSION PINS, not proof that the
+// reported browser visibility defect was fixed. jsdom establishes mounted
+// DOM, data-visible markers and motion-reduce:animate-none class contracts.
+// It does not load the Tailwind output here or measure computed animation,
+// opacity, rotation, stacking or actual visible pixels. FR-075's no-motion
+// outcome and real loading-card visibility still need exact-commit browser UAT.
+// HTTP and the motion preference are the only seams. All assertions retained.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, screen, waitFor } from '@testing-library/react'
 import type { SettingsSectionId } from './settingsSections'

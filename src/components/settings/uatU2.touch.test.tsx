@@ -10,6 +10,8 @@ import { Select, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { Switch } from '@/components/ui/switch'
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
+import { tokenTouchU3 } from '../../../tests/helpers/settings-u3-contracts'
 import { sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 import { atLeastTouchU2, pseudoTouchU2, stylesheetU2, touchContractU2 } from '../../../tests/helpers/settings-u2-css'
 
@@ -146,5 +148,42 @@ describe('U2-1 — named Settings samples and previously fixed controls', () => 
     ])
     expect(port).toHaveValue(5000)
     expect(t.writes()).toEqual([])
+  })
+})
+
+// U3-2: the actual Recap limits disclosure is a shared AccordionTrigger.
+// DisclosureRow's earlier successful contract/toggle case is retained above.
+// Do not round 43.6 to 44 or infer h-11 from a 16px root: this pins the token.
+// jsdom cannot prove the 14px-root arithmetic; the 390px browser re-test does.
+describe('U3-2 — disclosure and accordion headers use the root-independent touch token', () => {
+  it('Recap limits in real Memory & recaps has the token touch contract and still opens', async () => {
+    const t = transportG1(); coarsePointerU2(); sectionG1('memory')
+    const disclosure = await screen.findByRole('button', { name: /Recap limits/ })
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(disclosure)
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(t.writes()).toEqual([])
+    expect(tokenTouchU3(disclosure), 'U3-2/FR-070: Recap limits must use the coarse-pointer touch-minimum token, not rem-derived height').toEqual({ height: true, width: true })
+  })
+  it('the six shared agent-sheet accordion headers have token-sized row targets and real toggles', async () => {
+    coarsePointerU2()
+    // Same shared Accordion/Trigger composition used by the agent sheet;
+    // no agent data, auto-save or header component is mocked.
+    const names = ['Basics', 'Personality', 'Tools', 'Skills', 'Heartbeat', 'Advanced']
+    render(<Accordion type="single" collapsible>{names.map((name) => (
+      <AccordionItem key={name} value={name}>
+        <AccordionTrigger>{name}</AccordionTrigger>
+        <AccordionContent>{name} content</AccordionContent>
+      </AccordionItem>
+    ))}</Accordion>)
+    const headers = names.map((name) => screen.getByRole('button', { name }))
+    for (const header of headers) expect(header).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(headers[0])
+    expect(headers[0]).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Basics content')).toBeVisible()
+    expect(headers.map((header) => ({ name: header.textContent, ...tokenTouchU3(header) })),
+      'U3-2/SC-009: every shared header needs token minimum height; flex row supplies width').toEqual(
+      names.map((name) => ({ name, height: true, width: true })),
+    )
   })
 })

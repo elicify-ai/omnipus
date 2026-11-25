@@ -53,6 +53,88 @@ func TestSettingsU1_ActiveTranscriberSavePersistsAcrossFreshConfigLoad(t *testin
 	}
 }
 
+// U1-C1: the configured prerequisite is part of the IntegrationProvider
+// contract (audio-model needs voice.model_name) and docs/settings.md::Voice
+// input. US-3 AS5 requires the selected transcriber to be stored. An unready
+// choice must not destroy the previously working transcriber (CHECK C1).
+func TestSettingsU1_KeylessAudioModelReadinessPersistsAcrossFreshConfigLoad(t *testing.T) {
+	for _, from := range []string{"elevenlabs", "groq"} {
+		for _, ready := range []bool{false, true} {
+			name := from + "_unready"
+			if ready {
+				name = from + "_ready"
+			}
+			t.Run(name, func(t *testing.T) {
+				api, user, cfg := newRolesTestAPI(t)
+				storeWebSearchKeys(t, api, "ELEVENLABS_API_KEY", "GROQ_API_KEY")
+				seedSettingsU1Voice(t, api, cfg, from)
+				if ready {
+					seedSettingsU1AudioModel(t, api, cfg)
+				}
+				before, err := config.LoadConfig(api.configPath())
+				require.NoError(t, err)
+				beforeBytes, err := os.ReadFile(api.configPath())
+				require.NoError(t, err)
+				if !ready {
+					require.Empty(t, before.Voice.ModelName)
+					require.Equal(t, []string{from}, activeSettingsU1VoiceIDs(getIntegrationList(t, api, user)))
+				}
+				api.agentLoop.SetReloadFunc(func() error {
+					fresh, loadErr := config.LoadConfig(api.configPath())
+					if loadErr != nil {
+						return loadErr
+					}
+					cfg.Voice, cfg.Providers = fresh.Voice, fresh.Providers
+					return nil
+				})
+
+				w := putRoles(t, api, user, "audio-model", `{"kind":"voice","active":true}`)
+				fresh, err := config.LoadConfig(api.configPath())
+				require.NoError(t, err)
+				if !ready {
+					assert.Equal(t, http.StatusBadRequest, w.Code, "U1-C1: an unconfigured Audio Model must be refused: %s", w.Body.String())
+					var problem gen.ErrorResponse
+					require.NoError(t, json.Unmarshal(w.Body.Bytes(), &problem))
+					// No prose is prescribed: require the reason to name the missing
+					// prerequisite from IntegrationProvider.configured, not auth.
+					assert.Contains(t, problem.Error, "voice.model_name", "readiness error names the missing prerequisite")
+					afterBytes, readErr := os.ReadFile(api.configPath())
+					require.NoError(t, readErr)
+					assert.Equal(t, beforeBytes, afterBytes, "refusal writes no config")
+					assert.Equal(t, before.Voice, fresh.Voice, "old transcriber and credential references survive a fresh disk load")
+					assert.Equal(t, from, api.activeVoiceProviderID(fresh))
+					assert.Equal(t, []string{from}, activeSettingsU1VoiceIDs(getIntegrationList(t, api, user)))
+					return
+				}
+				assert.Equal(t, http.StatusOK, w.Code, "U1-C1: a configured Audio Model can be activated: %s", w.Body.String())
+				assert.Equal(t, "u1-audio-model", fresh.Voice.ModelName)
+				assert.Empty(t, fresh.Voice.ElevenLabsAPIKeyRef, "ready activation clears the previous keyed selection")
+				assert.Empty(t, fresh.Voice.GroqAPIKeyRef, "ready activation clears the previous keyed selection")
+				assert.Equal(t, "audio-model", api.activeVoiceProviderID(fresh), "successful activation is stored, not only acknowledged")
+				assert.Equal(t, []string{"audio-model"}, activeSettingsU1VoiceIDs(getIntegrationList(t, api, user)))
+			})
+		}
+	}
+}
+
+func seedSettingsU1AudioModel(t *testing.T, api *restAPI, cfg *config.Config) {
+	t.Helper()
+	b, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(b, &raw))
+	raw["voice"].(map[string]any)["model_name"] = "u1-audio-model"
+	raw["providers"] = []*config.ModelConfig{{
+		Provider: "openai", Model: "u1-audio-model", Protocol: "openai-compatible",
+	}}
+	b, err = json.Marshal(raw)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(api.configPath(), b, 0o600))
+	fresh, err := config.LoadConfig(api.configPath())
+	require.NoError(t, err)
+	cfg.Voice, cfg.Providers = fresh.Voice, fresh.Providers
+}
+
 func activeSettingsU1VoiceIDs(resp gen.IntegrationProvidersResponse) []string {
 	var ids []string
 	for _, row := range resp.Voice {

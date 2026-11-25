@@ -30,6 +30,29 @@ describe('U1-10 — exact D-9 control-map destinations and names', () => {
     expect(recent).toHaveAttribute('aria-expanded', 'false')
     expect(within(picker).getByRole('button', { name: /All providers/ })).toHaveAttribute('aria-expanded', 'false')
     expect(within(picker).queryByRole('listbox', { name: 'Recent' })).not.toBeInTheDocument()
+    // U1-C4: a closed disclosure must still be usable, not merely labelled.
+    await userEvent.click(recent!)
+    expect(recent).toHaveAttribute('aria-expanded', 'true')
+    const recentList = within(picker).getByRole('listbox', { name: 'Recent' })
+    expect(recentList).toBeVisible()
+    const recentRow = within(recentList).getByRole('option', { name: /OpenRouter/ })
+    expect(recentRow).toBeVisible()
+    await userEvent.click(recent!)
+    expect(recent).toHaveAttribute('aria-expanded', 'false')
+    expect(recentList).not.toBeVisible()
+    expect(within(picker).queryByRole('listbox', { name: 'Recent' })).not.toBeInTheDocument()
+    // The fixture has one Popular provider and no other open provider group.
+    // Collapsed Recent is omitted: arrows go from that tile to Custom endpoint.
+    const user = userEvent.setup()
+    await user.click(within(picker).getByPlaceholderText('Search providers'))
+    await user.keyboard('{ArrowDown}')
+    expect(within(picker).getByTestId('picker-popular-openrouter')).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(within(picker).getByRole('option', { name: 'Custom endpoint' }),
+      'U1-C4: ArrowDown must skip the hidden Recent row').toHaveFocus()
+    expect(recentRow).not.toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(within(picker).getByTestId('picker-popular-openrouter')).toHaveFocus()
     expect(t.writes()).toEqual([])
   })
 
