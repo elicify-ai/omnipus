@@ -107,7 +107,7 @@ async function openToolsTab() {
 
 async function typeSearch(text: string) {
   const user = await openToolsTab()
-  await user.type(screen.getByRole('textbox', { name: /search/i }), text)
+  await user.type(screen.getByRole('searchbox', { name: /search/i }), text)
 }
 
 beforeEach(() => {
@@ -140,7 +140,7 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
     const user = await openToolsTab()
     expect(screen.queryByTestId('tool-row-browser_navigate')).not.toBeInTheDocument() // collapsed
 
-    await user.type(screen.getByRole('textbox', { name: /search/i }), 'browser')
+    await user.type(screen.getByRole('searchbox', { name: /search/i }), 'browser')
 
     expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
     expect(screen.getByTestId('tool-row-browser_click')).toBeInTheDocument()
@@ -149,7 +149,7 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
 
   it('S-47: Escape empties the search and all groups collapse again', async () => {
     const user = await openToolsTab()
-    const field = screen.getByRole('textbox', { name: /search/i })
+    const field = screen.getByRole('searchbox', { name: /search/i })
     await user.type(field, 'browser')
     expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
 
@@ -180,7 +180,12 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
       expect(screen.queryByTestId('tool-row-browser_navigate')).not.toBeInTheDocument()
     })
     await user.click(screen.getByRole('button', { name: /permission filter/i }))
-    await user.click(screen.getByRole('menuitem', { name: /all/i }))
+    // The clear option is the item named exactly "All". The old pattern /all/i
+    // also matches the "Allow" item, so getByRole could not tell them apart
+    // (CHECK round 4, candidate 13). The spec (S-50: "clearing the filter") does
+    // not name the item's label; the anchored word keeps the intent — the one
+    // option that clears the permission filter — without matching "Allow".
+    await user.click(screen.getByRole('menuitem', { name: /^all$/i }))
     expect(screen.getByTestId('tool-row-browser_navigate')).toBeInTheDocument()
     expect(
       within(screen.getByTestId('tool-row-browser_navigate')).getByRole('button', { name: /^deny$/i }),

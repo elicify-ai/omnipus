@@ -9,6 +9,10 @@
 //   read-model control: canonical Ask from GET /security/permissions is
 //         selected. C-3's legacy config migration is tested at config load,
 //         never by making the screen consume the retired trust endpoint.
+// Fix round 4 (CHECK round 4, candidate 22) adds the invariants carried over
+// from the retired SkillTrustSection.test: the warning only for Allow (S-32
+// control), autosave with no Save or dialog (T-Q3 B), and a refused save with
+// its reason and Retry (S-07).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ZodError } from 'zod'
 import { render, screen, within, waitFor } from '@testing-library/react'
@@ -133,6 +137,79 @@ describe('SkillsToolsPage — trust (order 25)', () => {
       'true',
     )
     expectPermissionPatches(permissions())
+  })
+
+  // CHECK round 4, candidate 22: invariants carried over from the retired
+  // SkillTrustSection.test (C-22 row 6 deletes SkillTrustSection.tsx and its
+  // endpoints). Each test names the legacy case it replaces and the spec line
+  // that now owns it. Legacy cases with no equivalent are listed in the commit
+  // message, each with its reason.
+
+  // Legacy 'does not show warning panel when warn_unverified is selected' — and
+  // the control that makes S-32 failable: a callout shown for every value would
+  // pass S-32's positive test. User Story 4 AS5 ties the warning to Allow
+  // ("Given trust = Allow ... a warning callout reads ... Choose Ask to turn it
+  // back on."), so it cannot show for Ask or Deny and must leave when Ask is
+  // chosen again. Each click waits for its own PATCH so none is coalesced.
+  it('S-32 control: the warning callout is absent for Ask and Deny, present for Allow, and gone again after Ask', async () => {
+    const warning = 'Allow turns off the check for unverified skills. Choose Ask to turn it back on.'
+    const user = userEvent.setup()
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    const block = await trustBlock()
+    expect(within(block).queryByText(warning), 'stored Ask').toBeNull()
+
+    await user.click(within(block).getByRole('button', { name: /^deny$/i }))
+    await waitFor(() => expectPermissionPatches(permissions(), { skill_trust: 'deny' }))
+    expect(within(block).queryByText(warning), 'after Deny').toBeNull()
+
+    await user.click(within(block).getByRole('button', { name: /^allow$/i }))
+    await waitFor(() => expectPermissionPatches(permissions(), { skill_trust: 'deny' }, { skill_trust: 'allow' }))
+    expect(within(block).getByText(warning), 'after Allow').toBeInTheDocument()
+
+    await user.click(within(block).getByRole('button', { name: /^ask$/i }))
+    await waitFor(() => expectPermissionPatches(
+      permissions(), { skill_trust: 'deny' }, { skill_trust: 'allow' }, { skill_trust: 'ask' },
+    ))
+    expect(within(block).queryByText(warning), 'after choosing Ask again').toBeNull()
+  })
+
+  // Legacy 'clicking block_unverified radio fires updateSkillTrust immediately
+  // (no Save button)' and 'no Save button is rendered': now one PATCH naming only
+  // the trust key, "Saved", and no Save, Discard or dialog — T-Q3 B and the
+  // spec's Qualitative Prohibitions ("must not show a Save bar, Discard, a leave
+  // prompt or a Set all confirm"; the one exception is the execute_plan warning).
+  it('T-Q3 B: choosing Deny saves by itself — one PATCH of the trust key, "Saved", no Save, Discard or dialog', async () => {
+    const user = userEvent.setup()
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    const block = await trustBlock()
+
+    await user.click(within(block).getByRole('button', { name: /^deny$/i }))
+
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+    expectPermissionPatches(permissions(), { skill_trust: 'deny' })
+    expect(permissions().stored.skill_trust).toBe('deny')
+    expect(within(block).getByRole('button', { name: /^deny$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: /^(save|save changes|discard)$/i }), 'no Save or Discard').toBeNull()
+    expect(screen.queryByRole('dialog'), 'no dialog').toBeNull()
+    expect(screen.queryByRole('alertdialog'), 'no confirm').toBeNull()
+  })
+
+  // Legacy 'shows error toast when mutation fails' — replaced by C-16's refused
+  // row: "Not saved: <server reason>." + Retry, and the control keeps the stored
+  // value (same oracle as S-07 for a tool row, here for the trust block).
+  it('S-07: a refused trust save shows the reason with Retry and keeps the stored Ask', async () => {
+    permissions().refuseNext(400, 'invalid trust value')
+    const user = userEvent.setup()
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    const block = await trustBlock()
+
+    await user.click(within(block).getByRole('button', { name: /^deny$/i }))
+
+    await waitFor(() => expect(screen.getByText('Not saved: invalid trust value.')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    expect(within(block).getByRole('button', { name: /^ask$/i })).toHaveAttribute('aria-pressed', 'true')
+    expectPermissionPatches(permissions(), { skill_trust: 'deny' })
+    expect(permissions().stored.skill_trust).toBe('ask')
   })
 })
 

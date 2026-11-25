@@ -35,6 +35,9 @@ vi.mock('@tanstack/react-router', async (original) => ({
 
 const PERMISSIONS = '/api/v1/security/permissions'
 const NOT_APPLIED = 'Saved, but not applied to running agents yet. Retry applying the change, or restart Omnipus.'
+// The server's own 503 text: contracts/openapi.yaml PATCH /security/permissions
+// 503 ("The error field is exactly ..."). The page maps it to NOT_APPLIED (C-16).
+const CONTRACT_503 = 'The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.'
 const NOT_STORED = 'Not saved: the settings file could not be written.'
 const initial = (): PermissionSettings => ({
   policies: { bash: 'deny', read_file: 'allow' },
@@ -402,6 +405,85 @@ describe('C-16 app-owned save queue through SkillsToolsPage (D12)', () => {
     assertRequests({ skill_policies: { plan: 'allow' } }, { policies: { bash: 'deny' } })
     second.release(200, full({ skill_policies: { plan: 'allow', 'other-skill': 'ask' } })); await tick()
     expect(within(target).getByText('Saved')).toBeInTheDocument()
+  })
+  // CHECK round 4, candidate 11: the apply/recovery invariants of the retired
+  // SecuritySection.policy-activation.test (cases 1 and 2, RR1 pr-test F3 / SFH
+  // N1) move onto the page's app-owned queue. That suite drove the legacy
+  // PUT /security/tool-policies editor, which C-22 row 6 retires; these two
+  // drive the replacement, PATCH /security/permissions through the same real
+  // request() boundary. Its other two cases are not carried as such: the
+  // dropped response is D12#4 and D12#9 above, and a 503 that is not the
+  // handler's has no meaning in C-2 (the contract gives 503 one meaning) — see
+  // the report's spec-gap list.
+  it('C-16 (legacy case 1): a 503 row shows exactly the C-16 sentence and none of the body details', async () => {
+    await mountPage()
+    // The contract's 503 body is { error } (PATCH /security/permissions 503);
+    // ErrorResponse also allows `details`, so a body that carries an internal
+    // reload reason is a legal input. Nothing in the spec names `details` as
+    // text for the person: the 503 state is the exact C-16 sentence.
+    const INTERNAL = 'INTERNAL_RELOAD_ONLY: registry creation failed: PRIVATE_OPERATOR_CONTEXT'
+    const body: ErrorResponse = { error: CONTRACT_503, details: { reload_error: INTERNAL } }
+    expect(JSON.stringify(body), 'planted-present control: the body does carry the internal reason').toContain(INTERNAL)
+    // C-2: a 503 stores the change, so the server holds Ask afterwards.
+    const save = network.hold('PATCH', full({ policies: { bash: 'ask', read_file: 'allow' } }))
+    const target = await choose('bash', 'ask'); await tick(1000)
+    save.release(503, body); await tick()
+    expect(within(target).getByText(NOT_APPLIED)).toBeInTheDocument()
+    expect(within(target).getByRole('button', { name: /^retry$/i })).toBeInTheDocument()
+    expect(within(target).queryByText('Saved')).not.toBeInTheDocument()
+    expect(storedValue(target)).toEqual(['ask'])
+    expect(document.body.innerHTML, 'no part of the body details reaches the page').not.toContain(INTERNAL)
+    assertRequests({ policies: { bash: 'ask' } })
+  })
+  it('C-16 (legacy case 2): a change queued behind a 503 that stored the first value is still sent, even when it equals the value stored before that save', async () => {
+    await mountPage()
+    // bash is stored as deny. Allow is sent and answered 503, which C-2 and
+    // D12#2 say STORES allow. Deny is clicked while that request is in flight:
+    // it equals the value stored BEFORE the 503'd save, so a page that
+    // compared the click with its cached copy would drop it and leave allow
+    // stored behind a row that shows Deny. "Later changes after a failure are
+    // still sent in order" (C-16).
+    const first = network.hold('PATCH', full({ policies: { bash: 'allow', read_file: 'allow' } }))
+    const second = network.hold('PATCH')
+    const target = await choose('bash', 'allow'); await tick(1000)
+    assertRequests({ policies: { bash: 'allow' } })
+    await choose('bash', 'deny'); await tick(1000)
+    expect(within(target).getByText('Saving…')).toBeInTheDocument()
+    assertRequests({ policies: { bash: 'allow' } })
+    first.release(503, { error: CONTRACT_503 }); await tick(1000)
+    expect(network.stored.policies.bash, 'the 503 stored allow').toBe('allow')
+    assertRequests({ policies: { bash: 'allow' } }, { policies: { bash: 'deny' } })
+    expect(within(target).getByText('Saving…')).toBeInTheDocument()
+    second.release(200, full({ policies: { bash: 'deny', read_file: 'allow' } })); await tick()
+    expect(within(target).getByText('Saved')).toBeInTheDocument()
+    expect(storedValue(target)).toEqual(['deny'])
+    expect(network.stored.policies).toEqual({ bash: 'deny', read_file: 'allow' })
+  })
+  // Part C item 1 (CHECK round 4, candidate 22): the retired SkillTrustSection.test
+  // case 'shows SaveStatus "Saving…" while mutation is in flight' is still
+  // applicable. FR-007 names the trust value among those that save on their own:
+  // "Saving…" within 100 ms of the click, the request within 1,000 ms when nothing
+  // is pending, and "Saved" only when that change is acknowledged (C-16, "queued:
+  // the clicked value, marked Saving…"). Each click is its own PATCH naming only its
+  // own key. The spec does not say whether the signal sits inside the trust block or
+  // in a page-level region, so it is looked up on the page; the same probe sees
+  // "Saved" after the answer, so the "not Saved yet" check is not vacuous.
+  it('FR-007 (legacy SkillTrustSection case): a trust click shows "Saving…" within 100 ms, sends one PATCH of the trust key, and shows "Saved" only after that PATCH is acknowledged', async () => {
+    await mountPage()
+    fireEvent.click(screen.getByRole('tab', { name: /^skills/i })); await tick()
+    const block = screen.getByTestId('trust-block')
+    const save = network.hold('PATCH')
+    fireEvent.click(within(block).getByRole('button', { name: /^deny$/i }))
+    await tick(100)
+    expect(screen.queryAllByText('Saving…').length, '"Saving…" is shown within 100 ms of the click').toBeGreaterThan(0)
+    await tick(900)
+    assertRequests({ skill_trust: 'deny' })
+    expect(screen.queryAllByText('Saved'), 'not "Saved" while the PATCH is unanswered').toHaveLength(0)
+    save.release(200, full({ skill_trust: 'deny' })); await tick()
+    expect(screen.queryAllByText('Saved').length, '"Saved" once the PATCH is acknowledged').toBeGreaterThan(0)
+    expect(screen.queryAllByText('Saving…'), 'nothing is saving any more').toHaveLength(0)
+    expect(within(block).getByRole('button', { name: /^deny$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(network.stored.skill_trust).toBe('deny')
   })
   it('ownership: a reopened page joins the same in-flight app queue before its first response', async () => {
     const app = await mountPage()

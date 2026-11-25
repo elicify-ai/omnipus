@@ -135,9 +135,25 @@ describe('SkillsToolsPage — focus after the focused row leaves a filtered list
     expectPermissionPatches(permissions(), { policies: { gamma_tool: 'deny' } })
 
     // The status region announces the exact sentence (S-100's Then).
-    const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(
-      'gamma_tool set to Deny. It no longer matches the filter. 2 shown.',
-    )
+    // Every catalogued Button adds its own empty role=status region
+    // (button.tsx::ActionAnnouncement), so a conforming page holds several
+    // status regions and a singular unscoped query cannot be the oracle
+    // (CHECK round 4, candidate 14). The announcement is identified by its
+    // content, and exactly one region may carry it.
+    const sentence = 'gamma_tool set to Deny. It no longer matches the filter. 2 shown.'
+    await waitFor(() => {
+      const carrying = screen
+        .getAllByRole('status')
+        .filter((region) => region.textContent?.trim() === sentence)
+      expect(carrying, `status regions carrying the S-100 sentence: ${carrying.length}`).toHaveLength(1)
+    })
+    const status = screen
+      .getAllByRole('status')
+      .find((region) => region.textContent?.trim() === sentence)
+    // Spec accessibility section: "Save signal: polite status region". role=status
+    // is the implicit polite live region; an explicit aria-live may not turn it
+    // assertive.
+    expect(status).toBeDefined()
+    expect(status).not.toHaveAttribute('aria-live', 'assertive')
   })
 })
