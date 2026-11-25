@@ -60,6 +60,8 @@ You can also ask Omnipus in its chat to change an agent's permissions. Outside G
 
 If you leave the page before a save finishes, it still completes; a problem is reported once, with an **Open Skills & Tools** button.
 
+On a phone each row is a card with a **Permission** line and a **What the model sees** line.
+
 Auto-approve and God Mode are not set here: the **Open Settings** link at the top of the Omnipus tools tab opens Settings → Protection. The **Shell** group's **Shell safety rules (Settings)** link opens Settings → Sandbox & network.
 
 ### What the model sees

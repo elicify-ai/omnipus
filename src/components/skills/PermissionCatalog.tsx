@@ -3,7 +3,7 @@
 // (FR-003), the empty state (FR-004), rows leaving a filter (FR-005) with
 // focus kept on a neighbour and the result announced (FR-052, S-100).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CaretDown, ShieldWarning } from '@phosphor-icons/react'
 import type { ModelVisibility, ToolPolicy } from '@/lib/api/generated/openapi-types'
 import { Button } from '@/components/ui/button'
@@ -106,6 +106,7 @@ export function PermissionCatalog({
     // Only a change of the search or filters opens groups.
   }, [signature])
 
+  const baseId = useId()
   const focusRef = useFocusKeeper({ visibleGroups, signature, queue, announce, shown, testIdPrefix, policyFiltered: filters.policy !== null })
 
   const change = (changes: PolicyChange[]) => {
@@ -196,16 +197,17 @@ export function PermissionCatalog({
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             {filters.search.trim() ? `No ${noun} match "${filters.search.trim()}"` : `No ${noun} match the filters`}
           </p>
-          <Button variant="outline" size="sm" onClick={clearAll}>Clear search and filters</Button>
+          <Button variant="outline" size="sm" className="pointer-coarse:min-h-[var(--target-touch-minimum)]" onClick={clearAll}>Clear search and filters</Button>
         </div>
       ) : (
         <div ref={focusRef} className="flex flex-col gap-[var(--space-1)]">
-          {visibleGroups.map((group) => {
+          {visibleGroups.map((group, index) => {
             const open = active || expanded.has(group.id)
+            const bodyId = `${baseId}-group-${index}`
             return (
               <section key={group.id} data-group-id={group.id} className="rounded-md border border-[var(--color-border)] px-[var(--space-2)]">
                 <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-                  <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} data-group-header="">
+                  <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} aria-controls={bodyId} data-group-header="">
                     <span className="font-medium text-[var(--color-secondary)]">{group.label}</span>
                     <span className="text-[var(--color-muted)]">{active ? `${group.rows.length} of ${group.items.length}` : group.items.length}</span>
                   </DisclosureRow>
@@ -220,23 +222,26 @@ export function PermissionCatalog({
                     />
                   )}
                 </div>
-                {open && skipNote?.group === group.id && (
-                  <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{skipNote.text}</p>
-                )}
-                {open && groupNotice?.(group.id)}
-                {open && group.rows.map((item) => (
-                  <PermissionRow
-                    key={item.key}
-                    item={item}
-                    queue={queue}
-                    disabled={disabled}
-                    testIdPrefix={testIdPrefix}
-                    onPolicy={(row, policy) => change([{ item: row, policy }])}
-                    onLevel={changeLevel}
-                    onRowFocus={(key, choice) => { focusRef.lastFocus.current = { key, choice } }}
-                    actions={rowActions?.(item)}
-                  />
-                ))}
+                {/* Always mounted, so the header's aria-controls names a real element. */}
+                <div id={bodyId}>
+                  {open && skipNote?.group === group.id && (
+                    <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{skipNote.text}</p>
+                  )}
+                  {open && groupNotice?.(group.id)}
+                  {open && group.rows.map((item) => (
+                    <PermissionRow
+                      key={item.key}
+                      item={item}
+                      queue={queue}
+                      disabled={disabled}
+                      testIdPrefix={testIdPrefix}
+                      onPolicy={(row, policy) => change([{ item: row, policy }])}
+                      onLevel={changeLevel}
+                      onRowFocus={(key, choice) => { focusRef.lastFocus.current = { key, choice } }}
+                      actions={rowActions?.(item)}
+                    />
+                  ))}
+                </div>
               </section>
             )
           })}

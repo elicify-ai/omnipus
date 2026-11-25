@@ -33,6 +33,7 @@ export function TrustBlock({ queue, disabled }: { queue: PermissionSaveQueue; di
               size="sm"
               pressed={trust === choice}
               disabled={disabled}
+              className="pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
               onPressedChange={() => { if (trust !== choice) queue.change([{ section: 'skill_trust', value: choice }]) }}
             >
               {POLICY_WORDS[choice]}
