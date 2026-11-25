@@ -109,11 +109,19 @@ func (ex *agentLoopRunTurnToolsExecute) skillLoadCard(
 	resolved skills.ResolvedSkill, key string, project bool, d tools.SkillDecision, permissionOpen bool,
 ) *skillCard {
 	rt := ex.rx.rr.rq.ri.rf.rt
-	agentID, slug, dir, revision := rt.ts.agentID, resolved.Slug, filepath.Dir(resolved.Path), d.Revision
-	al := rt.al
+	return newSkillLoadCard(rt.al, rt.ts.agent.ContextBuilder, rt.ts.agentID, resolved, key, project, d, permissionOpen)
+}
+
+// newSkillLoadCard is the card of a load of resolved by agentID whose
+// decision d asks: a Skill call or the person's /name (C-12).
+func newSkillLoadCard(
+	al *AgentLoop, cb *ContextBuilder, agentID string,
+	resolved skills.ResolvedSkill, key string, project bool, d tools.SkillDecision, permissionOpen bool,
+) *skillCard {
+	slug, dir, revision := resolved.Slug, filepath.Dir(resolved.Path), d.Revision
 	return &skillCard{
 		facts: &generated.ToolApprovalSkill{
-			DisplayName: skillDisplayName(rt.ts.agent.ContextBuilder, resolved),
+			DisplayName: skillDisplayName(cb, resolved),
 			Key:         key,
 			Name:        slug,
 			OpenChecks:  openChecks(permissionOpen, d.TrustOpen),

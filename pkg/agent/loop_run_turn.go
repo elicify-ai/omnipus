@@ -635,6 +635,10 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 		history = RecoverOrphanedToolCalls(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rp.rc.rx.rr.rq.ri.rf.rt.al.auditLogger)
 	}
 
+	// C-11 E4: the skills the person's /name forced go through their own
+	// decision (Deny, an open trust check) before the first model call.
+	rp.rc.rx.rr.rq.ri.rf.rt.al.settleSlashSkills(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.rf.rt.ts)
+
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
 	rp.rc.rx.rr.rq.ri.messages = rp.rc.rx.rr.rq.ri.rf.rt.al.assembleMessages(
 		rp.rc.rx.rr.rq.ri.rf.rt.turnCtx,
