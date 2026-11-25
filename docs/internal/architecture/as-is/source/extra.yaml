@@ -1,0 +1,78 @@
+toc_tail:
+  - ["Scope", "scope"]
+  - ["Open points found while tracing", "open-points"]
+  - ["Method and evidence", "method"]
+  - ["Keeping this document current", "maintenance"]
+sections:
+  - anchor: scope
+    title: Scope
+    body: |
+      This document covers how the running server works: the nine traced flows above, and the sections on restart, data, sign-in, contracts, secrets, audit, tools, MCP, skills, browser, knowledge base and media, chat apps, configuration, chat history, the build and concurrency.
+
+      It does not trace the inside of every product feature, so this is a partial map of the product surface, not a complete one. The surfaces below are served by the REST routes registered in `pkg/gateway/rest.go::registerCoreRoutes` and are not drawn step by step here. Each row names the package that owns the behaviour and the gateway file that holds the handler; what happens inside them is not described. The individual chat-app transports are covered only at the level of the connectors section. Exact kernel-sandbox coverage per tool, platform and mode is under separate security review and is not described here. Performance, memory use and platform certification are not covered.
+
+      | Product surface | Route prefix | Owning package | Handler file |
+      |---|---|---|---|
+      | Rooms | `/api/v1/rooms/`, `/api/v1/workspaces/{id}/rooms` | `pkg/rooms` | `pkg/gateway/rest_rooms.go` |
+      | Workspaces management | `/api/v1/workspaces` | `pkg/workspace` | `pkg/gateway/rest_workspaces.go` |
+      | Library and its previews | `/api/v1/library`, `/api/v1/library/preview-token` | `pkg/library` | `pkg/gateway/rest_library.go`, `rest_library_preview.go` |
+      | Mail previews and mailboxes | `/api/v1/mail/html-preview-token` and the mail preview routes, `/api/v1/mailboxes` | `pkg/email`, `pkg/email/mailhtml` | `pkg/gateway/rest_mail_preview.go`, `rest_mailbox.go` |
+      | Export and import of agent packages | `/api/v1/packages/export`, `/api/v1/packages/import` | `pkg/omnpkg` | `pkg/gateway/rest_packages.go`, `rest_packages_export.go`, `rest_packages_import.go`, `rest_packages_apply.go` |
+      | Setup wizard (onboarding) | `/api/v1/onboarding/complete`, `/api/v1/onboarding/probe-provider` | `pkg/onboarding` | `pkg/gateway/rest_onboarding.go` |
+      | Secrets and secret requests | `/api/v1/secrets`, `/api/v1/secret-requests/` | `pkg/credentials`, `pkg/secretrequest` | `pkg/gateway/rest_secrets.go` |
+      | Schedules and notifications | `/api/v1/schedules`, `/api/v1/notifications` | `pkg/cron`, `pkg/notifications` | `pkg/gateway/schedules.go` |
+      | Automations | `/api/v1/automations` | `pkg/cron` | `pkg/gateway/rest_automations.go` |
+      | Voice | `/api/v1/voice/...` | `pkg/voice` | `pkg/gateway/rest_voice.go`, `rest_integrations_auth.go::HandleTranscribe` |
+      | Integration providers | `/api/v1/integrations/providers` | not traced | `pkg/gateway/rest_integrations_auth.go` |
+      | Plans and tasks screens (REST side) | `/api/v1/plans`, `/api/v1/tasks` | `pkg/plan`, `pkg/task` | `pkg/gateway/rest_plans.go`, `rest_tasks.go` (the run behaviour is traced in the flows) |
+      | Settings, security and performance screens | `/api/v1/settings/...`, `/api/v1/security/...`, `/api/v1/performance` | `pkg/config`, `pkg/security`, `pkg/sandbox` | `pkg/gateway/rest.go::registerSettingsAndAccountRoutes` and the handler files it names |
+      | Other small routes (status, activity, storage stats, devices, token statistics, about, metrics, version) | various | not traced | `pkg/gateway/rest_status.go`, `rest.go` |
+  - anchor: open-points
+    title: Open points found while tracing
+    body: |
+      These are behaviours the tracing found that look like defects or stale text. They are recorded so the document stays honest; this document fixes none of them.
+
+      | Point | Status | Code |
+      |---|---|---|
+      | A pending tool approval lives only in memory and is lost at restart; nothing in production calls the restart-cancel function. The transcript keeps a "pending" entry that replays as active. A separate repair removes orphaned tool calls from the model's history on the next turn. Whether the screen ever settles the entry was not run | ✅ Verified (mechanisms); 🔶 Inferred (what the user sees) | `pkg/gateway/approvals.go::cancelAllPendingForRestart`; `pkg/gateway/replay.go::emitFlatToolCall`; `pkg/agent/session_recovery.go::RecoverOrphanedToolCalls` |
+      | A crash can leave a chat loop marked "running", so later fires are skipped as overlap | 🔶 Inferred, not run | `pkg/agent/loop_scheduler.go::Start` uses the plain start; the running flag is cleared only in `pkg/cron/service.go::initRunStateReplayingUnsafe` |
+      | The `connector_intake.go` header still describes per-chat sessions for unbound chat-app instances, which are in fact dropped | ✅ Verified | `pkg/agent/connector_intake.go` header vs `pkg/routing/route.go::ResolveRoute` |
+      | The server examples in the two contract files disagree (REST 5000, WebSocket 6060); the running server has one HTTP port | ✅ Verified (text only) | `contracts/openapi.yaml` servers; `contracts/asyncapi.yaml` servers |
+  - anchor: method
+    title: Method and evidence
+    body: |
+      Each flow was traced in the code at `release/v0.1.1 @ 6fbf4b43c` by a reader who opened every file cited; flow 9 was first traced by a ChatGPT reviewer. An independent ChatGPT review (2026-11-25) then checked 65 claims across all flows against the code and listed missing areas. Every finding it marked as wrong was re-checked in the code and corrected, and the missing areas were added as the sections above. A second independent check re-read the revised document against the code; its findings were again checked in the code and the text and pictures were corrected where the code agreed.
+
+      What the labels mean:
+      - A diagram step without a badge was opened in the code by the tracer. An amber "not verified" badge marks a step that was inferred.
+      - "What happens when it goes wrong" rows are read from the code; none was produced by running the system.
+      - Nothing in this document comes from a build, a test run or a live system. A statement marked "not verified" or "Unknown" was not established from the code, and a statement about behaviour after a crash is read from the code, not reproduced.
+      - The "Where data lives" table is a partial inventory: its Unknown and not-traced cells are real gaps, not omissions of detail.
+
+      Claims re-checked by the Chief Architect on 2026-11-25:
+
+      | Claim | Evidence |
+      |---|---|
+      | The turn calls the goal check, not the other way round | `pkg/agent/loop.go:1786` calls `checkGoalLoopAfterTurn` (`goal_loop.go:680`) |
+      | Heartbeats and loops call the turn directly, not through the bus | `pkg/agent/loop.go::ProcessScheduled`; called from `pkg/gateway/schedules.go:174` and `pkg/agent/loop_scheduler.go:215` |
+      | The inbound bus holds 64 messages in memory | `pkg/bus/bus.go:15 defaultBusBufferSize = 64` |
+      | Task poller every minute; plan engine tick every 30 s | `pkg/heartbeat/task_drain.go:20`; `pkg/agent/plan_engine.go:147` |
+      | Tool approval waits 600 s by default | `pkg/gateway/gateway.go:89 defaultToolApprovalTimeout`; config override in `gateway_boot.go::wireInteractiveServices` |
+      | In a workspace main chat, a chat app gets no plain answer | `pkg/agent/loop_publish.go::publishResponseIfNeeded` → `refuseMainConnectorDefaultSend` |
+      | Unbound chat-app instances are dropped | `pkg/routing/route.go:84 Drop: true` |
+      | No model-written summary when history is too long | `pkg/agent/loop_window.go:240`; `window_trim_test.go:640` asserts `forceCompression` does not exist |
+      | One HTTP port | `pkg/gateway/gateway.go:11`; server built in `pkg/channels/manager.go:1030` |
+      | Eligible native helpers are revived after a restart | `pkg/agent/boot_helper_resume.go:17 resumeRestartHelper`, called from `boot_sweep.go:301` |
+      | Running plans are processed again at boot | `pkg/agent/plan_engine.go::bootReconcile` calls `processPlan` for running plans |
+      | Plain Stop is session-only; Stop all walks the tree | `pkg/agent/stop_session.go::StopSession` (`if !req.Tree`) |
+      | MAIN-mode tasks bypass the task slot limit | `pkg/agent/task_executor.go:708` returns `executeMainTask` before `dispatchSema.TryAcquire` at `:713` |
+      | Attachments go straight into the model message | `pkg/agent/context.go:1748` `msg.Media = media` |
+      | The Calendar screen writes when you reschedule | `src/components/screens/CalendarScreen.tsx:260-272 persistReschedule` → `updateTask` |
+      | Plans have six phases | `pkg/plan/plan.go:284-291 validPlanPhases` |
+  - anchor: maintenance
+    title: Keeping this document current
+    body: |
+      - The code wins. Anyone who finds a disagreement reports it to the Chief Architect, who corrects this document.
+      - The diagrams in `as-is/` are generated from the flow files; change the flow, not the picture.
+      - Each flow names the commit it was traced at. When a structural change lands (a new queue, timer, gate, store or process), the affected flow is traced again.
+      - Where the system should go is in the target architecture and the ADRs, not here. This document describes only what is.

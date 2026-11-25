@@ -1,0 +1,223 @@
+id: connector-message
+title: A Telegram message reaches an agent and gets an answer
+summary: 'Telegram is polled by the Telegram connector inside the Omnipus process. A message from an allowed sender gets a typing indicator, a reaction and a "thinking" placeholder where the connector supports
+  them (best effort; audio defers the placeholder), then goes onto the same in-memory message bus the web chat uses. Only a connector instance that the owner has bound to a workspace and an agent is routed;
+  an unbound one is dropped, logged and audited (the old peer/guild/team binding table is no longer read). A bound connector''s messages all land in the MAIN chat of its bound workspace-and-agent pair as
+  numbered "requests". The agent''s plain answer is NOT sent back to Telegram: the agent must call send_message with reply_to=<request id>, and that reply goes out through the bus and the connector''s send
+  worker, which edits the placeholder or sends new messages. Code at 6fbf4b43c.
+
+  '
+participants:
+- id: tg
+  label: Telegram (cloud)
+  kind: external
+- id: chan
+  label: Telegram connector
+  kind: server
+  ref: pkg/channels/telegram/telegram.go
+- id: base
+  label: Connector base (allow list, placeholders)
+  kind: server
+  ref: pkg/channels/base.go::HandleMessage
+- id: bus
+  label: Message bus (in memory)
+  kind: server
+  ref: pkg/bus/bus.go
+- id: loop
+  label: Agent loop (intake + router)
+  kind: worker
+  ref: pkg/agent/loop.go, connector_intake.go, loop_inbound.go
+- id: store
+  label: Main chat archive + request ledger (disk)
+  kind: store
+  ref: pkg/session, pkg/addressing/ledger.go
+- id: turn
+  label: Turn engine
+  kind: worker
+  ref: pkg/agent/loop.go::runTurn
+- id: mgr
+  label: Channel manager (send workers)
+  kind: server
+  ref: pkg/channels/manager.go
+steps:
+- phase: 1 · Receive
+- from: chan
+  to: tg
+  label: long polling getUpdates (goroutine started in Start)
+  kind: call
+  ref: pkg/channels/telegram/telegram.go::Start (UpdatesViaLongPolling)
+  verified: true
+- from: tg
+  to: chan
+  label: 'update: message'
+  kind: return
+  ref: pkg/channels/telegram/telegram.go::handleMessage
+  verified: true
+- over: chan
+  note: sender allow list (empty list = everyone allowed); group chats answer only when mentioned; voice/audio/photos downloaded to the media store
+  ref: pkg/channels/telegram/telegram.go::handleMessage; base.go::IsAllowedSender
+  verified: true
+- from: chan
+  to: base
+  label: HandleMessage(peer, sender, chat, content, media)
+  kind: call
+  ref: pkg/channels/base.go::HandleMessage
+  verified: true
+- over: base
+  note: a recognised stop command is intercepted here (DispatchStopIfRecognized) and never reach the agent
+  ref: pkg/channels/controlparse.go::interceptSessionControl
+  verified: true
+- from: base
+  to: tg
+  label: typing indicator, reaction, 'thinking' placeholder where the connector has those hooks (best effort; before routing is known; audio defers the placeholder)
+  kind: async
+  ref: pkg/channels/base.go::HandleMessage (StartTyping, ReactToMessage, SendPlaceholder)
+  verified: true
+- from: base
+  to: bus
+  label: PublishInbound {channel, instance_id, sender, chat_id, peer}
+  kind: async
+  ref: pkg/channels/base.go::HandleMessage -> bus.PublishInbound
+  verified: true
+- phase: 2 · Bound or dropped
+- from: bus
+  to: loop
+  label: AgentLoop.Run -> routeBoundConnectorInput
+  kind: async
+  ref: pkg/agent/loop.go::Run; connector_lane.go::routeBoundConnectorInput
+  verified: true
+- over: loop
+  note: 'bound = config.channels.<instance> has workspace_id AND identity {kind: agent, id}. Read from config only, never from the message.'
+  ref: pkg/agent/connector_intake.go::boundConnectorPair
+  verified: true
+- alt: instance NOT bound
+- over: loop
+  note: ResolveRoute returns Drop (MatchedByUnbound) -> processMessage logs at error level, writes an audit 'channel message dropped' entry and keeps the reason in memory for the Connectors card. Sender
+    gets no answer.
+  ref: pkg/routing/route.go::ResolveRoute; pkg/agent/loop_unroutable.go; routing_drops.go::recordRouteDrop
+  verified: true
+- else: instance bound
+- over: loop
+  note: 'one lane per chat: while a voice note is being transcribed, later messages from that chat queue behind it (max queue size, overflow refused)'
+  ref: pkg/agent/connector_lane.go::routeBoundConnectorInput
+  verified: true
+- from: loop
+  to: store
+  label: capture the request (who asked, return route) in the ledger, then the transcript line in the MAIN chat of the bound workspace-and-agent pair
+  kind: store
+  ref: pkg/agent/connector_intake.go::admitBoundConnectorInputCtx (header A1-4); pkg/addressing/ledger.go
+  verified: true
+- end: true
+- phase: 3 · Route and run
+- over: loop
+  note: 'resolveMessageRoute order: helper''s pinned agent -> explicit agent_id -> existing session owner -> RouteResolver (bound identity only; peer/guild/team fields and config.Bindings are not read)'
+  ref: pkg/agent/loop_inbound.go::resolveMessageRoute; pkg/routing/route.go::ResolveRoute
+  verified: true
+- over: loop
+  note: workspace membership check for the bound agent
+  ref: pkg/agent/loop_inbound.go (boundMemberRefusal)
+  verified: true
+- from: loop
+  to: turn
+  label: session worker -> processMessage -> runTurn (same engine as web chat)
+  kind: call
+  ref: pkg/agent/session_worker.go::dispatchSessionWorker, processTurn
+  verified: true
+- over: turn
+  note: 'the model sees a server-written envelope: request id, sender label, ''answer with reply_to'''
+  ref: pkg/agent/connector_intake.go (header A1-5); address_router.go::composeRequestText
+  verified: true
+- over: turn
+  note: 'no streaming to Telegram: streaming is skipped when the turn is a connector-fed main'
+  ref: pkg/agent/loop_run_turn_attempt.go:67 (mainConnectorTurn); connector_egress.go::mainConnectorTurn
+  verified: true
+- phase: 4 · Answer goes back
+- alt: agent calls send_message reply_to=<request id>
+- from: turn
+  to: store
+  label: ledger lookup by request id (server-side; the model cannot invent a route)
+  kind: call
+  ref: pkg/agent/address_router.go::Reply (RequestLedger)
+  verified: true
+- from: turn
+  to: bus
+  label: PublishOutbound {channel, chat_id from the captured route}
+  kind: async
+  ref: pkg/agent/address_router.go:577
+  verified: true
+- else: agent just answers in text
+- over: turn
+  note: plain answer stays in the main chat transcript; the connector send is refused once and the agent is prompted to reply_to each sender
+  ref: pkg/agent/loop_publish.go::publishResponseIfNeeded -> refuseMainConnectorDefaultSend; connector_egress.go (header)
+  verified: true
+- end: true
+- from: bus
+  to: mgr
+  label: dispatchOutbound -> per-connector worker queue (full queue -> dropped + 'overloaded' notice)
+  kind: async
+  ref: pkg/channels/manager.go::dispatchOutbound, enqueueOutbound
+  verified: true
+- over: mgr
+  note: 'preSend: stop typing, undo reaction, edit the placeholder with the answer if possible (else fall through to Send). Before the edit, and again before each send and retry, the captured return binding
+    is re-checked; editing a binding later does not redirect a captured reply.'
+  ref: pkg/channels/manager.go::preSend, ::sendWithRetry (refuseReturnRoute)
+  verified: true
+- from: mgr
+  to: chan
+  label: split to platform max length, sendWithRetry (rate-limit wait, exponential backoff)
+  kind: call
+  ref: pkg/channels/manager.go::runWorker, sendWithRetry
+  verified: true
+- from: chan
+  to: tg
+  label: sendMessage (MarkdownV2/HTML)
+  kind: call
+  ref: pkg/channels/telegram/telegram.go::Send
+  verified: true
+stores:
+- what: connector binding (workspace + agent identity), allow list
+  where: config.json channels.<instance>
+  when: set by PUT /api/v1/channels/{id}/routing
+  ref: pkg/agent/connector_intake.go::boundConnectorPair
+- what: request capture (sender, return route)
+  where: sessions/<main id>/requests.jsonl
+  when: before the transcript line; discarded if that append fails
+  ref: pkg/addressing/ledger.go; connector_intake.go header A1-4
+- what: user line (raw text) and answers
+  where: the MAIN chat archive of the bound workspace-and-agent pair (main session id is built from that pair; all chats of one bound instance share it)
+  when: at intake / during the turn
+  ref: connector_intake.go header A1-6; pkg/session/main_session.go::MainSessionID; pkg/agent/connector_intake.go::admitBoundConnectorInputCtx
+- what: drop reasons
+  where: memory only
+  when: on drop
+  ref: pkg/agent/routing_drops.go
+failures:
+- case: instance not bound
+  effect: message dropped (typing, reaction and placeholder hooks run first where the connector has them, best effort, so the sender may have seen them); error log + audit entry + reason on the Connectors card
+  ref: pkg/channels/base.go::HandleMessage order; pkg/routing/route.go::ResolveRoute
+  verified: true
+- case: agent forgets reply_to
+  effect: nothing reaches Telegram; one automatic prompt asks the agent to answer each sender
+  ref: pkg/agent/connector_egress.go
+  verified: true
+- case: Telegram send fails
+  effect: retries with backoff; permanent errors (not running, send failed) stop at once
+  ref: pkg/channels/manager.go::sendWithRetry
+  verified: true
+facts:
+- fact: 'For a bound connector (the only kind that is routed) the reply is not the turn''s answer: it is a send_message reply_to tool call resolved through the request ledger. The plain answer never leaves
+    the main chat.'
+  ref: pkg/agent/loop_publish.go::publishResponseIfNeeded; connector_egress.go; address_router.go::Reply
+- fact: 'An unbound instance''s messages are dropped. All chats of a bound instance share one main chat and its context (accepted limitation #1206). The main chat identity comes from the workspace-and-agent
+    pair, so two agents in one workspace do not share one universal main chat.'
+  ref: pkg/routing/route.go::ResolveRoute; pkg/session/main_session.go::MainSessionID; connector_intake.go header A1-6
+- fact: Where the connector supports them, typing, reaction and placeholder are started on receive, before routing (best effort; audio defers the placeholder); the send worker only stops or edits them (preSend). What clears them for a dropped message was not traced.
+  ref: pkg/channels/base.go::HandleMessage; manager.go::preSend
+- fact: Telegram has BeginStream (needs streaming.enabled), but a connector-fed main turn skips streaming and unbound instances are dropped, so connector streaming is unreachable in the shipped routing.
+  ref: pkg/channels/telegram/telegram.go::BeginStream; pkg/agent/loop_run_turn_attempt.go:67
+- fact: The connector_intake.go header still describes per-chat sessions for unbound instances; that comment is stale, because ResolveRoute drops every unbound instance.
+  ref: pkg/agent/connector_intake.go header vs pkg/routing/route.go::ResolveRoute
+- fact: The model receives a server-built request envelope (request id, sender label, reply instruction); the transcript receives the raw text. The plain final answer is refused as a connector send once,
+    and the agent is prompted to reply to each sender with an explicit addressed send.
+  ref: pkg/agent/connector_intake.go::admitBoundConnectorInputCtx; pkg/agent/connector_egress.go::refuseMainConnectorDefaultSend
+source: release/v0.1.1 @ 6fbf4b43c

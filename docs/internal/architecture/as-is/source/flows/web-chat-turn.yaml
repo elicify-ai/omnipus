@@ -1,0 +1,285 @@
+id: web-chat-turn
+title: A message typed in the web chat becomes an answer
+summary: 'The browser sends one "message" frame over the chat WebSocket. The gateway, not the agent, checks who the chat belongs to, saves the user''s line to disk, and only then drops the message on the
+  in-memory message bus. The agent loop picks it up, hands it to the one worker that owns this conversation (so queued messages of one chat are taken one at a time through this worker), and runs the turn
+  engine: build the prompt, call the model, run tools, repeat. Every text fragment the model streams goes through a per-conversation "session hub" that numbers it, keeps it in memory and sends it over the
+  WebSocket the browser opened to every tab attached to that session; the gateway''s streamer writes the final answer to disk when the turn ends (narration the agent already saved during a tool round is
+  not saved twice). If the tab closes, the turn keeps running; a reopened tab catches up from the hub (or from disk after a restart). Code at 6fbf4b43c; all refs relative to the repo root.
+
+  '
+participants:
+- id: browser
+  label: Web app (browser tab)
+  kind: browser
+  ref: src/ (SPA)
+- id: ws
+  label: Gateway chat socket
+  kind: server
+  ref: pkg/gateway/websocket.go, websocket_chat.go
+- id: store
+  label: Session archive (disk)
+  kind: store
+  ref: pkg/session/unified*.go, archive_day_store.go
+- id: bus
+  label: Message bus (in memory)
+  kind: server
+  ref: pkg/bus/bus.go
+- id: loop
+  label: Agent loop + conversation worker
+  kind: worker
+  ref: pkg/agent/loop.go, session_worker.go
+- id: turn
+  label: Turn engine (runTurn)
+  kind: worker
+  ref: pkg/agent/loop.go::runTurn, loop_run_turn*.go
+- id: llm
+  label: Model provider (fallback chain)
+  kind: external
+  ref: pkg/providers/fallback.go
+- id: hub
+  label: Session hub + streamer (gateway)
+  kind: server
+  ref: pkg/gateway/ws_session_hub.go, websocket_streamer.go
+steps:
+- phase: 1 · Connect (once per tab)
+- from: browser
+  to: ws
+  label: open /api/v1/chat/ws
+  kind: call
+  ref: pkg/gateway/websocket.go::ServeHTTP
+  verified: true
+- over: ws
+  note: 'sign-in: session cookie first, legacy auth frame only if that can help; else close'
+  ref: pkg/gateway/websocket.go::authenticateWS
+  verified: true
+- from: ws
+  to: browser
+  label: server_capabilities, then session_state
+  kind: async
+  ref: pkg/gateway/websocket.go::ServeHTTP (sendConnGenFrame, emitSessionState)
+  verified: true
+- over: ws
+  note: 'starts 3 goroutines per tab: writePump, pingPump, eventForwarder; the read loop stays on the request goroutine'
+  ref: pkg/gateway/websocket.go::ServeHTTP
+  verified: true
+- phase: 2 · Intake (gateway decides and saves before the agent sees anything)
+- from: browser
+  to: ws
+  label: message {content, session_id?, agent_id, client_message_id, media}
+  kind: async
+  ref: pkg/gateway/websocket.go::handleMessageFrame
+  verified: true
+- over: ws
+  note: 'handled inline on the read loop: this tab reads no further frames until intake finishes'
+  ref: pkg/gateway/websocket.go::dispatchFrame -> websocket_chat.go::handleChatMessageWithOrigin
+  verified: true
+- over: ws
+  note: 'pick the agent: existing chat -> its stored owner (a different agent_id is refused); new chat -> agent_id must be named, registered, and not a worker'
+  ref: pkg/gateway/websocket_chat.go::resolveTargetAgent
+  verified: true
+- from: ws
+  to: store
+  label: 'new chat: create session (meta)'
+  kind: store
+  ref: pkg/gateway/websocket_chat.go::mintSession
+  verified: true
+- from: ws
+  to: browser
+  label: session_started (new chat only)
+  kind: async
+  ref: pkg/gateway/websocket_first_message.go
+  verified: true
+- from: ws
+  to: store
+  label: 'append user line + provenance (fails loudly: turn never starts)'
+  kind: store
+  ref: pkg/gateway/websocket_chat.go::persistUserMessage -> session.UnifiedStore.AppendTranscriptWithProvenance
+  verified: true
+- from: ws
+  to: hub
+  label: user_message echo, message_status=received
+  kind: async
+  ref: pkg/gateway/websocket_chat.go::publishUserMessage, sendMessageStatus
+  verified: true
+- from: ws
+  to: bus
+  label: PublishInbound {channel:webchat, session_id, metadata.agent_id} (the web-chat intake gives the bus a 5 s deadline; the bus itself has no fixed deadline)
+  kind: async
+  ref: pkg/gateway/websocket_chat.go::handleChatMessageWithOrigin; pkg/bus/bus.go::PublishInbound (buffer 64 for inbound; outbound text and media have their own channels)
+  verified: true
+- alt: bus still full when the web-chat 5 s deadline passes
+- from: ws
+  to: browser
+  label: 'error frame (first message: answer_not_started; the saved line stays)'
+  kind: return
+  ref: pkg/gateway/websocket_chat.go::handleChatMessageWithOrigin
+  verified: true
+- end: true
+- phase: 3 · Queue and admission (agent side)
+- from: bus
+  to: loop
+  label: AgentLoop.Run reads InboundChan (one goroutine for all channels)
+  kind: async
+  ref: pkg/agent/loop.go::Run
+  verified: true
+- over: loop
+  note: routes AGAIN to get a conversation scope key (resolveMessageRoute is called here and again in processMessage)
+  ref: pkg/agent/loop.go::admitAndDispatch -> loop_inbound.go::resolveSteeringTarget
+  verified: true
+- over: loop
+  note: 'existing worker for this conversation -> queue in its inbox (or steer into the live turn); else admission: max parallel agents (config performance) -> new worker goroutine'
+  ref: pkg/agent/session_worker.go::dispatchSessionWorker, enqueueOrRetry; loop_construct.go:139
+  verified: true
+- alt: at capacity
+- from: loop
+  to: bus
+  label: outbound 'I'm at capacity right now - please try again' (no queueing)
+  kind: async
+  ref: pkg/agent/session_worker.go::dispatchSessionWorker
+  verified: true
+- end: true
+- phase: 4 · The turn
+- from: loop
+  to: turn
+  label: processTurn -> processMessage -> runInboundTurnWithRevival -> runTurn
+  kind: call
+  ref: pkg/agent/session_worker.go::processTurn; loop_inbound_dispatch.go::processMessage; revive_inbound.go
+  verified: true
+- over: turn
+  note: 'prepare: resolve workspace + model, assemble the model window from disk, pick provider candidates'
+  ref: pkg/agent/loop_run_turn.go::prepareTurn, selectTurnProvider
+  verified: true
+- from: turn
+  to: hub
+  label: turn_started (via event bus sync tap)
+  kind: async
+  ref: pkg/gateway/websocket_forward_hub.go::hubSyncTap (EventKindTurnStart); ws_session_hub_live.go
+  verified: true
+- loop: repeat until the model answers without asking for tools
+- from: turn
+  to: llm
+  label: ChatStream(messages, tools) via FallbackChain.Execute
+  kind: call
+  ref: pkg/agent/loop_run_turn.go::callProviderOnce; loop_run_turn_attempt.go
+  verified: true
+- from: llm
+  to: hub
+  label: each text delta -> wsStreamer.Update -> token frame (numbered, journaled, sent to every tab attached to this session)
+  kind: async
+  ref: pkg/agent/loop_run_turn_attempt.go:164; pkg/gateway/websocket_streamer.go::Update
+  verified: true
+- alt: provider error
+- over: llm
+  note: 'the fallback chain classifies the error: an unknown or non-retriable error is returned at once; on an earlier candidate a rate-limit error may retry the same candidate (up to 3 calls) and other retriable errors go to the
+    next candidate at once (cooldowns skip bad ones); on the last candidate the chain can still try (for a single-model agent, that model) a separate retry plan applies: for network, overloaded (429/5xx), rate-limited or interrupted-stream
+    failures it makes up to 6 calls in total with waits of about 2, 5, 10, 20 and 40 s (the provider''s Retry-After replaces a step), subject to the streamed-text, cancellation and per-turn wait-budget guards; once visible text has streamed the chain stops; a user cancel means no fallback'
+  ref: pkg/providers/fallback.go::Execute
+  verified: true
+- end: true
+- over: turn
+  note: 'tool calls: policy check, maybe an approval card, run (often in the sandbox), screen result -> append to window (see tool-call flow)'
+  ref: pkg/agent/loop_run_turn_tools.go::executeToolCalls
+  verified: true
+- from: turn
+  to: hub
+  label: tool_call_start / tool_call_result frames
+  kind: async
+  ref: pkg/gateway/websocket_forward_hub.go::hubSyncTap (EventKindToolExecStart/End)
+  verified: true
+- from: turn
+  to: store
+  label: each model/tool message appended to the model window
+  kind: store
+  ref: pkg/agent/window_runtime.go::appendWindowMessage -> ContextWindowStore.AppendModelMessage
+  verified: true
+- end: true
+- phase: 5 · Finish
+- from: turn
+  to: store
+  label: final assistant message into model window
+  kind: store
+  ref: pkg/agent/loop_run_turn.go::finalizeTurn (appendFinalModelResponse)
+  verified: true
+- from: hub
+  to: store
+  label: 'streamer Finalize: assistant line into transcript (strict; failure -> visible save-failure notice)'
+  kind: store
+  ref: pkg/gateway/websocket_streamer.go::Finalize -> AppendTranscriptStrict
+  verified: true
+- from: hub
+  to: browser
+  label: done frame (turn stats, ids)
+  kind: async
+  ref: pkg/gateway/websocket_streamer.go::Finalize (DoneFrame)
+  verified: true
+- over: loop
+  note: worker idles, then retires and releases its admission slot
+  ref: pkg/agent/session_worker.go::retireIfIdle
+  verified: true
+stores:
+- what: session meta (owner agent, type)
+  where: $OMNIPUS_HOME/sessions/<id>/meta.json
+  when: new chat, at intake, before the bus
+  ref: pkg/gateway/websocket_chat.go::mintSession
+- what: user line + provenance
+  where: sessions/<id>/transcript.jsonl (today's file; earlier days roll to <YYYY-MM-DD>.jsonl)
+  when: at intake, before the bus
+  ref: pkg/gateway/websocket_chat.go::persistUserMessage; pkg/session/transcript_partition.go
+- what: model window (what the model is sent) + cursor
+  where: same day-partitioned archive; cursor in backend_meta.json
+  when: per model/tool message during the turn
+  ref: pkg/agent/window_runtime.go::appendWindowMessage; pkg/session/archive_backend.go:64
+- what: assistant line (what the user sees)
+  where: sessions/<id>/transcript.jsonl
+  when: at turn end, written by the gateway streamer (narration saved earlier during a tool round is recognised and not duplicated; text streamed but not yet saved is lost on a crash)
+  ref: pkg/gateway/websocket_streamer.go::Finalize
+- what: token / tool frames
+  where: 'memory only: per-session hub journal + active-turn projection'
+  when: live
+  ref: pkg/gateway/ws_session_hub.go (header)
+failures:
+- case: browser tab closes mid-turn
+  effect: turn keeps running; frames keep going into the hub journal; the reopened tab sends attach_session and gets the missing frames (incremental) or a snapshot (projection + transcript). A tab too far
+    behind is closed with code 4008 and reconnects.
+  ref: pkg/gateway/websocket.go::ServeHTTP (deferred cleanup cancels nothing); ws_session_hub.go; websocket_replay.go::handleAttachSession
+  verified: true
+- case: provider fails
+  effect: 'the chain classifies the error: unknown or non-retriable errors end the turn at once; on an earlier candidate rate-limit errors may retry the same candidate and other retriable errors move to the next candidate (cooldowns
+    can skip candidates); on the last candidate still available the retry plan makes up to 6 calls in total for eligible causes; text already streamed ends the chain; a user cancel stops it'
+  ref: pkg/providers/fallback.go::Execute
+  verified: true
+- case: gateway restarts mid-turn
+  effect: the in-memory bus queue, hub journal and partial streamed text are lost; the user line is already on disk; streamed text that was not yet saved is lost (Finalize did not run), while narration already saved during an earlier tool round remains. At boot an ordinary conversation
+    that was running gets a 'restart' Stop and the turn is not re-run (see Restart section); a new hub boot id forces every tab onto a snapshot from disk.
+  ref: pkg/bus/bus.go (Go channels); pkg/agent/boot_ordinary_recovery.go::recoverOrdinaryRoot; ws_session_hub.go::newHubBootID
+  verified: false
+  label: Inferred for the 'partial text lost' part
+- case: too many conversations at once
+  effect: refused with a chat reply, not queued
+  ref: pkg/agent/session_worker.go::dispatchSessionWorker
+  verified: true
+- case: transcript write fails at intake
+  effect: error frame; the turn never starts
+  ref: pkg/gateway/websocket_chat.go::persistUserMessage
+  verified: true
+facts:
+- fact: 'The agent is chosen in two packages: the gateway resolves and enforces the owner before saving, then the agent loop resolves again, twice (worker key, then the turn).'
+  ref: pkg/gateway/websocket_chat.go::resolveTargetAgent; pkg/agent/loop_inbound.go::resolveSteeringTarget; loop_inbound_dispatch.go
+- fact: 'finalizeTurn writes the model window only. The transcript the user sees is written by the gateway: the user line at intake (persistUserMessage), the answer by wsStreamer.Finalize. More than 20
+    files in pkg/agent also append transcript entries (notices, goals, cancel).'
+  ref: pkg/agent/loop_run_turn.go::finalizeTurn; pkg/gateway/websocket_streamer.go::Finalize; grep -l AppendTranscript pkg/agent/*.go
+- fact: A per-conversation hub numbers, journals and sends every frame once, to the tabs attached to that session. It is what makes reconnect and catch-up work, and it is in memory only. The browser opens
+    the HTTP and WebSocket connections; the server then pushes tokens, tool events and approval cards over the WebSocket that is already open.
+  ref: pkg/gateway/ws_session_hub.go::publishMeta, ::bind; websocket_forward_hub.go
+- fact: Admission counts conversation workers. At the cap a new conversation is refused with a chat reply, not queued. Messages for an existing conversation queue in that worker's inbox.
+  ref: pkg/agent/session_worker.go::dispatchSessionWorker
+- fact: Streaming reaches only the web chat in practice; bound connectors in a main chat never stream and never receive the plain answer (see flow 2).
+  ref: pkg/agent/loop_run_turn_attempt.go:67 (mainConnectorTurn guard); connector_egress.go
+- fact: The channel manager (pkg/channels) owns and binds the single HTTP server; the gateway registers routes on it.
+  ref: pkg/channels/manager.go:1283 (net.Listen), SetupHTTPServer manager.go:1004
+- fact: 'Two audiences: chat frames go only to connections bound to that session; tool-approval cards are sent to every connected web app (single-account model).'
+  ref: pkg/gateway/ws_session_hub.go::publishMeta; pkg/gateway/ws_tool_approval.go::broadcastToolApprovalRequired
+- fact: One worker per conversation serialises the ordinary queued path only. Scheduled runs, task runs and helper launches enter the agent through their own admission paths (see the scheduled-work and
+    delegation flows).
+  ref: pkg/agent/session_worker.go::enqueueOrRetry; pkg/agent/scheduled_execution_admission.go::runScheduledTurnWithAdmission
+source: release/v0.1.1 @ 6fbf4b43c

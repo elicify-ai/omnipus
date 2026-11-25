@@ -1,0 +1,196 @@
+id: calendar-task
+title: A repeating Calendar task runs, is judged, and shows up on the Calendar
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'The Calendar screen does not run tasks, but it is not read-only: it reads occurrences and it can reschedule a task (drag) through updateTask, which changes the task''s due date or trigger settings.
+  A server-side task-trigger scheduler (its own copy of the schedule engine) fires the occurrence, the task executor claims the task and starts a fresh conversation (a child of the assignee''s main chat
+  when it has one, otherwise an isolated one), and the agent works in ordinary turns until it calls goal_claim with evidence. The Judge then checks the claim, and only if the task is still in the state
+  it expects (a Stop may have won the race) is the task marked done and the run closed. The Calendar later shows the result by laying recorded runs over the expanded repeat rule.
+
+  '
+participants:
+- id: person
+  label: Person (Calendar screen)
+  kind: person
+- id: rest
+  label: Gateway task routes
+  kind: server
+  ref: pkg/gateway/rest_tasks.go
+- id: trig
+  label: Task-trigger scheduler (schedule engine copy)
+  kind: worker
+  ref: pkg/agent/task_trigger.go
+- id: exec
+  label: Task executor
+  kind: worker
+  ref: pkg/agent/task_executor.go
+- id: run
+  label: Task run loop
+  kind: worker
+  ref: pkg/agent/task_run_loop.go
+- id: turn
+  label: Agent turn engine
+  kind: server
+  ref: pkg/agent/loop.go
+- id: judge
+  label: Judge
+  kind: worker
+  ref: pkg/agent/judge.go
+- id: disk
+  label: Task, run and job files
+  kind: store
+steps:
+- phase: 1 · Set up (once)
+- from: person
+  to: rest
+  label: create task with a repeat rule
+  kind: call
+  ref: pkg/gateway/rest_tasks.go::handleTaskCreate
+- from: rest
+  to: disk
+  label: save task + its paired goal definition
+  kind: store
+  ref: pkg/gateway/rest_tasks.go::handleTaskCreate
+- over: rest
+  note: If the goal save fails after the task was saved, this is reported as a partial save, not as nothing created
+  ref: pkg/gateway/rest_tasks.go::handleTaskCreate
+- from: rest
+  to: trig
+  label: 'task upserted: (re)arm its job'
+  kind: async
+  ref: pkg/agent/task_trigger.go::OnTaskUpserted; task_trigger_reconcile.go::reconcileFresh
+- phase: 2 · The occurrence fires
+- from: trig
+  to: disk
+  label: due instant consumed, pending dispatch written to jobs.json
+  kind: store
+  ref: pkg/cron/service.go::RunDueJobs, dispatch
+- over: trig
+  note: Dispatch goroutine waits for a slot of THIS engine copy; not yet a model turn
+  ref: pkg/cron/service.go::executeJobByID
+- from: trig
+  to: trig
+  label: 're-read task; check occurrence against the saved rule; if the task is still running: record ''skipped'''
+  kind: self
+  ref: pkg/agent/task_trigger.go::runScheduledFire; task_trigger_reconcile.go::prepareFire, resetForFire
+- from: trig
+  to: exec
+  label: 'SpawnTriggeredRun (unattended: unresolved asks refused; no human wait)'
+  kind: call
+  ref: pkg/agent/task_executor.go::SpawnTriggeredRun
+- alt: drain, dependency not met or (non-MAIN run) no free slot
+- over: exec
+  note: Refused (ErrDispatchCapReached etc.; a MAIN-mode run is admitted by the launcher instead and does not use that slot limit); a repeating task re-arms its next occurrence, this one is not retried
+  ref: pkg/agent/task_executor.go::executeTask
+- end: true
+- from: exec
+  to: disk
+  label: 'atomic claim: task next -> in_progress; create + bind a fresh task conversation (child of the assignee''s main chat in MAIN mode, otherwise parentless isolated)'
+  kind: store
+  ref: pkg/task/claim.go::ClaimForRun; pkg/agent/task_executor.go::executeTask; pkg/agent/task_run_mode.go::deriveTaskRunMode
+- from: exec
+  to: run
+  label: start run goroutine
+  kind: async
+  ref: pkg/agent/task_executor_run.go::runTask
+- from: run
+  to: disk
+  label: open TaskRun record (conversation + occurrence)
+  kind: store
+  ref: pkg/agent/task_executor_run.go::openRun
+- phase: 3 · Work until a claim
+- loop: until goal_claim, or attempts used up
+- from: run
+  to: turn
+  label: processTaskDirect as the assignee (no message bus, no routing)
+  kind: call
+  ref: pkg/agent/task_executor.go::processTaskDirect
+- from: turn
+  to: run
+  label: turn result + recorded tool activity
+  kind: return
+  ref: pkg/agent/task_run_loop.go::finishRunTurn
+- over: run
+  note: Only a successful goal_claim tool call counts; prose saying 'done' does not
+  ref: pkg/agent/task_run_loop.go::resolveRunClaim
+- end: true
+- phase: 4 · Judge and close
+- from: run
+  to: judge
+  label: claim + evidence + the goal's criteria
+  kind: call
+  ref: pkg/agent/task_run_loop.go::adjudicateRunClaim -> judge.go::JudgeCriteria
+- over: judge
+  note: Machine checks first, then a transcript scan for behaviour criteria, then a model reads the prose criteria
+  ref: pkg/agent/judge.go::runDeterministicRungs; behavior_scan.go::runBehaviorScan
+- from: judge
+  to: run
+  label: met / not met / Judge unavailable
+  kind: return
+  ref: pkg/agent/judge.go::validateAndClassify
+- alt: met
+- from: exec
+  to: disk
+  label: write Judge line; task -> done ONLY if still in the expected state (a Stop can win)
+  kind: store
+  ref: pkg/agent/task_executor_judge.go::writeJudgeVerdictTranscript, completeTaskWithResult
+- from: exec
+  to: disk
+  label: end the paired goal; close the run record; notify
+  kind: store
+  ref: pkg/agent/task_executor_run.go::closeRun; pkg/task/run_store.go::CloseRun
+- else: 'not met: try again while the attempt budget lasts (configurable total number of runs; default 3; fresh conversation each); unavailable: retry, then fail as ''not verified'''
+- end: true
+- phase: 5 · The Calendar shows it
+- from: person
+  to: rest
+  label: GET occurrences for the visible range
+  kind: call
+  ref: src/lib/calendar/useOccurrences.ts::fetchTaskOccurrences; pkg/gateway/rest_tasks.go::HandleTaskOccurrences
+- from: rest
+  to: disk
+  label: expand repeat rules; overlay recorded runs by exact occurrence time (latest run wins)
+  kind: store
+  ref: pkg/gateway/task_occurrences.go::buildOneOccurrenceSet, populateRunOverlay, latestRunPerOccurrence
+- from: rest
+  to: person
+  label: occurrence sets (validated by the browser before display)
+  kind: return
+  ref: src/lib/calendar/useOccurrences.ts
+- from: person
+  to: rest
+  label: 'drag an occurrence to reschedule: updateTask changes the due date or trigger configuration (the screen patches its cache first)'
+  kind: call
+  ref: src/components/screens/CalendarScreen.tsx::persistReschedule, ::patchCacheDate
+  verified: true
+stores:
+- what: Task record
+  where: ~/.omnipus/tasks/<id>.json
+  when: create, claim, terminal state
+  ref: pkg/task/store.go
+- what: Run history
+  where: ~/.omnipus/tasks/<id>/runs/<day>.jsonl
+  when: run open, run close, skipped/missed
+  ref: pkg/task/run_store.go
+- what: Trigger job
+  where: ~/.omnipus/tasks_triggers/jobs.json
+  when: task change and every fire
+  ref: pkg/gateway/gateway_boot.go::prepareTaskTrigger
+failures:
+- case: Task still running when the next occurrence is due
+  effect: Occurrence recorded as skipped; the running task is not overwritten
+  ref: pkg/agent/task_trigger_reconcile.go::prepareFire
+- case: Stop arrives while the Judge is deciding
+  effect: The conditional state write fails; the late success does not overwrite the Stop
+  ref: pkg/agent/task_executor_judge.go::completeTaskWithResult
+- case: A write fails after the task is marked done
+  effect: Each record is written separately (no shared transaction); errors are handled per record, so task and run history can diverge
+  ref: pkg/agent/task_executor_judge.go::completeTaskWithResult; task_executor_run.go::closeRun
+- case: Run history cannot be read while the Calendar builds occurrences
+  effect: The error is logged and that task's occurrences appear without their run overlay; this is not proof that no run happened
+  ref: pkg/gateway/task_occurrences.go::populateRunOverlay
+facts:
+- fact: 'The Calendar screen is a read and write control surface: it reads occurrences and can reschedule a task through updateTask. Execution is server-owned: a server-side task-trigger scheduler fires
+    occurrences whether or not anyone has the screen open.'
+  ref: src/components/screens/CalendarScreen.tsx::persistReschedule; pkg/agent/task_trigger.go::RunScheduled; pkg/gateway/task_occurrences.go
+- fact: Behaviour criteria are a scan of the recorded transcript, not shell commands.
+  ref: pkg/agent/judge.go::runDeterministicRungs; behavior_scan.go::runBehaviorScan
