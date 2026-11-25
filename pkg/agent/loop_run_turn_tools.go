@@ -87,6 +87,10 @@ type asyncToolCallbackGate struct {
 	ready   bool
 	pending *tools.ToolResult
 	handle  func(*tools.ToolResult)
+	// loop, when set, admits a completion that arrives after the turn as an
+	// active request, so Close drains its transcript and bus writes before the
+	// stores are torn down, and refuses one that arrives after intake closed.
+	loop *AgentLoop
 }
 
 func (g *asyncToolCallbackGate) callback(result *tools.ToolResult) {
@@ -97,6 +101,17 @@ func (g *asyncToolCallbackGate) callback(result *tools.ToolResult) {
 		return
 	}
 	g.mu.Unlock()
+	// The background tool's own goroutine runs this, outside any turn: without
+	// the admission a completion (for example a killed background job) kept
+	// writing the session transcript after Close returned.
+	if g.loop != nil {
+		if !g.loop.beginActiveRequest() {
+			logger.WarnCF("agent", "Async tool completion dropped: the agent loop is shutting down",
+				map[string]any{"is_error": result != nil && result.IsError})
+			return
+		}
+		defer g.loop.endActiveRequest()
+	}
 	g.handle(result)
 }
 
@@ -1194,6 +1209,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		handle: func(result *tools.ToolResult) {
 			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
 		},
+		loop: ex.rx.rr.rq.ri.rf.rt.al,
 	}
 	ex.asyncCallbackGate = gate
 	ex.asyncCallback = func(_ context.Context, result *tools.ToolResult) {
