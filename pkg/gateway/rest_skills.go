@@ -49,6 +49,8 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 		a.handleInstallReview(w, r, strings.TrimPrefix(sub, "install/review/"))
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/trust-approval") && strings.Count(sub, "/") == 1:
 		a.approveSkillVersion(w, r, strings.TrimSuffix(sub, "/trust-approval"))
+	case r.Method == http.MethodPut && strings.HasSuffix(sub, "/category") && strings.Count(sub, "/") == 1:
+		a.setSkillCategory(w, r, strings.TrimSuffix(sub, "/category"))
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/copy") && strings.Count(sub, "/") == 1:
 		a.HandleSkillCopy(w, r)
 	case r.Method == http.MethodDelete && sub != "":
@@ -59,14 +61,16 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) listSkills(w http.ResponseWriter) {
+	jsonOK(w, a.skillInventory())
+}
+
+// skillInventory is the GET /skills listing: every installed skill with its
+// wire fields.
+func (a *restAPI) skillInventory() []gen.Skill {
 	// Per-skill metadata (name, source, description, author, version) sourced from
 	// the default agent's skills loader — the single source of truth for installed
 	// skills (same loader that feeds GetStartupInfo's aggregate summary).
 	detailed := a.agentLoop.ListSkillsDetailed()
-	if len(detailed) == 0 {
-		jsonOK(w, []gen.Skill{})
-		return
-	}
 	result := make([]gen.Skill, 0, len(detailed))
 	for _, s := range detailed {
 		// The skill's stable identifier is its slug (ID = directory name). The
@@ -178,7 +182,7 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 
 		result = append(result, skill)
 	}
-	jsonOK(w, result)
+	return result
 }
 
 // skillSourceToWire maps a skills-loader source string onto the generated
