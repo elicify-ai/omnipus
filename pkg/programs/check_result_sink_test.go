@@ -60,6 +60,44 @@ func TestFinish_PublishedResultWritesOneEvent(t *testing.T) {
 	}
 }
 
+// ruling-check-delta.md item 5: "replaced" is never a check_result reason.
+// Two ways a replaced check can end: through supersedeLocked (the real path:
+// it writes the superseded row and the late result is discarded), and, as a
+// guard, a replaced result arriving on a reservation that is still current.
+// Neither may write a check_result event.
+func TestFinish_ReplacedCheckNeverWritesACheckResult(t *testing.T) {
+	s, got := newResultSinkService(t)
+	var superseded []string
+	s.superseded = func(id string, _ int64) { superseded = append(superseded, id) }
+
+	// Real path: supersede, then the cancelled run finishes with replaced.
+	r := &reservation{id: 1, generation: 3, revision: 2, cancel: func() {}}
+	s.conns["github"] = Connection{State: StateChecking, Generation: 3, CheckRevision: 2}
+	s.checks["github"] = r
+	s.mu.Lock()
+	s.supersedeLocked("github")
+	s.mu.Unlock()
+	s.finish("github", r, replacedCheckResult)
+	if len(superseded) != 1 {
+		t.Fatalf("want exactly one superseded row, got %v", superseded)
+	}
+
+	// Guard: a replaced result on a still-current reservation.
+	r2 := &reservation{id: 2, generation: 4, revision: 1, cancel: func() {}}
+	s.conns["gitlab"] = Connection{State: StateChecking, Generation: 4, CheckRevision: 1}
+	s.checks["gitlab"] = r2
+	s.finish("gitlab", r2, replacedCheckResult)
+
+	for _, ev := range *got {
+		if ev.Reason == CheckReasonReplaced {
+			t.Fatalf("a check_result event carries the reason %q: %+v", CheckReasonReplaced, ev)
+		}
+	}
+	if len(*got) != 0 {
+		t.Fatalf("a replaced check must write no check_result event, got %+v", *got)
+	}
+}
+
 func TestFinish_SupersededOrStaleCheckWritesNoResult(t *testing.T) {
 	s, got := newResultSinkService(t)
 	old := &reservation{id: 1, generation: 1, revision: 1, cancel: func() {}}

@@ -109,7 +109,7 @@ func TestGitGuardPushRulesV2_AllowedControls(t *testing.T) {
 		`git -C ` + l.mount + ` push origin HEAD`,
 		`git push https://github.com/org/repo.git HEAD:refs/heads/s20`,
 		`git log --oneline -n 3 && git diff --stat`,
-		// --ex outside a push segment is not an override.
+		// --ex with no push or send-pack anywhere is not an override.
 		`git log --exit-code; git status`,
 	} {
 		if d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount); !d.Allowed {
@@ -161,6 +161,55 @@ func TestGitGuardPushRulesV2_PinFileWritersRefused(t *testing.T) {
 	} {
 		if d := l.g.InspectExec(argv, l.mount); !d.Allowed {
 			t.Errorf("%q must stay allowed, got %s (%s)", argv, d.Reason, d.PolicyRule)
+		}
+	}
+}
+
+// CHECK delta "git as an argument": Rule A's scope counts git as a word
+// anywhere, not only in command position (the wider scope the chief accepted
+// after the re-review). This row pins today's answer: a non-git command whose
+// arguments hold the word git and a marker IS refused by Rule A, and the same
+// command without the word git is not.
+func TestGitGuardPushRulesV2_GitAsAnArgumentIsInRuleAScope(t *testing.T) {
+	l := newPushRuleLayout(t)
+	d := l.g.InspectExec([]string{"bash", "-c", "echo git receive-pack"}, l.mount)
+	if d.Allowed || !strings.Contains(d.PolicyRule, h55v2Override) {
+		t.Fatalf("echo git receive-pack: want refused by Rule A (wide git-word scope), got allowed=%t rule=%q", d.Allowed, d.PolicyRule)
+	}
+	if d := l.g.InspectExec([]string{"bash", "-c", "echo receive-pack"}, l.mount); !d.Allowed {
+		t.Fatalf("echo receive-pack (no git word): want allowed, got %s", d.PolicyRule)
+	}
+}
+
+// ruling-check-delta.md item 1: --ex is an override whenever push or
+// send-pack appears anywhere in the script, with no segment condition. A
+// quoted ; would otherwise split one real push after quote deletion.
+func TestGitGuardPushRulesV2_ExNeedsPushAnywhere(t *testing.T) {
+	l := newPushRuleLayout(t)
+	for _, script := range []string{
+		`git push -o 'a;b' --ex=x ev HEAD:master`,   // quoted-; bypass of the old segment rule
+		`git push -o "a&&b" --exe x ev HEAD:master`, // same with a quoted &&
+		`git push -o 'a|b' --ex=x ev`,               // same with a quoted |
+		`git push origin main; grep --exclude=x .`,  // accepted over-refusal (pinned)
+		`git log --exit-code && git send-pack ev master`,
+		`xargs git push --rece=x`,
+	} {
+		d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount)
+		if d.Allowed || !strings.Contains(d.PolicyRule, h55v2Override) {
+			t.Errorf("%q must be refused by Rule A, got allowed=%t rule=%q", script, d.Allowed, d.PolicyRule)
+		}
+	}
+	d := l.g.InspectExec([]string{"bash", "-c", `git push origin main; grep --exclude=x .`}, l.mount)
+	if !strings.Contains(d.Reason, "'--exclude'") {
+		t.Errorf("the over-refusal must name the marker so it is visible, got %q", d.Reason)
+	}
+	for _, script := range []string{
+		`git log --exit-code; git status`,
+		`grep --exclude=x -rn pushd .`,
+		`git diff --exit-code HEAD`,
+	} {
+		if d := l.g.InspectExec([]string{"bash", "-c", script}, l.mount); !d.Allowed {
+			t.Errorf("%q has no push or send-pack word and must stay allowed, got %s (%s)", script, d.Reason, d.PolicyRule)
 		}
 	}
 }

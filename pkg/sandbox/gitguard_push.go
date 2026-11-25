@@ -14,8 +14,9 @@ package sandbox
 //     git word (F4). The text is lower-cased, blank runs collapsed and every
 //     ' " and \ deleted (quote splitting, F2), then refused when it holds
 //     receive-pack or receivepack, a word starting with --rece (git's
-//     abbreviations of --receive-pack), a word starting with --ex in a segment
-//     with push or send-pack (abbreviations of --exec), a receive.* setting via
+//     abbreviations of --receive-pack), a word starting with --ex when the
+//     text anywhere holds the word push or send-pack (abbreviations of --exec;
+//     no segment condition, ruling-check-delta.md item 1), a receive.* setting via
 //     -c or --config-env, or the GIT_CONFIG_PARAMETERS/COUNT/KEY_ markers.
 //   - Rule B, the push target. A push or send-pack whose remote operand (or a
 //     --repo value, any abbreviation from --rep) is a path inside a protected
@@ -69,11 +70,13 @@ func h55Normalise(text string) string {
 // h55SegmentSeparators split a normalised script into command segments.
 const h55SegmentSeparators = ";&|()`\n\r"
 
-// h55Words splits a segment into words on blanks and "=", so
-// "alias.p=push" yields "push" and "--rece=x" yields "--rece".
-func h55Words(segment string) []string {
-	return strings.FieldsFunc(segment, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '='
+// h55Words splits normalised text into words on blanks, "=" and the ratified
+// separators (; & | ( ) backtick LF CR), so "alias.p=push" yields "push" and
+// "--rece=x" yields "--rece". More splitting only makes more words; it never
+// hides a marker.
+func h55Words(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '=' || strings.ContainsRune(h55SegmentSeparators, r)
 	})
 }
 
@@ -112,21 +115,22 @@ func h55OverrideMarker(norm string) (string, bool) {
 	if h55ReceiveSettingFlag.MatchString(norm) {
 		return "-c receive.*", true
 	}
-	for _, segment := range strings.FieldsFunc(norm, func(r rune) bool { return strings.ContainsRune(h55SegmentSeparators, r) }) {
-		words := h55Words(segment)
-		pushing := false
-		for _, w := range words {
-			if w == "push" || w == "send-pack" {
-				pushing = true
-			}
+	// The --ex marker needs push or send-pack anywhere in the text, not in the
+	// same segment: segments are cut after quotes are deleted, so a quoted ;
+	// would split one real command (ruling-check-delta.md item 1).
+	words := h55Words(norm)
+	pushing := false
+	for _, w := range words {
+		if w == "push" || w == "send-pack" {
+			pushing = true
 		}
-		for _, w := range words {
-			if strings.HasPrefix(w, "--rece") {
-				return w, true
-			}
-			if pushing && strings.HasPrefix(w, "--ex") {
-				return w, true
-			}
+	}
+	for _, w := range words {
+		if strings.HasPrefix(w, "--rece") {
+			return w, true
+		}
+		if pushing && strings.HasPrefix(w, "--ex") {
+			return w, true
 		}
 	}
 	return "", false

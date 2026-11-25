@@ -466,7 +466,12 @@ func (s *Service) finish(id string, r *reservation, res checkResult) {
 	c.CheckedAt = time.Now().UTC()
 	s.conns[id] = c
 	s.persistLocked()
-	if s.result != nil {
+	// A replaced check writes only its program.check_superseded row, never a
+	// check_result row: "replaced" is not a check_result reason class
+	// (ruling-check-delta.md item 5). Today a replaced result cannot reach this
+	// point (supersedeLocked removes the reservation before it cancels), so
+	// this is the guard that keeps it so.
+	if s.result != nil && res.reason != CheckReasonReplaced {
 		s.result(CheckResultEvent{
 			ProgramID: id, Generation: c.Generation, CheckRevision: c.CheckRevision,
 			Outcome: checkOutcome(res), Reason: res.reason,

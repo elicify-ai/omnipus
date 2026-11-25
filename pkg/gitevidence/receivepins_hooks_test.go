@@ -8,7 +8,6 @@ package gitevidence
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -16,11 +15,15 @@ import (
 // that folder as the global core.hooksPath, and returns the marker file each
 // hook touches. Each hook also tries to create refs/heads/hooked in the
 // receiving repository.
+//
+// The hooks are "#!/bin/sh" scripts on every platform: git runs a hook through
+// the shell it ships with (Git for Windows runs them with its bundled sh), so
+// the same instrument works on Linux, macOS and Windows. The marker path is
+// written with forward slashes, which that sh reads on Windows too. There is
+// no platform skip: if a platform's git cannot run these hooks, the control
+// row below fails loudly instead of the evidence row passing unseen.
 func (f pushFixture) globalHooks(t *testing.T) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("shell hooks need a POSIX sh; the pin itself is checked by assertPins on every platform")
-	}
 	hooks := filepath.Join(t.TempDir(), "hk")
 	if err := os.MkdirAll(hooks, 0o700); err != nil {
 		t.Fatal(err)
@@ -28,7 +31,7 @@ func (f pushFixture) globalHooks(t *testing.T) string {
 	marker := filepath.Join(t.TempDir(), "hook-ran")
 	// Every receive-side hook leaves a marker; only post-receive also writes a
 	// ref (a ref write from reference-transaction would re-enter that hook).
-	note := "#!/bin/sh\ncat >/dev/null 2>&1\necho \"$0\" >> '" + marker + "'\n"
+	note := "#!/bin/sh\ncat >/dev/null 2>&1\necho \"$0\" >> '" + filepath.ToSlash(marker) + "'\n"
 	for name, body := range map[string]string{
 		"pre-receive":           note + "exit 0\n",
 		"update":                note + "exit 0\n",
