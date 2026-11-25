@@ -59,16 +59,48 @@ const STAY_RESTORE_WAIT_MS = 300
 
 /**
  * After Stay, will the history's own restore bring the address back? The
- * router's history undoes a blocked move by going one entry forward. That
- * fits a Back onto an older entry; for an address typed or pasted into the
- * bar (the newest entry, nothing ahead of it) it does nothing. Undefined when
- * the browser cannot say (no Navigation API).
+ * router's history undoes a blocked move by stepping the same count the other
+ * way (`history.go(-delta)`). That fits a Back onto an older entry; for an
+ * address typed or pasted into the bar (the newest entry, nothing ahead of
+ * it) it does nothing. Undefined when the browser cannot say (no Navigation
+ * API).
  */
 function restoreWillMove(): boolean | undefined {
   const nav: unknown = Reflect.get(window, 'navigation')
   if (nav === null || typeof nav !== 'object' || !('canGoForward' in nav)) return undefined
   const canGoForward: unknown = Reflect.get(nav, 'canGoForward')
   return typeof canGoForward === 'boolean' ? canGoForward : undefined
+}
+
+/**
+ * U5-1: the router's history counts the step to undo from its own index in
+ * each entry's state. Entries typed or pasted into the address bar carry no
+ * router state, so two of them both read as index 0 and the undo becomes
+ * `history.go(0)`: a reload, followed by the browser's own leave question.
+ * For this one undo only, a step of 0 becomes one step forward, back to the
+ * entry the move left. The Stay path still checks the address afterwards.
+ */
+function guardZeroStepUndo(): void {
+  const history = window.history
+  const own = Object.getOwnPropertyDescriptor(history, 'go')
+  const original = history.go
+  let restored = false
+  const restore = () => {
+    if (restored) return
+    restored = true
+    if (own) Object.defineProperty(history, 'go', own)
+    else Reflect.deleteProperty(history, 'go')
+  }
+  Object.defineProperty(history, 'go', {
+    configurable: true,
+    writable: true,
+    value: (delta?: number) => {
+      restore()
+      original.call(history, delta === undefined || delta === 0 ? 1 : delta)
+    },
+  })
+  // The undo runs in the same task as Stay; never leave the guard behind.
+  setTimeout(restore, STAY_RESTORE_WAIT_MS)
 }
 
 export function SettingsScreen({
@@ -561,6 +593,9 @@ export function SettingsScreen({
               const blockedHref = window.location.href
               const homeHref = settledHref.current
               const willMove = restoreWillMove()
+              // A move between two entries without router state is a GO of
+              // 0; its undo must not reload the page (U5-1).
+              if (blocker.action === 'GO') guardZeroStepUndo()
               blocker.reset()
               navIntent.current = null
               const back = stayFocus.current
