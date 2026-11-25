@@ -94,10 +94,12 @@ type pipeFault struct {
 var pipeFaultHook atomic.Pointer[pipeFault]
 
 // SetBackgroundPipeReadFault registers fn on the read end of every background
-// command's stdout and stderr pipe (tools.ExecTool.runBackground), for
-// pipes created while it is registered. After every read that returned bytes,
-// fn is called with the session id, the stream ("stdout" or "stderr") and the
-// total bytes read so far on that stream. A non-nil error is a read fault: the
+// command's output pipe (tools.ExecTool.runBackground), for pipes created
+// while it is registered. A background child's stdout and stderr share ONE
+// merged pipe (so the child's write order is kept), which carries the stream
+// label "stdout". After every read that returned bytes, fn is called with the
+// session id, that stream label and the total bytes read so far on the pipe.
+// A non-nil error is a read fault: the
 // bytes of that read are still delivered, the read returns the error (so the
 // product's read loop sees a non-EOF error), and the pipe's read end is closed
 // with that error, so the child's further writes fail instead of blocking.

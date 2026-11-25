@@ -105,17 +105,20 @@ func (t *ExecTool) runBackground(
 		}
 	}
 
-	// The child writes into in-process pipes whose read ends feed
-	// appendOutput. programs.Attach (I-1) wraps the write ends in the masking
-	// writers, so a program token is masked before the bytes reach the
-	// session buffer, a draining read, JSON encoding or the cap. The write
-	// ends are closed once cmd.Wait has drained the child's output.
-	stdoutReader, stdoutWriter := io.Pipe()
-	stderrReader, stderrWriter := io.Pipe()
-	cmd.Stdout, cmd.Stderr = stdoutWriter, stderrWriter
+	// The child writes into ONE in-process pipe whose read end feeds
+	// appendOutput: the session output is a single merged buffer, and giving
+	// os/exec the same writer for Stdout and Stderr makes the child share one
+	// descriptor, so its bytes arrive in exactly the order it wrote them.
+	// programs.Attach (I-1) wraps that writer in one masking writer (its
+	// same-stream rule), so a program token is masked before the bytes reach
+	// the session buffer, a draining read, JSON encoding or the cap. Two pipes
+	// with a masking writer each could splice the other stream into a line
+	// the masking writer was still holding (≤ 7 bytes), garbling the output.
+	// The write end is closed once cmd.Wait has drained the child's output.
+	outputReader, outputWriter := io.Pipe()
+	cmd.Stdout, cmd.Stderr = outputWriter, outputWriter
 	closePipes := func() {
-		_ = stdoutWriter.Close() // io.PipeWriter.Close always returns nil
-		_ = stderrWriter.Close()
+		_ = outputWriter.Close() // io.PipeWriter.Close always returns nil
 	}
 	if err := programs.Attach(cmd, set); err != nil {
 		closePipes()
@@ -167,16 +170,13 @@ func (t *ExecTool) runBackground(
 	}
 
 	var pipeWG sync.WaitGroup
-	pipeWG.Add(2)
+	pipeWG.Add(1)
 	// testseam.BackgroundPipeReader returns the pipe unchanged outside the
-	// s1seams test build (#1960 S1, seam H45).
+	// s1seams test build (#1960 S1, seam H45). The one merged pipe carries
+	// the seam's "stdout" label (stdout and stderr both flow through it).
 	go func() {
 		defer pipeWG.Done()
-		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stdout", stdoutReader))
-	}()
-	go func() {
-		defer pipeWG.Done()
-		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stderr", stderrReader))
+		pipeReadFn(testseam.BackgroundPipeReader(sessionID, "stdout", outputReader))
 	}()
 
 	// naturalCompletionCh is closed by the completion goroutine below the
