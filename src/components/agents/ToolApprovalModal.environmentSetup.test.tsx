@@ -86,7 +86,7 @@ interface FixtureApproval {
 // tool (C-26 point 9): its card lists Approve Once, Deny and Cancel and no time
 // choice. Both fixtures carry what the server sends for it, so neither test
 // depends on a rule the client would apply when a list is missing.
-const EXACT_ACTION_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+const EXACT_ACTION_TOOL_ANSWERS: Required<Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'>> = {
   offeredActions: ['allow_once', 'deny', 'cancel'],
   allowDurations: [],
 }

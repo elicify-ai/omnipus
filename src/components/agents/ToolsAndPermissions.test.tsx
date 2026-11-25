@@ -1057,7 +1057,9 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
     const firstCallCfg = vi.mocked(api.updateAgentTools).mock.calls[0][1]
     expect(firstCallCfg).toMatchObject({ revision: TOOLS_REVISION })
-    expect(firstCallCfg.config.builtin?.policies).toEqual({ read_file: 'ask' })
+    // `config` is optional in AgentToolsUpdateRequest; a body without it fails
+    // this equality (undefined is not the map), so the chain adds no leniency.
+    expect(firstCallCfg.config?.builtin?.policies).toEqual({ read_file: 'ask' })
 
     // Edit B while A is in-flight: read_file → Deny.
     // Does NOT call updateAgentTools yet — the debounce resets.
@@ -1095,7 +1097,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // The map is exactly those two rows: the overrides stay sparse.
     const secondCallCfg = vi.mocked(api.updateAgentTools).mock.calls[1][1]
     expect(secondCallCfg).toMatchObject({ revision: '2'.repeat(64) })
-    expect(secondCallCfg.config.builtin?.policies).toEqual({ read_file: 'deny', write_file: 'ask' })
+    expect(secondCallCfg.config?.builtin?.policies).toEqual({ read_file: 'deny', write_file: 'ask' })
     // Order is not part of the contract; both edited rows are the agent's own.
     expect([...secondCallCfg.override_names].sort()).toEqual(['read_file', 'write_file'])
 
