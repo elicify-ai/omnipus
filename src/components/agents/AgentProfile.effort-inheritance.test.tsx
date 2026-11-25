@@ -9,7 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import { mockCoreAgent } from './agentProfileTestFixtures'
-import { fetchAgent, fetchConfig, fetchProviders, fetchProvidersCatalog, fetchSkills, fetchPerformanceSettings, updateAgent } from '@/lib/api'
+import { fetchAgent, fetchConfig, fetchProviders, fetchProvidersCatalog, fetchSkills, fetchPerformanceSettings, fetchPrograms, updateAgent } from '@/lib/api'
 import type { Agent, Config, Provider, ProvidersCatalog } from '@/lib/api'
 
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
@@ -17,7 +17,7 @@ if (!globalThis.ResizeObserver) vi.stubGlobal('ResizeObserver', ResizeObserverSt
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = function () {}
 if (!Element.prototype.hasPointerCapture) Element.prototype.hasPointerCapture = () => false
 vi.mock('@tanstack/react-router', async importOriginal => ({ ...await importOriginal<typeof import('@tanstack/react-router')>(), useNavigate: () => vi.fn(), useParams: () => ({}) }))
-vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), fetchAgent: vi.fn(), fetchConfig: vi.fn(), fetchProviders: vi.fn(), fetchProvidersCatalog: vi.fn(), fetchSkills: vi.fn(), fetchPerformanceSettings: vi.fn(), updateAgent: vi.fn() }))
+vi.mock('@/lib/api', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/api')>(), fetchAgent: vi.fn(), fetchConfig: vi.fn(), fetchProviders: vi.fn(), fetchProvidersCatalog: vi.fn(), fetchSkills: vi.fn(), fetchPerformanceSettings: vi.fn(), fetchPrograms: vi.fn(), updateAgent: vi.fn() }))
 
 const oldModel = 'deepseek/deepseek-v4.1-flash'
 const target = 'openai/gpt-6.1-sol'
@@ -45,6 +45,8 @@ beforeEach(() => {
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([{ id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: [oldModel, target, muted], auth_method: 'api_key', dependents: [], backs_default: true }] as Provider[])
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchPerformanceSettings).mockReset().mockResolvedValue({ max_tool_iterations: 20 } as never)
+  // GET /programs is an HTTP edge of the profile's Programs section (cli-credentials S1).
+  vi.mocked(fetchPrograms).mockReset().mockResolvedValue({ entries: [], web_chat_allowed: false, revision: '0'.repeat(64) })
   vi.mocked(updateAgent).mockReset().mockImplementation(async (_id, body) => {
     acknowledgedAt += 1000
     acknowledgedAgent = { ...acknowledgedAgent, ...body, updated_at: new Date(acknowledgedAt).toISOString() } as Agent

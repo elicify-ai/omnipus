@@ -445,7 +445,14 @@ function ProgramCardResult({ request }: { request: SessionStateSecretRequest }) 
   return (
     <span data-testid="secret-request-program-result">
       <span className="font-medium text-[color:var(--color-success)]">{text}</span>
-      {detail && <span className="text-[var(--color-muted)]"> · {detail}</span>}
+      {/* The check result is its own element (S-54, S-140): the card shows the
+          result text itself, the separator is only decoration. */}
+      {detail && (
+        <span className="text-[var(--color-muted)]">
+          <span aria-hidden="true"> · </span>
+          <span>{detail}</span>
+        </span>
+      )}
     </span>
   )
 }

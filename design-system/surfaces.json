@@ -6426,6 +6426,278 @@
         "type": "activation",
         "path": "src/components/chat/AddParticipant.tsx#overlay:1"
       }
+    },
+    {
+      "id": "src/components/screens/SettingsScreen.tsx#tab:programs",
+      "kind": "tab",
+      "source": "src/components/screens/SettingsScreen.tsx",
+      "symbol": "tab:programs",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-programs:unit",
+          "file": "tests/design-system/surfaces/src-components-screens-settingsscreen-tsx-tab-programs.test.tsx",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:programs surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-programs:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:programs surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-programs:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:programs surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/settings?tab=programs"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDisconnectDialog",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramConfirmDialogs.tsx",
+      "symbol": "ProgramDisconnectDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdisconnectdialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programconfirmdialogs-tsx-programdisconnectdialog.test.tsx",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDisconnectDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdisconnectdialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDisconnectDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdisconnectdialog:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDisconnectDialog surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDisconnectDialog"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDeleteDialog",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramConfirmDialogs.tsx",
+      "symbol": "ProgramDeleteDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdeletedialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programconfirmdialogs-tsx-programdeletedialog.test.tsx",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDeleteDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdeletedialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDeleteDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-programdeletedialog:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDeleteDialog surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramConfirmDialogs.tsx#ProgramDeleteDialog"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramConfirmDialogs.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramConfirmDialogs.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-overlay-1:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programconfirmdialogs-tsx-overlay-1.test.tsx",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#overlay:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-overlay-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#overlay:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programconfirmdialogs-tsx-overlay-1:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramConfirmDialogs.tsx#overlay:1 surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramConfirmDialogs.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramCustomDialog.tsx#ProgramCustomDialog",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramCustomDialog.tsx",
+      "symbol": "ProgramCustomDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-programcustomdialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programcustomdialog-tsx-programcustomdialog.test.tsx",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#ProgramCustomDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-programcustomdialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#ProgramCustomDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-programcustomdialog:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#ProgramCustomDialog surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramCustomDialog.tsx#ProgramCustomDialog"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramCustomDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramCustomDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-overlay-1:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programcustomdialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#overlay:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-overlay-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programcustomdialog-tsx-overlay-1:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramCustomDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramCustomDialog.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramPasteDialog.tsx#ProgramPasteDialog",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramPasteDialog.tsx",
+      "symbol": "ProgramPasteDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-programpastedialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programpastedialog-tsx-programpastedialog.test.tsx",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#ProgramPasteDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-programpastedialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#ProgramPasteDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-programpastedialog:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#ProgramPasteDialog surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramPasteDialog.tsx#ProgramPasteDialog"
+      }
+    },
+    {
+      "id": "src/components/settings/ProgramPasteDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/settings/ProgramPasteDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-overlay-1:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-programpastedialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#overlay:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-overlay-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-programpastedialog-tsx-overlay-1:interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/ProgramPasteDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned",
+          "kind": "interaction"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/ProgramPasteDialog.tsx#overlay:1"
+      }
     }
   ],
   "sourceOwners": [
@@ -8431,6 +8703,30 @@
     {
       "source": "src/components/library/openLibraryAt.ts",
       "lane": 4
+    },
+    {
+      "source": "src/components/agents/AgentProgramsSection.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/ChannelProgramsSection.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/settings/ProgramConfirmDialogs.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/ProgramCustomDialog.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/ProgramPasteDialog.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/ProgramsSection.tsx",
+      "lane": 6
     }
   ]
 }

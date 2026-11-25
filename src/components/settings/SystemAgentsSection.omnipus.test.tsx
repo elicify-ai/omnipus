@@ -20,8 +20,9 @@ vi.mock('@/lib/api', async (original) => ({
   ...await original<typeof import('@/lib/api')>(),
   fetchAgents: vi.fn(), fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchProviders: vi.fn(),
   fetchActivity: vi.fn(), fetchSkills: vi.fn(), fetchAboutInfo: vi.fn(), fetchPerformanceSettings: vi.fn(),
+  fetchPrograms: vi.fn(),
 }))
-import { fetchAgents, fetchAgent, updateAgent, fetchProviders, fetchActivity, fetchSkills, fetchAboutInfo, fetchPerformanceSettings } from '@/lib/api'
+import { fetchAgents, fetchAgent, updateAgent, fetchProviders, fetchActivity, fetchSkills, fetchAboutInfo, fetchPerformanceSettings, fetchPrograms } from '@/lib/api'
 
 // Module namespace is test-only, not a wire format. Missing implementation is a loud
 // per-case failure, not a skipped test or an import/collection error.
@@ -56,6 +57,9 @@ beforeEach(() => {
   vi.mocked(fetchSkills).mockResolvedValue([])
   vi.mocked(fetchAboutInfo).mockResolvedValue({ version: '0.1.1', go_version: 'go1.26.9', os: 'darwin', arch: 'amd64', uptime_seconds: 0 })
   vi.mocked(fetchPerformanceSettings).mockResolvedValue({})
+  // The shared editor's Programs section (cli-credentials S1) reads GET /programs;
+  // an empty list keeps its own ErrorState and Retry out of these roster cases.
+  vi.mocked(fetchPrograms).mockResolvedValue({ entries: [], web_chat_allowed: false, revision: '0'.repeat(64) })
   socket = new WsConnection({ onConnected: () => {}, onDisconnected: () => {}, onError: () => {} })
   sends = vi.fn<WsConnection['send']>().mockReturnValue(true)
   vi.spyOn(socket, 'send').mockImplementation(sends)
