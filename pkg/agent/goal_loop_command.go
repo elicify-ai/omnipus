@@ -225,7 +225,8 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		if res.Rejection != nil {
 			return true, true, formatCompileRejection(res.Rejection)
 		}
-		return true, true, gl.al.applyGoalMarkerRestate(gl.sessionID, gl.store, activeGoal, res.Goal)
+		return true, true, gl.al.applyGoalMarkerRestate(gl.sessionID, gl.store, activeGoal, res.Goal,
+			provenanceOrigins(gl.opts.InputOrigin.provenance))
 	}
 
 	// No active goal: a fresh `/goal <intent>` supersedes any AskUserQuestion
@@ -480,9 +481,13 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 // ALREADY-ACTIVE goal (ADR-088 D1/US-5 S19): the record updates in place —
 // same GoalID, same rounds/started-at, no confirm ritual. diffGoalAmendment
 // is wired into set_goal's own update path in a later wave; this restate
-// simply lands the new record.
+// simply lands the new record. restatedBy is the restating message's
+// provenance (I-2/S-111): the restate changes the goal's definition, so it is
+// joined in the same write as the prose restate's; an empty set (unresolved
+// message) makes the record unresolved rather than being skipped.
 func (al *AgentLoop) applyGoalMarkerRestate(
 	sessionID string, store *session.UnifiedStore, rec *goal.Goal, compiled *CompiledGoal,
+	restatedBy []string,
 ) string {
 	condition := compiled.Prompt
 	if condition == "" {
@@ -503,7 +508,7 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	if len(dod) == 0 {
 		dod = newFloorDoD()
 	}
-	if _, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Provenance: &restatedBy, Mutate: func(cur *goal.Goal) error {
 		cur.Prompt = condition
 		cur.Definition = compiled.Definition
 		if serr := cur.SetCriteria(compiled.Criteria, now); serr != nil {
