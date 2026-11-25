@@ -141,9 +141,14 @@ func testNativeSkillInstallCard(t *testing.T, policy, answer string) {
 		installed, err := skills.NewSkillWriter(root).SkillRevision("fresh-helper")
 		require.NoError(t, err)
 		assert.Equal(t, revision, installed)
-		versions, err := skills.NewSkillWriter(root).ListVersions("fresh-helper")
-		require.NoError(t, err)
-		assert.Len(t, versions, 1, "one actual installed history publication")
+		// Fix round 4, part D item 2: an install publishes through the skill pipeline, whose history
+		// is the per-skill store under skills.SkillHistoryRoot(root)/<slug>/versions/<id>.json
+		// (pkg/skills/history.go). The first RED draft read SkillWriter.ListVersions, the legacy
+		// ".versions" snapshot folder of the older editing tool, which an install never writes, so
+		// that read could not see this publication whatever the installer did. Same oracle: exactly
+		// one installed history publication for the one approved install.
+		manifests := t9ManifestFiles(t, root, "fresh-helper")
+		assert.Len(t, manifests, 1, "one actual installed history publication")
 		assertFreshSkillTrust(t, h.api.homePath, "fresh-helper", true)
 		assertNativeInstallAuditCount(t, h, 1)
 		assert.Empty(t, h.reg.pendingApprovals())
