@@ -19,9 +19,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func q7PostApproval(t *testing.T, api *restAPI, id, action, scope string) *httptest.ResponseRecorder {
+func q7PostApproval(t *testing.T, api *restAPI, id, action, duration, scope string) *httptest.ResponseRecorder {
 	t.Helper()
 	body := gen.ToolApprovalActionRequest{Action: gen.ToolApprovalActionRequestAction(action)}
+	if duration != "" {
+		value := gen.ApprovalAllowDuration(duration)
+		body.Duration = &value
+	}
 	if scope != "" {
 		value := gen.ToolApprovalActionRequestScope(scope)
 		body.Scope = &value
@@ -35,6 +39,14 @@ func q7PostApproval(t *testing.T, api *restAPI, id, action, scope string) *httpt
 	return w
 }
 
+// The remembering answer on an always-ask tool is refused before the approval
+// resolves. Under skills-tools-redesign-spec.md C-26 the remembering answer is
+// "Allow for" (allow_for with a duration): "An always-ask tool keeps today's 400
+// for a remembering action, now for `allow_for` (checked before the
+// offered-actions rule): its approvals are never remembered." The test keeps its
+// name so existing run commands still select it. The retired "allow" action no
+// longer reaches this rule: C-26 refuses it with the retired-choice text for
+// every tool (pinned in tool_approvals_timed_actions_red_test.go).
 func TestQ7T22_LastingAllowIsRefusedBeforePendingApprovalResolves(t *testing.T) {
 	for _, scope := range []string{"", "exact", "prefix"} {
 		t.Run("scope_"+scope, func(t *testing.T) {
@@ -43,8 +55,8 @@ func TestQ7T22_LastingAllowIsRefusedBeforePendingApprovalResolves(t *testing.T) 
 			entry, accepted := reg.requestApproval("q7-allow", "set_channel_outbound", args, string(coreagent.IDOmnipus), "q7-session", "q7-turn")
 			require.True(t, accepted, "instrument: a real pending request exists")
 			t.Cleanup(func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) })
-			w := q7PostApproval(t, api, entry.ApprovalID, "allow", scope)
-			assert.Equal(t, http.StatusBadRequest, w.Code, "FR-038/Q3 A: lasting Allow must be refused before approval: %s", w.Body.String())
+			w := q7PostApproval(t, api, entry.ApprovalID, "allow_for", "1h", scope)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "FR-038/Q3 A + C-26: a timed allowance must be refused before approval: %s", w.Body.String())
 			assert.JSONEq(t, `{"error":"`+q7AlwaysAskText+`"}`, w.Body.String(), "FR-038: exact always-ask refusal")
 			assert.Equal(t, ApprovalStatePending, reg.get(entry.ApprovalID).state, "FR-038: rejected Allow leaves the existing card usable")
 			assert.False(t, api.agentLoop.ApprovalGrants().IsAllowed(entry.SessionID, entry.AgentID, entry.ToolName, args), "FR-038: no exact, fallback-prefix or parent grant")
@@ -110,13 +122,17 @@ func TestQ7T22_OneRequestAndRefusalActionsGrantNothing_PositiveControl(t *testin
 	}
 }
 
+// Positive control for the refusal above: an ordinary tool keeps its remembering
+// answer, which C-26 turns from "Allow" into "Allow for" (an ordinary tool card
+// offers Approve Once, Allow for 1 hour / 3 hours / 1 day, Deny, Cancel). Same
+// name as before so existing run commands still select it.
 func TestQ7T22_OtherToolsKeepLastingAllow_PositiveControl(t *testing.T) {
 	api, reg := newTestRestAPIWithApprovalReg(t)
 	args := map[string]any{"id": "telegram", "action": "enable"}
 	entry, accepted := reg.requestApproval("q7-other-allow", "enable_channel", args, string(coreagent.IDOmnipus), "q7-other-session", "q7-turn")
 	require.True(t, accepted)
-	w := postToolApproval(t, api, entry.ApprovalID, "allow")
-	require.Equal(t, http.StatusOK, w.Code, "FR-038/NB-19: ordinary Allow retains its behavior")
+	w := q7PostApproval(t, api, entry.ApprovalID, "allow_for", "1h", "")
+	require.Equal(t, http.StatusOK, w.Code, "FR-038/NB-19 + C-26: the ordinary tool keeps its remembering answer: %s", w.Body.String())
 	var response gen.ToolApprovalResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.NotNil(t, response.GrantRecorded)

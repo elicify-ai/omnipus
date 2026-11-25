@@ -7,8 +7,6 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,18 +15,21 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// ADR-092 D4: "Allow" with scope=prefix on a bash approval records a prefix
-// grant, so a later call with the same program and leading words skips the
-// prompt, while an unrelated call does not.
+// ADR-092 D4, as carried by skills-tools-redesign-spec.md C-26: "Allow for"
+// with scope=prefix on a bash approval records a prefix allowance, so a later
+// call with the same program and leading words skips the prompt, while an
+// unrelated call does not. The retired "allow" action is refused with 400 (C-26,
+// "Refusals on POST /tool-approvals/{approval_id}"); the request contract keeps
+// `scope` and says it "now applies to `allow_for` on a bash call" (C-26 contract
+// table, ToolApprovalActionRequest). The answer is therefore allow_for with a
+// duration; 1h is the shortest of the three listed lengths (C-26, "Lifetime
+// and scope", Length). These tests assert the recorded scope and what it
+// covers, not the length.
 
 func postScopedApproval(t *testing.T, api *restAPI, approvalID, scope string) map[string]any {
 	t.Helper()
-	body := `{"action":"allow","scope":"` + scope + `"}`
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+approvalID, strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-	w := httptest.NewRecorder()
-	api.HandleToolApprovals(w, r)
+	body := `{"action":"allow_for","duration":"1h","scope":"` + scope + `"}`
+	w := postToolApprovalRaw(t, api, approvalID, body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
