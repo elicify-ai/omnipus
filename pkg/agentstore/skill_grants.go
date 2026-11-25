@@ -82,8 +82,8 @@ func (s *Store) RemoveSkillGrant(id, name string) (changed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("agentstore: remove skill grant %q from %q: %w", name, id, err)
 	}
-	if s.notifier != nil {
-		s.notifier.AgentUpserted(id, updated)
+	if err := s.notifyOverlaid(id, updated); err != nil {
+		return changed, err
 	}
 	return changed, nil
 }
@@ -120,8 +120,10 @@ func (s *Store) AddSkillBindings(id string, add map[string]string) (map[string]s
 	if err != nil {
 		return nil, fmt.Errorf("agentstore: bind skill grants of %q: %w", id, err)
 	}
-	if len(added) > 0 && s.notifier != nil {
-		s.notifier.AgentUpserted(id, updated)
+	if len(added) > 0 {
+		if err := s.notifyOverlaid(id, updated); err != nil {
+			return added, err
+		}
 	}
 	return added, nil
 }

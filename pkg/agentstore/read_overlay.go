@@ -11,7 +11,11 @@ package agentstore
 // one, so it registers its overlay here, the way config.RegisterSkillMapHeal
 // works.
 
-import "github.com/elicify-ai/omnipus/pkg/config"
+import (
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+)
 
 // ReadOverlay adjusts an agent record read from the store under home in
 // place, before any caller sees it. An error means the record's values
@@ -31,4 +35,20 @@ func (s *Store) overlay(agent *config.AgentConfig) error {
 		return nil
 	}
 	return readOverlay(s.home, agent)
+}
+
+// notifyOverlaid hands the registry a record just written by a skills path
+// with the overlay applied, so an agent the upgrade has not reached runs on
+// its planned values (C-19). rec must be the caller's own copy: the overlay
+// changes it in place. When the values cannot be decided the registry is not
+// told, and the error says the record itself was saved.
+func (s *Store) notifyOverlaid(id string, rec *config.AgentConfig) error {
+	if s.notifier == nil {
+		return nil
+	}
+	if err := s.overlay(rec); err != nil {
+		return fmt.Errorf("agentstore: %q was saved, but its upgraded skill values cannot be decided, so the running agent was not updated: %w", id, err)
+	}
+	s.notifier.AgentUpserted(id, rec)
+	return nil
 }
