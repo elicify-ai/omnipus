@@ -60,10 +60,18 @@ describe('tool approval store — K7', () => {
   // parses; without them the generated Zod schema drops it (never null for a
   // field-shape reason on the control).
   it('a snapshot missing the required details is a contract violation — Zod rejects it at the boundary', () => {
+    // `base` carries everything the contract requires EXCEPT the three request
+    // details under test (tool_call_id, turn_id, args). The boundary also
+    // requires offered_actions and allow_durations on a pending approval (C-24,
+    // C-26, FR-093); a bash ask card offers the permission-open set. They sit in
+    // `base`, not only in `complete`, so that `base` and `complete` differ in the
+    // details alone and a refusal of `base` can only be about the details.
     const base = {
       type: 'session_state', user_id: 'u', emitted_at: new Date().toISOString(),
       pending_approvals: [{
         approval_id: 'ap-3', session_id: 's', tool_name: 'bash', agent_id: 'mia', expires_in_ms: 30_000,
+        offered_actions: ['allow_once', 'allow_for', 'deny'],
+        allow_durations: ['1h', '3h', '1d'],
       }],
     }
     const complete = {
@@ -71,10 +79,6 @@ describe('tool approval store — K7', () => {
       pending_approvals: [{
         ...base.pending_approvals[0],
         tool_call_id: 'tc-3', turn_id: 'turn-3', args: { command: 'pwd' },
-        // The generated boundary requires these too (Skills & Tools C-24/C-26
-        // contract commit): a bash ask card offers the permission-open set.
-        offered_actions: ['allow_once', 'allow_for', 'deny'],
-        allow_durations: ['1h', '3h', '1d'],
       }],
     }
     // Positive control: the contract-complete frame parses.

@@ -521,6 +521,11 @@ describe('parseFrameSafe', () => {
       session_id: 'sess_1',
       turn_id: 'turn_1',
       expires_in_ms: 30000,
+      // C-24: the generated frame schema requires both lists (offered_actions
+      // minItems 1; allow_durations), so a frame that is otherwise valid
+      // carries them. An ordinary tool: Approve Once, the time choices, Deny, Cancel.
+      offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+      allow_durations: ['1h', '3h', '1d'],
     }
     const result = parseFrameSafe(frame)
     expect(result).toBeNull()
@@ -538,6 +543,11 @@ describe('parseFrameSafe', () => {
       session_id: 'sess_1',
       turn_id: 'turn_1',
       expires_in_ms: 30000,
+      // C-24: the generated frame schema requires both lists (offered_actions
+      // minItems 1; allow_durations), so a frame that is otherwise valid
+      // carries them. An ordinary tool: Approve Once, the time choices, Deny, Cancel.
+      offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+      allow_durations: ['1h', '3h', '1d'],
     }
     const result = parseFrameSafe(frame)
     expect(result).not.toBeNull()
@@ -633,6 +643,10 @@ describe('WsConnection onmessage — strict parsing', () => {
       session_id: 'sess_1',
       turn_id: 'turn_1',
       expires_in_ms: 30000,
+      // C-24: both lists are required by the frame schema; with them present
+      // the ONLY reason this frame is refused is its null args.
+      offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+      allow_durations: ['1h', '3h', '1d'],
     })
     lastWsInstance.onmessage?.({ data: badFrame })
 
@@ -661,6 +675,9 @@ describe('WsConnection onmessage — strict parsing', () => {
       session_id: 'sess_1',
       turn_id: 'turn_1',
       expires_in_ms: 30000,
+      // C-24: both lists are required by the frame schema (ordinary tool).
+      offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+      allow_durations: ['1h', '3h', '1d'],
     })
     lastWsInstance.onmessage?.({ data: goodFrame })
 

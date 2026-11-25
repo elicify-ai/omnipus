@@ -63,6 +63,18 @@ expect(LABEL_ONE_OVER.length).toBe(201)
 // pkg/api/generated/asyncapi_types.gen.go): required fields always present,
 // optional fields omitted entirely when nil (Go omitempty), nothing else —
 // the Zod schemas are .strict(), so one invented key would be its own bug.
+//
+// offered_actions (minItems 1) and allow_durations are required on both
+// ToolApprovalRequiredFrame and SessionStatePendingApproval (C-24). A frame
+// without them is refused by the schema, so a fixture that omitted them would
+// make every "rejects the whole frame ... one UTF-16 unit over the limit" case
+// pass for the wrong reason (and fail every "accepts" case). The card here is
+// a bash card, an ordinary tool: Approve Once, the time choices, Deny and
+// Cancel.
+const BASH_CARD_ANSWERS = {
+  offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allow_durations: ['1h', '3h', '1d'],
+}
 
 function approvalFrame(fields: {
   approvalId: string
@@ -80,6 +92,7 @@ function approvalFrame(fields: {
     session_id: `sess-${fields.approvalId}`,
     turn_id: `turn-${fields.approvalId}`,
     expires_in_ms: 600_000,
+    ...BASH_CARD_ANSWERS,
     ...(fields.actingAgentName !== undefined ? { acting_agent_name: fields.actingAgentName } : {}),
     ...(fields.originLabel !== undefined ? { origin_label: fields.originLabel } : {}),
   })
@@ -100,6 +113,7 @@ function pendingApproval(fields: {
     tool_call_id: `call-${fields.approvalId}`,
     turn_id: `turn-${fields.approvalId}`,
     args: { command: 'echo hi' },
+    ...BASH_CARD_ANSWERS,
     ...(fields.actingAgentName !== undefined ? { acting_agent_name: fields.actingAgentName } : {}),
     ...(fields.originLabel !== undefined ? { origin_label: fields.originLabel } : {}),
   }

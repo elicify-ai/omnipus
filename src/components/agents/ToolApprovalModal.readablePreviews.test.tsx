@@ -15,8 +15,9 @@
 //  3. request_mount's title/buttons use the operator-approved "Add folder"
 //     copy, but clicking them still dispatches the SAME 'allow_once'/'deny'
 //     wire actions — a label-only rename.
-//  4. Cancel is intentionally absent for request_mount (closed 2-button
-//     spec) — a deliberate, tested design decision, not an oversight.
+//  4. (Retired 2026-09-15, see the MERGE note in the request_mount describe:
+//     the Cancel-less "closed 2-button" card is gone. Cancel is part of the
+//     card again — S-129, Clarifications Q1 — so the lists below include it.)
 //  5. A tool with no registered preview still renders the generic Arguments
 //     JSON dump (registry fallback keeps working).
 //  6. The reconnect-stub case (toolCallId/turnId both empty — see the
@@ -53,6 +54,22 @@ beforeEach(async () => {
   ToolApprovalPanel = await loadApprovalPanel()
 })
 
+// C-24 / C-26: a card renders exactly the answers the server listed when it
+// raised the card. The lists below are the spec's own: S-119 gives an ordinary
+// tool [allow_once, allow_for, deny, cancel] with allow_durations [1h, 3h, 1d];
+// S-129 and Clarifications Q1 give an exact-action tool (request_mount is one,
+// C-26 point 9) Approve Once, Deny and Cancel with an empty allow_durations. No
+// fixture in this file leaves a list out, so no case depends on a rule the
+// client would apply when a list is missing.
+const ORDINARY_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
+}
+const EXACT_ACTION_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'deny', 'cancel'],
+  allowDurations: [],
+}
+
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount-readable',
   toolCallId: 'call-mount-readable',
@@ -65,6 +82,7 @@ const MOUNT_APPROVAL = {
   sessionId: 'sess-mount',
   turnId: 'turn-mount',
   expiresAt: Date.now() + 300_000,
+  ...EXACT_ACTION_TOOL_ANSWERS,
 }
 
 function seedAgent() {
@@ -210,6 +228,7 @@ describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -233,6 +252,7 @@ describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -253,17 +273,16 @@ describe('ToolApprovalPanel — a normal approval renders the full approvable ca
   // full-card pin below is their surviving positive counterpart.
   it('L1 §1.2 R6: a normal request_mount approval renders the full approvable card', () => {
     // C-24 / C-26: the server computes the card's choices when it raises the
-    // card. request_mount is an exact-action tool (C-26 point 9, founder Q5 A),
-    // so its frame offers Approve Once and Deny only and an empty
-    // allow_durations (S-129). The cast keeps the fixture typechecking on a
-    // base whose store entry does not carry the two members yet.
-    const exactActionMount = {
-      ...MOUNT_APPROVAL,
-      offeredActions: ['allow_once', 'deny'],
-      allowDurations: [],
-    } as PendingToolApproval
+    // card. request_mount is an exact-action tool (C-26 point 9, founder Q5 A):
+    // no time choice, so its frame lists Approve Once, Deny and Cancel and an
+    // empty allow_durations (S-129, Clarifications Q1). MOUNT_APPROVAL carries
+    // exactly those lists (EXACT_ACTION_TOOL_ANSWERS). The two session_state
+    // frames in the reconnect describe below list Approve Once and Deny only
+    // (C-26 point 9 read literally). No assertion in this file depends on
+    // whether Cancel is listed: the cases that look at the choices look for the
+    // time choices and Always Allow, which an exact-action card never offers.
     act(() => {
-      useToolApprovalStore.setState({ queue: [exactActionMount] })
+      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()

@@ -22,7 +22,7 @@ import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { useToolApprovalStore } from '@/store/toolApproval'
+import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 
 const mockNavigate = vi.fn()
 
@@ -563,7 +563,7 @@ describe('ActivityPanel — lifecycle state drives the row dot, not span status 
 // ── ADR-091 D7/FR-E-009: awaiting approval ──────────────────────────────────
 
 describe('ActivityPanel — awaiting approval (ADR-091 FR-E-009)', () => {
-  function pendingApproval(sessionId: string, toolName: string) {
+  function pendingApproval(sessionId: string, toolName: string): PendingToolApproval {
     return {
       approvalId: 'appr_1',
       toolCallId: 'call_1',
@@ -573,6 +573,10 @@ describe('ActivityPanel — awaiting approval (ADR-091 FR-E-009)', () => {
       sessionId,
       turnId: 'turn_1',
       expiresAt: Date.now() + 60_000,
+      // C-24 / C-26: the answers the server lists for a bash card; both lists
+      // are required by ToolApprovalRequiredFrame.
+      offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+      allowDurations: ['1h', '3h', '1d'],
     }
   }
 
