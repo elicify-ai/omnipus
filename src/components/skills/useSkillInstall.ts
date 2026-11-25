@@ -14,9 +14,16 @@ import { discardSkillInstallReview, fetchSkillInstallStatus, installReviewedSkil
 import { serverErrorText } from '@/lib/api/permissions'
 import { isApiError } from '@/lib/api-error'
 import { generateId } from '@/lib/constants'
+import { useUiStore } from '@/store/ui'
 import type { InstallOutcome } from './InstallReview'
 
 const POLL_MS = 1000
+
+/** The spec's success toast (UI states, Install review). */
+export function installedToast(name: string): string {
+  return `Installed ${name}. It is set to Ask: an agent needs your yes to use it unless Auto-approve is on. ` +
+    "No agent is granted it yet; grant it on an agent's Skills tab."
+}
 const CONFIRM_WINDOW_MS = 60_000
 
 function errorReason(err: unknown): string {
@@ -29,11 +36,16 @@ type InstallSource = Pick<SkillInstallRequest, 'upload_id' | 'slug'>
 
 export function useSkillInstall(currentRevision: (name: string) => string | undefined) {
   const client = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
   const [review, setReview] = useState<SkillInstallReview | null>(null)
   const [source, setSource] = useState<InstallSource | null>(null)
   const [outcome, setOutcome] = useState<InstallOutcome | undefined>(undefined)
   const [stageError, setStageError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** True while an upload is being staged for review ("Checking the skill…"). */
+  const [staging, setStaging] = useState(false)
+  /** Bumped by a Cancel while staging, so a late review is discarded. */
+  const stagingRun = useRef(0)
   const [cancelling, setCancelling] = useState(false)
   /** What Cancel reported: the review is gone and nothing was installed. */
   const [cancelNotice, setCancelNotice] = useState<string | null>(null)
@@ -55,6 +67,7 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
       case 'installed':
         if (status.installed_revision === reviewed.revision) {
           setOutcome({ kind: 'installed' })
+          addToast({ message: installedToast(reviewed.name), variant: 'success' })
           void client.invalidateQueries({ queryKey: ['skills'] })
         } else {
           // Installed, but not what was reviewed: never call it success.
@@ -71,7 +84,7 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
       default:
         return false
     }
-  }, [client])
+  }, [client, addToast])
 
   const poll = useCallback((reviewed: SkillInstallReview) => {
     if (!alive.current) return
@@ -93,18 +106,37 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
     setCancelNotice(null)
     setOutcome(undefined)
     setBusy(true)
+    setStaging(true)
+    const run = ++stagingRun.current
+    const cancelled = () => run !== stagingRun.current || !alive.current
     try {
       const uploaded = await uploadFiles(generateId(), [file])
       const ref = uploaded.files[0]?.ref
       if (!ref) throw new Error('The upload returned no file to review.')
       const staged = await stageSkillInstallReview({ upload_id: ref })
+      if (cancelled()) {
+        // Cancelled while staging: the late review is thrown away, never offered.
+        discardSkillInstallReview(staged.review_id).catch(() => { /* expires on its own */ })
+        return
+      }
       setSource({ upload_id: ref })
       setReview(staged)
     } catch (err) {
-      setStageError(`Could not open ${file.name} for review: ${errorReason(err).replace(/\.+$/, '')}.`)
+      if (!cancelled()) setStageError(`Could not open ${file.name} for review: ${errorReason(err).replace(/\.+$/, '')}.`)
     } finally {
-      setBusy(false)
+      if (!cancelled()) {
+        setBusy(false)
+        setStaging(false)
+      }
     }
+  }, [])
+
+  /** Cancel while the skill is being staged (C-13): nothing is installed. */
+  const cancelStaging = useCallback(() => {
+    stagingRun.current++
+    setStaging(false)
+    setBusy(false)
+    setCancelNotice('Nothing was installed.')
   }, [])
 
   const install = useCallback(async (category: SkillCategory) => {
@@ -175,5 +207,5 @@ export function useSkillInstall(currentRevision: (name: string) => string | unde
     }
   }, [review])
 
-  return { review, outcome, busy, cancelling, cancelNotice, stageError, upload, install, retry, cancel, close }
+  return { review, outcome, busy, staging, cancelling, cancelNotice, stageError, upload, install, retry, cancel, cancelStaging, close }
 }

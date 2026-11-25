@@ -114,6 +114,8 @@ export class PermissionSaveQueue {
   stored: PermissionSettings | undefined
   loadError: unknown = undefined
   loading = false
+  /** Saved batches that changed a skill's permission or level (C-14 Freshness). */
+  skillSaves = 0
   private waiting = new Map<string, SettingValue>()
   private sending = new Map<string, SettingValue>()
   private statuses = new Map<string, SaveStatus>()
@@ -234,6 +236,9 @@ export class PermissionSaveQueue {
       const stored = await patchPermissionSettings(toPatch(batch))
       this.writes++
       this.stored = stored
+      if ([...batch.keys()].some((key) => key.startsWith('skill_policies:') || key.startsWith('skill_visibility:'))) {
+        this.skillSaves++
+      }
       this.settle(batch, { kind: 'saved' })
     } catch (err) {
       this.writes++

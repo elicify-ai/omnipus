@@ -7807,8 +7807,56 @@
       "lane": 6
     },
     {
-      "source": "src/components/settings/SkillTrustSection.tsx",
-      "lane": 6
+      "source": "src/components/agents/AgentSkillsGroup.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/ApprovalCard.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/InstallReview.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/NewSkillMenu.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/PermissionCatalog.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/PermissionRow.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/SkillRowActions.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/SkillsToolsPage.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/TrustBlock.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/skillsToolsModel.ts",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useExternalServices.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useSkillInstall.ts",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useSkillsTabNotices.tsx",
+      "lane": 5
     },
     {
       "source": "src/components/settings/SsrfEditor.tsx",

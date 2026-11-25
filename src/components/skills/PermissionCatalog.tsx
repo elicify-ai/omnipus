@@ -62,6 +62,10 @@ interface PermissionCatalogProps {
   toolbarAction?: ReactNode
   /** Shown above the list on its tab (the trust block on Skills). */
   children?: ReactNode
+  /** What the tab says while it loads (default "Loading <noun>…"). */
+  loadingText?: string
+  /** The tab's empty state, shown when the list loaded with nothing in it. */
+  empty?: ReactNode
 }
 
 function emptyFilters(): CatalogFilters {
@@ -70,9 +74,11 @@ function emptyFilters(): CatalogFilters {
 
 export function PermissionCatalog({
   items, queue, noun, testIdPrefix, loading, disabled, announce, groupActions, groupControls, groupNotice,
-  extraGroups, rowActions, toolbarAction, children,
+  extraGroups, rowActions, toolbarAction, children, loadingText, empty,
 }: PermissionCatalogProps) {
   const [filters, setFilters] = useState<CatalogFilters>(emptyFilters)
+  /** The note a Set all leaves on its group: what it skipped and why (C-20). */
+  const [skipNote, setSkipNote] = useState<{ group: string; text: string } | null>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [pendingAllow, setPendingAllow] = useState<PolicyChange[] | null>(null)
   const active = filtersActive(filters)
@@ -113,13 +119,14 @@ export function PermissionCatalog({
   const changeLevel = (item: CatalogItem, level: ModelVisibility) => {
     queue.change([{ section: item.levelSection, name: item.key, value: level }])
   }
-  const setAll = (rows: readonly CatalogItem[], policy: ToolPolicy) => {
-    const eligible = rows.filter((row) => !row.fixedSentence && !row.refused.includes(policy))
-    const skipped = rows.filter((row) => !eligible.includes(row))
+  const setAll = (groupId: string, rows: readonly CatalogItem[], policy: ToolPolicy) => {
+    const { eligible, skipped } = setAllRows(rows, policy)
     change(eligible.map((item) => ({ item, policy })))
-    if (skipped.length > 0) {
-      announce(`Set ${eligible.length} to ${POLICY_WORDS[policy]}. Skipped: ${skipped.map((row) => row.label).join(', ')}.`)
-    }
+    const note = skipped.length > 0
+      ? `${skipped.length} skipped: ${skipped.map((row) => row.label).join(', ')} always ${skipped.length === 1 ? 'asks' : 'ask'}.`
+      : null
+    // The note is its own polite status line, so it is not announced twice.
+    setSkipNote(note ? { group: groupId, text: note } : null)
   }
   const clearAll = () => {
     setFilters(emptyFilters())
@@ -179,9 +186,11 @@ export function PermissionCatalog({
       )}
       {loading ? (
         <div className="flex flex-col gap-[var(--space-2)]">
-          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{`Loading ${noun}…`}</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{loadingText ?? `Loading ${noun}…`}</p>
           {[0, 1, 2].map((n) => <Skeleton key={n} data-testid="skeleton-row" className="h-10 w-full" />)}
         </div>
+      ) : empty && !active && groups.length === 0 ? (
+        empty
       ) : active && shown === 0 ? (
         <div className="flex flex-col items-start gap-[var(--space-2)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
@@ -205,12 +214,15 @@ export function PermissionCatalog({
                   {open && group.items.length > 0 && (
                     <SetAllMenu
                       rows={group.rows}
-                      label={active ? `Set ${group.rows.filter((row) => !row.fixedSentence).length} of ${group.rows.length} matching…` : 'Set all…'}
+                      label={setAllLabel(group.rows, active)}
                       disabled={disabled}
-                      onChoose={(policy) => setAll(group.rows, policy)}
+                      onChoose={(policy) => setAll(group.id, group.rows, policy)}
                     />
                   )}
                 </div>
+                {open && skipNote?.group === group.id && (
+                  <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{skipNote.text}</p>
+                )}
                 {open && groupNotice?.(group.id)}
                 {open && group.rows.map((item) => (
                   <PermissionRow
@@ -251,6 +263,33 @@ export function PermissionCatalog({
   )
 }
 
+/**
+ * Which rows a Set all to `policy` changes (C-20): a row with a fixed
+ * permission has no value to set and is not counted; a row that cannot take
+ * the value (an always-ask tool and Allow) is skipped and named.
+ */
+function setAllRows(rows: readonly CatalogItem[], policy: ToolPolicy) {
+  const settable = rows.filter((row) => !row.fixedSentence)
+  return {
+    settable,
+    eligible: settable.filter((row) => !row.refused.includes(policy)),
+    skipped: settable.filter((row) => row.refused.includes(policy)),
+  }
+}
+
+/** The group's Set all button (C-20, D4 rows 1 and 2). */
+function setAllLabel(rows: readonly CatalogItem[], active: boolean): string {
+  const count = rows.filter((row) => !row.fixedSentence).length
+  return active ? `Set ${count} of ${rows.length} matching` : `Set all ${count}`
+}
+
+/** A Set all item: the value alone, or "Set 11 of 12 to Allow" when a row is skipped (C-20, S-84). */
+function setAllItemLabel(rows: readonly CatalogItem[], policy: ToolPolicy): string {
+  const { settable, eligible } = setAllRows(rows, policy)
+  if (eligible.length === settable.length) return POLICY_WORDS[policy]
+  return `Set ${eligible.length} of ${settable.length} to ${POLICY_WORDS[policy]}`
+}
+
 function SetAllMenu({ rows, label, disabled, onChoose }: {
   rows: readonly CatalogItem[]
   label: string
@@ -272,7 +311,7 @@ function SetAllMenu({ rows, label, disabled, onChoose }: {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {POLICIES.map((policy) => (
-          <DropdownMenuItem key={policy} onClick={() => onChoose(policy)}>{POLICY_WORDS[policy]}</DropdownMenuItem>
+          <DropdownMenuItem key={policy} onClick={() => onChoose(policy)}>{setAllItemLabel(rows, policy)}</DropdownMenuItem>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

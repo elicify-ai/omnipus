@@ -99,6 +99,10 @@ export function useExternalServices(disabled: boolean) {
     const on = server.enabled !== false
     return (
       <div className="flex shrink-0 items-center gap-[var(--space-1)]">
+        {/* UI states, External tools Partial: said in the header, so it shows while the group is closed. */}
+        {server.status !== 'connected' && (
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">Not connected</span>
+        )}
         <Switch
           checked={on}
           disabled={disabled || toggle.isPending}

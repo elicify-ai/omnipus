@@ -6,7 +6,7 @@
 import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import type { SkillCategory, ToolPolicy } from '@/lib/api/generated/openapi-types'
+import type { SkillCategory, SkillInstallReview, ToolPolicy } from '@/lib/api/generated/openapi-types'
 import { SKILL_CATEGORY_WORDS } from './skillsToolsModel'
 
 /** Trust words: today's three, plus the retired names an older caller may hold. */
@@ -28,6 +28,8 @@ export interface InstallReviewView {
   version: string
   category: string | null
   verified: boolean
+  /** How the catalog lookup went (C-13); `unavailable` means it got no answer. */
+  verification?: SkillInstallReview['verification']
   trust: TrustWord
 }
 
@@ -116,6 +118,9 @@ export function InstallReview({
           </SelectContent>
         </Select>
       </div>
+      {review.verification === 'unavailable' && (
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Not verified: the catalog did not answer.</p>
+      )}
       {missingCategory && (
         <p id={errorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Choose a category.</p>
       )}
@@ -148,6 +153,9 @@ export function InstallReview({
           <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
         )}
       </div>
+      {!outcome && installing && (
+        <p className="text-[length:var(--type-caption-size)]">Installing…</p>
+      )}
       {outcome && (
         <div className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)]">
           <span>{outcomeText(outcome, review.skillName)}</span>

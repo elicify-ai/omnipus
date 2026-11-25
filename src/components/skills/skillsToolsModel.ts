@@ -1,7 +1,9 @@
 // skillsToolsModel — the pure parts of the Skills & Tools page: rows, groups,
 // labels and the filter rules (spec FR-002 to FR-005, C-6).
 
-import type { ModelVisibility, Skill, SkillCategory, ToolPolicy, ToolRegistryEntry } from '@/lib/api/generated/openapi-types'
+import type {
+  ModelVisibility, Skill, SkillCategory, SkillUpgradeUnfinishedAgent, ToolPolicy, ToolRegistryEntry,
+} from '@/lib/api/generated/openapi-types'
 import type { PermissionSaveQueue, PermissionSection } from '@/lib/permissionSaveQueue'
 
 export const POLICIES: readonly ToolPolicy[] = ['allow', 'ask', 'deny']
@@ -76,8 +78,11 @@ export interface CatalogItem {
   group: { id: string; label: string }
   policySection: Extract<PermissionSection, 'policies' | 'skill_policies'>
   levelSection: Extract<PermissionSection, 'visibility' | 'skill_visibility'>
-  /** A key the stored value falls back to (an MCP server's wildcard). */
-  fallbackKey?: string
+  /**
+   * Keys the stored value falls back to, narrowest first: an MCP server's
+   * wildcard, then the wildcard of every service (C-7, C-18).
+   */
+  fallbackKeys?: readonly string[]
   /** Allow / Ask / Deny are not shown: the fixed sentence is. */
   fixedSentence?: string
   /** The level cannot change (C-6). */
@@ -88,6 +93,14 @@ export interface CatalogItem {
   refused: readonly ToolPolicy[]
   /** Why the server could not read this skill (S-80, FR-063). */
   loadError?: string
+  /** A skill row's own facts (S-34, ADR-072 D3.1, C-14). */
+  skill?: {
+    verified: boolean
+    /** When an agent last loaded it; null when never. */
+    lastInvoked: string | null
+    /** What the skill costs at Full, when the server sent it. */
+    fullTokens?: number
+  }
 }
 
 export function toolItems(tools: readonly ToolRegistryEntry[]): CatalogItem[] {
@@ -101,7 +114,7 @@ export function toolItems(tools: readonly ToolRegistryEntry[]): CatalogItem[] {
       group: external ? { id: `mcp:${server}`, label: server || 'External' } : toolGroup(tool.category),
       policySection: 'policies',
       levelSection: 'visibility',
-      ...(external && server ? { fallbackKey: `mcp_${server}_*` } : {}),
+      ...(external ? { fallbackKeys: server ? [`mcp_${server}_*`, 'mcp_*'] : ['mcp_*'] } : {}),
       ...(tool.permission_fixed
         ? { fixedSentence: tool.name === 'Skill' ? SKILL_TOOL_SENTENCE : DISCOVERY_SENTENCE }
         : {}),
@@ -126,20 +139,82 @@ export function skillItems(skills: readonly Skill[]): CatalogItem[] {
       defaultLevel: 'name_and_description',
       refused: [],
       ...(skill.load_error ? { loadError: skill.load_error } : {}),
+      skill: {
+        verified: skill.verified,
+        lastInvoked: skill.last_invoked ?? null,
+        ...(typeof skill.full_tokens === 'number' ? { fullTokens: skill.full_tokens } : {}),
+      },
     }
   })
 }
 
+/** The row's own stored value, else the first wildcard that has one. */
+function valueWithFallback(queue: PermissionSaveQueue, section: PermissionSection, item: CatalogItem) {
+  for (const key of [item.key, ...(item.fallbackKeys ?? [])]) {
+    const value = queue.valueOf(section, key)
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
 export function policyOf(queue: PermissionSaveQueue, item: CatalogItem): ToolPolicy | undefined {
-  return (queue.valueOf(item.policySection, item.key) ??
-    (item.fallbackKey ? queue.valueOf(item.policySection, item.fallbackKey) : undefined)) as ToolPolicy | undefined
+  return valueWithFallback(queue, item.policySection, item) as ToolPolicy | undefined
 }
 
 export function levelOf(queue: PermissionSaveQueue, item: CatalogItem): ModelVisibility {
   if (item.levelLocked) return 'full'
-  return (queue.valueOf(item.levelSection, item.key) ??
-    (item.fallbackKey ? queue.valueOf(item.levelSection, item.fallbackKey) : undefined) ??
-    item.defaultLevel) as ModelVisibility
+  return (valueWithFallback(queue, item.levelSection, item) ?? item.defaultLevel) as ModelVisibility
+}
+
+/**
+ * A Full skill's size on its row (C-14, D18 rows 1-5): rounded to the
+ * nearest 100, half up; below 50 it reads "under 100 tokens".
+ */
+export function fullTokensText(tokens: number): string {
+  if (tokens < 50) return 'under 100 tokens'
+  return `about ${(Math.round(tokens / 100) * 100).toLocaleString('en-US')} tokens`
+}
+
+/** The figures of one agent the Full-size warning reads (C-14). // not-wire-format */
+export interface AgentContextFigures {
+  name: string
+  full_skills_tokens?: number
+  context_window_effective?: number
+}
+
+/**
+ * The agents whose Full skills take more than half of their model's context
+ * (C-14 "Page warning", D18 rows 6, 7, 11, 12). Exactly half is not over;
+ * an agent without both figures, or with a window of 0, is never named.
+ */
+export function agentsOverHalf(agents: readonly AgentContextFigures[]): string[] {
+  return agents
+    .filter(({ full_skills_tokens: tokens, context_window_effective: window }) =>
+      typeof tokens === 'number' && typeof window === 'number' && window > 0 && tokens * 2 > window)
+    .map((agent) => agent.name)
+}
+
+export function fullSizeWarning(names: readonly string[]): string {
+  return `The skills set to Full take more than half of the model's context for ${names.join(', ')}. ` +
+    'Set some of them to Name and short description, or choose a model with a larger context.'
+}
+
+const UNFINISHED_REASON_WORDS: Record<SkillUpgradeUnfinishedAgent['reason'], string> = {
+  write_failed: 'its settings file could not be saved',
+  unreadable: 'its settings file could not be read',
+}
+
+/**
+ * The unfinished-upgrade notice (C-19 "The notice", S-131): each agent by
+ * its name from GET /agents, else its id, with its reason in words.
+ */
+export function upgradeNotice(
+  entries: readonly SkillUpgradeUnfinishedAgent[],
+  nameOf: (agentId: string) => string | undefined,
+): string {
+  const listed = entries.map((entry) => `${nameOf(entry.agent_id) ?? entry.agent_id} (${UNFINISHED_REASON_WORDS[entry.reason]})`)
+  const count = entries.length === 1 ? '1 agent' : `${entries.length} agents`
+  return `The upgrade has not finished for ${count}: ${listed.join(', ')}. Their old skill limits still apply.`
 }
 
 /** The list's search and two flat filters (FR-002). // not-wire-format */

@@ -2,7 +2,8 @@
 // "What the model sees" and the row's own save status (C-16).
 
 import type { ReactNode } from 'react'
-import { CaretDown } from '@phosphor-icons/react'
+import { CaretDown, SealCheck } from '@phosphor-icons/react'
+import { formatRelative } from '@/lib/formatRelative'
 import type { ModelVisibility, ToolPolicy } from '@/lib/api/generated/openapi-types'
 import { Button } from '@/components/ui/button'
 import { TextToggle } from '@/components/ui/text-toggle'
@@ -20,6 +21,7 @@ import {
   LOCKED_LEVEL_SENTENCE,
   POLICIES,
   POLICY_WORDS,
+  fullTokensText,
   levelOf,
   policyOf,
   type CatalogItem,
@@ -56,6 +58,35 @@ export function SaveStatusLine({ queue, section, name }: { queue: PermissionSave
   )
 }
 
+const FACT_CLASS = 'text-[length:var(--type-caption-size)] text-[var(--color-muted)]'
+
+/**
+ * A skill row's facts: the Verified mark (S-34, C-5), when it was last used
+ * (ADR-072 D3.1) and, at Full, what it costs (C-14, D18 rows 1-5).
+ */
+function SkillFacts({ facts, sizeShown }: { facts: NonNullable<CatalogItem['skill']>; sizeShown: boolean }) {
+  return (
+    <>
+      {/* The spaces keep each fact a separate word in the row's text. */}
+      {' '}
+      {facts.verified && (
+        <span className={`inline-flex items-center gap-[var(--space-1)] ${FACT_CLASS}`}>
+          <SealCheck size={12} weight="bold" aria-hidden="true" />
+          Verified
+        </span>
+      )}
+      {facts.verified && ' '}
+      <span className={FACT_CLASS}>
+        {facts.lastInvoked ? `Last used ${formatRelative(facts.lastInvoked)}` : 'Never used'}
+      </span>
+      {' '}
+      {sizeShown && facts.fullTokens !== undefined && (
+        <span className={FACT_CLASS}>{fullTokensText(facts.fullTokens)}</span>
+      )}
+    </>
+  )
+}
+
 interface PermissionRowProps {
   item: CatalogItem
   queue: PermissionSaveQueue
@@ -83,7 +114,10 @@ export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, o
     >
       <div className="flex flex-wrap items-start justify-between gap-[var(--space-2)]">
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] wrap-anywhere">{item.label}</div>
+          <div className="flex flex-wrap items-center gap-x-[var(--space-2)]">
+            <span className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] wrap-anywhere">{item.label}</span>
+            {item.skill && <SkillFacts facts={item.skill} sizeShown={level === 'full' && !item.loadError} />}
+          </div>
           {item.description && (
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] wrap-anywhere">{item.description}</p>
           )}
@@ -129,7 +163,7 @@ export function PermissionRow({ item, queue, disabled, testIdPrefix, onPolicy, o
                 size="sm"
                 disabled={disabled}
                 data-choice="level"
-                aria-label={`What the model sees: ${LEVEL_WORDS[level]}`}
+                aria-label={`What the model sees for ${item.label}: ${LEVEL_WORDS[level]}`}
                 className="h-7 gap-[var(--space-1)] px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] pointer-coarse:min-h-[var(--target-touch-minimum)]"
               >
                 {LEVEL_WORDS[level]}
