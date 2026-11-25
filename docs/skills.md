@@ -143,7 +143,7 @@ Every change to a skill you own is saved as a version of the whole folder. The h
 1. Open **Skills & Tools** in the sidebar. You see three tabs: **Skills**, **Omnipus tools** and **External tools**.
 2. Click **New skill**. It offers **Write with Omnipus** (opens Omnipus's chat with the write-a-skill workflow), **Upload a skill** and **Browse the catalog**.
 3. To browse, type what you are looking for. Results come from the ClawHub registry, each with its name, version, and summary. Click **Install** on the one you want. The skill appears on the Skills tab, marked Community.
-4. To use a file you already have, choose **Upload a skill**. Omnipus first shows a review: the skill's name and version, whether it is verified, what the **Unverified skills** setting does with it, and a category to choose. Click **Install** to install it. The page then checks what was actually installed and says "Installed <name>." only once the installed version matches the reviewed one. If it cannot confirm the install, it says so with **Retry**; Retry checks again and never installs twice. **Cancel** before you click Install throws the reviewed copy away and says "Nothing was installed."; after you click Install, Cancel stays greyed out until the answer is known. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
+4. To use a file you already have, choose **Upload a skill**. Omnipus first shows a review: the skill's name and version, whether it is verified, what the **Unverified skills** setting does with it, and a category to choose. A review is kept for 15 minutes; after that, upload the file again. Click **Install** to install it. The page then checks what was actually installed and says "Installed <name>." only once the installed version matches the reviewed one. If it cannot confirm the install, it says so with **Retry**; Retry checks again and never installs twice. **Cancel** before you click Install throws the reviewed copy away and says "Nothing was installed."; after you click Install, Cancel stays greyed out until the answer is known. The file is a `SKILL.md` or a `.zip`, named after the skill (for example `my-skill.zip`). In a zip, `SKILL.md` must sit at the top level: a zip whose files are all inside one folder is refused with that reason. Files under `scripts/` that are executable in the zip stay executable.
 6. Grant the skill. Open the agent, new or existing, and tick the skill in its skills list. An agent with nothing ticked has no skills.
 7. Send the agent a task that matches the skill's description. You can also type `/` in chat and pick the skill to activate it for that one message.
 
@@ -157,8 +157,20 @@ Each skill row on the Skills tab has a **More actions** menu (the three dots):
 |---|---|---|
 | **Make a copy** | Always | Copies the skill under a new name you choose. A built-in skill is read-only, so a copy is how you get a version you can change. |
 | **Remove** | Skills that are not built-in | Asks first, then removes the skill. Agents that use it can no longer load it. |
-| **Choose category** | While the skill is under Uncategorised | Moves it to the category you pick. You can do this once; after that the category is fixed. |
+| **Choose category** | While the skill is under Uncategorised | Moves it to the category you pick. You can do this once; after that the category is fixed, and a second try says "The category is set at install and cannot be changed." |
 | **Approve this version** | Unverified skills while **Unverified skills** is Ask | Approves exactly this version, so agents stop asking about trust for it. If the skill changed since the page loaded, nothing is approved and you are asked to review it again. |
+
+When Omnipus writes a skill for you with the write-a-skill workflow, its card asks which category the new skill or copy belongs to, and sets it once.
+
+## Allow, ask or deny a skill
+
+Each skill has its own permission on the **Skills** tab of **Skills & Tools**: **Allow**, **Ask** or **Deny**. It decides what happens when an agent loads the skill; ticking the skill on an agent decides whether that agent has it at all. An agent's own Tools tab can make a skill stricter for that agent, never looser.
+
+- **New skills start at Ask.** At every start Omnipus gives Ask to each installed or project skill that has no permission yet. A built-in skill that arrives with a newer release gets the Allow it ships with. A value you already set is never changed.
+- **Ask** means the agent needs your yes, unless Auto-approve is on. The card offers **Approve Once**, **Allow for 1 hour**, **3 hours** or **1 day**, and **Deny**. A time choice lets that agent use the skill in all its chats, tasks and its own helpers until the time ends, Omnipus restarts or the skill's permission changes; other agents still ask. To make a skill work for every agent for good, set it to Allow here.
+- **Deny** means no agent can load it.
+- **Unverified skills ask about trust too.** While **Unverified skills** is Ask, an agent that loads an unverified skill whose current version you have not approved gets a card asking you to approve this version. When the permission is also Ask, it is one card with both questions. Auto-approve and a time choice never approve a version; you approve it on the card or with **Approve this version** in **More actions**. See [security](security.md#skill-cards) for every card.
+- **Task and plan runs never wait.** A skill that still needs an answer is refused there with "Not run: needs approval, and task and plan runs never ask." and the agent carries on with what it can do.
 
 ## What a skill folder contains
 

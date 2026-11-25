@@ -212,12 +212,12 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 - may need the network. For example, `curl https://example.com`, `git push` or `npm install` ask. Omnipus recognises this from the program (such as `git`, `curl`, `wget`, `ssh`, `npm`, `pip`, `docker`, `gh` and the main cloud command-line tools) or from a web address in the command. Because it goes by the program, even `git status` asks the first time in a chat;
 - matches an `ask` command rule you wrote (see "Shell command rules" below).
 
-Under Auto-approve, a shell pre-flight that identifies a protected internal path, such as the master key, refuses it rather than offering a path grant. Other call paths can ask for general tool approval before checking the path; that approval still cannot open it. For the ordinary workspace-access prompts described above, **Approve Once** lets that one command through. **Always Allow** on a file prompt opens that one path, for the access the command needed, for the rest of that chat. Denying either prompt refuses the command; it never runs with less access instead.
+Under Auto-approve, a shell pre-flight that identifies a protected internal path, such as the master key, refuses it rather than offering a path grant. Other call paths can ask for general tool approval before checking the path; that approval still cannot open it. For the ordinary workspace-access prompts described above, **Approve Once** lets that one command through. **Allow for 1 hour**, **3 hours** or **1 day** on a file prompt opens that one path, for the access the command needed, to that agent until the time ends (see "What a time choice covers" below). Denying either prompt refuses the command; it never runs with less access instead.
 
-**A network prompt names the address(es) it needs, and approving covers exactly those.** When Omnipus can read the address from the command (for example the `https://example.com` in a `curl` command, or the `example.com` in `scp file.txt user@example.com:`), the card says *"Allows network access to: example.com"* and lists it. **Approve Once** lets the command reach exactly that address, this one time. **Always Allow** lets any shell command in the rest of that chat reach that address without asking again — a *different* address still asks, even in the same chat; it is not "network access in general." When Omnipus cannot read an address from the command at all (for example `npm install`, which reaches whatever registry it is configured for), the card says so — *"no specific host could be identified from the command text"* — and approving only opens the usual web and name-lookup ports (80, 443, 53) to any address, because there is no specific address to restrict to.
+**A network prompt names the address(es) it needs, and approving covers exactly those.** When Omnipus can read the address from the command (for example the `https://example.com` in a `curl` command, or the `example.com` in `scp file.txt user@example.com:`), the card says *"Allows network access to: example.com"* and lists it. **Approve Once** lets the command reach exactly that address, this one time. **Allow for** a time lets that agent's shell commands reach that address without asking again until the time ends — a *different* address still asks; it is not "network access in general." When Omnipus cannot read an address from the command at all (for example `npm install`, which reaches whatever registry it is configured for), the card says so — *"no specific host could be identified from the command text"* — and approving only opens the usual web and name-lookup ports (80, 443, 53) to any address, because there is no specific address to restrict to.
 <!-- verify-ui-string -->
 
-**How this is enforced, briefly.** Every shell command runs through a loopback proxy Omnipus starts for it; approving a network prompt is what tells that proxy which address(es) this chat's commands may reach. The approval is remembered for the rest of the chat only, never written to your `config.json` — that file's own `sandbox.egress_allow_list` field (a separate, permanent, operator-set list of addresses every chat can reach without ever asking) is untouched by an approval; the two lists are additive, not one replacing the other.
+**How this is enforced, briefly.** Every shell command runs through a loopback proxy Omnipus starts for it; approving a network prompt is what tells that proxy which address(es) the agent's commands may reach. A time choice is kept in memory only, until its time ends or Omnipus restarts, and is never written to your `config.json` — that file's own `sandbox.egress_allow_list` field (a separate, permanent, operator-set list of addresses every chat can reach without ever asking) is untouched by an approval; the two lists are additive, not one replacing the other.
 
 Auto-approve does not check what a command means. A command that deletes files inside your workspace, or stops a process, runs without a prompt, because it stays inside the sandbox. Use a `deny` or `ask` command rule for commands like that.
 
@@ -274,7 +274,7 @@ Each `grep` search that runs is recorded in the audit log — see "How to review
 
 ### Task, plan, scheduled and other unattended runs
 
-An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run, and so does a call an operator `command_rules` rule or an existing "Always Allow" grant already covers. Anything that would still need a person is refused straight away; no approval card ever appears. In a task or plan run the agent is told:
+An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run, and so does a call an operator `command_rules` rule or a running time allowance for that agent already covers. Anything that would still need a person is refused straight away; no approval card ever appears. In a task or plan run the agent is told:
 
 ```
 Task and plan runs never ask a person for approval. This call needed approval and was refused. Do not retry; finish what you can and report what was blocked.
@@ -292,9 +292,11 @@ The agent then reports what was blocked and the task ends **Failed** with its ex
 Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
 ```
 
+A skill that still needs an answer is refused the same way in a task or plan run, whether the agent loads it or installs an unverified one: the call shows `Not run: needs approval, and task and plan runs never ask.` and an install drops its staged copy. A running time allowance for the agent counts here like any other approval.
+
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve, match an operator rule or grant, or have an effective Allow policy. An explicit Deny always stays a deny. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere.
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve, match an operator rule or a running time allowance, or have an effective Allow policy. An explicit Deny always stays a deny. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere.
 
 **What counts as unattended.** Who answers an approval is decided by where the work started — the first conversation of the chain, not the helper doing the work and not whoever wrote last:
 
@@ -313,26 +315,47 @@ On a host without an enforcing kernel sandbox (Windows, or the process sandbox n
 
 ### Approve a request
 
-When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. While a request waits, that main chat needs your attention: its agent's row in the sidebar shows the attention halo, and a collapsed workspace counts it among the main chats that need you (see [the sidebar](using-omnipus-ui.md#the-sidebar)). There is no separate notice; open that chat to answer. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
+When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. While a request waits, that main chat needs your attention: its agent's row in the sidebar shows the attention halo, and a collapsed workspace counts it among the main chats that need you (see [the sidebar](using-omnipus-ui.md#the-sidebar)). There is no separate notice; open that chat to answer. Read the named agent, tool and arguments before you answer. A card shows only the answers that fit the request, usually **Approve Once**, **Allow for 1 hour**, **3 hours** or **1 day**, **Deny** and **Cancel**. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
 | **Approve Once** | Runs this one call. Nothing is remembered; the next identical call asks again. |
-| **Always Allow** | Runs the call and remembers it for the rest of this chat, so an identical call does not ask again. |
+| **Allow for 1 hour**, **3 hours** or **1 day** | Runs the call and lets this agent use the tool, with any arguments, without asking until the time ends. Under the choices the card says what it covers, for example "Covers Mia in all its chats, tasks and its own helpers until the time ends or Omnipus restarts. Other agents still ask." When your answer is saved the card says so, for example "Allowed for Mia until 14:05." |
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
 The card never takes focus. Typing in the message box or pressing Escape does not count as approving or denying a request. Selecting **Stop** in the owning chat cancels that chat's pending approvals, including requests from its helpers and their helpers. The cards resolve as cancelled, the waiting helper executions stop, and the unapproved actions do not run. Another chat's pending approvals stay pending. This does not turn an ordinary Stop into Stop all for helpers that are already working without a pending approval. Work already performed is not undone. Cleanup selects requests present when Stop is received; a fresh request raised by a later resumed execution is not withdrawn by that older Stop. If Approve wins before a selected request is cancelled, its action is not revoked, and Stop reports the already-approved request. If saved helper data cannot be read, Stop reports incomplete cleanup instead of claiming that every request was cancelled. These operational Stop outcomes appear in **Notifications**. In the sidebar, select your username at the bottom, then choose **Notifications**. These notices are not failed replies and do not end or replace a reply that is still running.
 
-An unanswered request expires without running the action. Expiry is a timeout, not a denial by you. When the server confirms that a request has resolved, its card closes. If an expiry notice remains visible, select **Dismiss**. After a page reload or reconnect, a request that is still pending returns as a complete card you can approve, deny or always allow.
+An unanswered request expires without running the action. Expiry is a timeout, not a denial by you. When the server confirms that a request has resolved, its card closes. If an expiry notice remains visible, select **Dismiss**. After a page reload or reconnect, a request that is still pending returns as a complete card with the same answers as before.
 
 **Where a request came from.** When the work being approved was triggered by someone other than you in the web app, the card names it: *"while answering <person> on <connection>"* for a channel message, *"for group <name>"* for a group-chat request, *"asked by <Agent>"* for another agent's request. A conversation that has taken in several such inputs shows the most significant one — a channel person first, then a group, then another agent — and keeps the first of each kind; it never drops back to a lesser one. A request that is already waiting keeps the label it was raised with.
 
-**Requests in a group chat.** When an agent's work for a [group chat](group-chats.md#approvals-and-questions) needs your decision, and that step of the agent is working on that one group's request alone, the card is shown in the group as well as in the agent's own chat. It is the same request: the same decision and the same grant scope wherever you answer it — **Always Allow** still lasts for the agent's own chat — and the first valid decision wins; the other place shows the result without a reload. A step that also handles other input (a message typed in the agent's own chat, a channel message, a task or another agent's message), or that answers requests of two different groups, keeps its cards in the agent's own chat only; so do a helper's cards and secret cards. The group then shows the agent's attention cue and a link to its chat. Agent text in a group can never approve or answer a card. There is no Stop in a group chat; stopping, and the cancelling of pending approvals that comes with it, happens in the agent's own chat.
+**Requests in a group chat.** When an agent's work for a [group chat](group-chats.md#approvals-and-questions) needs your decision, and that step of the agent is working on that one group's request alone, the card is shown in the group as well as in the agent's own chat. It is the same request: the same decision and the same scope wherever you answer it — a time choice covers the agent, not the group — and the first valid decision wins; the other place shows the result without a reload. A step that also handles other input (a message typed in the agent's own chat, a channel message, a task or another agent's message), or that answers requests of two different groups, keeps its cards in the agent's own chat only; so do a helper's cards and secret cards. The group then shows the agent's attention cue and a link to its chat. Agent text in a group can never approve or answer a card. There is no Stop in a group chat; stopping, and the cancelling of pending approvals that comes with it, happens in the agent's own chat.
 
 **Which sidebar entry is marked.** It is the asking agent's main chat in that workspace. This also holds when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
 
-What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
+Cards no longer offer **Always Allow**. A lasting Allow is a stored setting: set the tool or skill to Allow on **Skills & Tools**, or for one agent on its Tools tab.
+
+#### What a time choice covers
+
+- **The whole tool, for one agent.** On an ordinary tool card, a time choice lets that agent use the tool with any arguments. Shell cards stay narrow: a command card remembers the exact command or the start you chose (see "Command rules compared with one-time approvals" below), a file prompt one path with its access, a network prompt the named addresses.
+- **Everywhere that agent works.** It covers the agent in all its chats, its task, plan and scheduled runs, and the helpers it starts for itself. Other agents still ask, and so does work handed to another agent.
+- **It ends** when the time is up, when Omnipus restarts, or when that tool's or skill's stored permission changes (on **Skills & Tools**, on an agent's Tools tab, or by editing `config.json`). Saving the same value again ends nothing. Each ended allowance is written to the audit log. Deleting the agent ends its allowances too.
+- **Nothing is saved.** A time choice lives in memory only and is never written to `config.json`. There is no list of running allowances to review.
+- **Some cards have no time choice.** `set_channel_outbound` always asks. `environment_setup`, `request_mount`, `send_email`, `browser_evaluate` and `set_config` offer **Approve Once** and **Deny** only, so you see every action they take.
+
+#### Skill cards
+
+When an agent loads or installs a skill, one card can ask for two things at once: the skill's permission (it is set to Ask) and its trust (it is unverified and this version is not approved yet; see [skills](skills.md)).
+
+| What the card asks | Answers |
+|---|---|
+| Permission only | **Approve Once**, **Allow for** a time, **Deny** |
+| Trust only | **Approve this version**, **Deny** |
+| Both | **Approve this version**, **Approve this version and allow for** a time, **Deny** |
+| An agent installs an unverified skill under Ask | **Install and approve this version**, **Deny** |
+
+Auto-approve and a running time allowance answer the permission part only; they never approve a version. If the skill changed, or was set to Deny, after the card appeared, your answer stores nothing and the card says why: "The skill changed after this request." or "This skill is now set to Deny." If the version approval cannot be saved, the card stays open with "Could not save the approval. Nothing was changed."
 
 These controls answer different questions.
 
@@ -429,7 +452,7 @@ When an `ask` rule triggers the prompt, you see **one** approval card for the co
 matches an operator rule that requires approval (binary="npm" arg_prefix="publish")
 ```
 
-Choosing **Always Allow** on that card remembers the exact command for the rest of the chat, so the same command does not prompt again there. **Approve Once** remembers nothing, and the next `npm publish` asks again.
+Choosing **Allow for** a time on that card remembers the exact command for that agent until the time ends, so the same command does not prompt again. **Approve Once** remembers nothing, and the next `npm publish` asks again.
 
 **An allow rule only covers a plain command.** It skips the card only for a part with nothing added around the program and its arguments:
 
@@ -454,12 +477,12 @@ On Windows, a command is always judged as one unit, and `arg_prefix` must match 
 
 ### Command rules compared with one-time approvals
 
-When a shell approval card appears, **Always Allow** offers a choice of how much to remember:
+When you pick **Allow for** a time on a shell approval card, you also choose how much to remember:
 
 - **Allow this exact command.** Only the identical command, run from the same folder, skips the card again.
 - **Allow commands starting with `<program and its leading words>`.** For example, approving `npm run test -- --watch` this way can remember `npm run test`, so `npm run test` with any later arguments skips the card. It does not match `npm run testfoo`.
 
-Either way, the memory lasts for the rest of that chat only. It ends with the chat, and nobody else's chats are affected. **Approve Once** never remembers anything. A command rule in `config.json` is the opposite: it applies to every agent and every chat, permanently, until you edit the file again.
+Either way, it covers that agent only and ends as described in "What a time choice covers" above; other agents still ask. **Approve Once** never remembers anything. A command rule in `config.json` is the opposite: it applies to every agent and every chat, permanently, until you edit the file again.
 
 The "starting with" choice is offered only for a single plain command, where approving the prefix cannot quietly cover more than you saw. It is not offered for:
 
@@ -470,9 +493,9 @@ The "starting with" choice is offered only for a single plain command, where app
 - a command with redirection, substitution or an environment-variable prefix;
 - any command on Windows.
 
-In those cases **Always Allow** remembers the exact command only. The card shows a chained command part by part so you can see what each part runs, and the confirmation tells you exactly what was recorded.
+In those cases a time choice remembers the exact command only. The card shows a chained command part by part so you can see what each part runs, and the confirmation tells you exactly what was recorded.
 
-Use a one-time approval for something you only expect to approve in this chat. Use a command rule for a standing decision, such as "this team always needs `npm publish` reviewed" or "never run `rm -rf` on this machine", that should not depend on clicking the same way every time.
+Use **Approve Once** or a time choice for something you only expect to approve for a while. Use a command rule for a standing decision, such as "this team always needs `npm publish` reviewed" or "never run `rm -rf` on this machine", that should not depend on clicking the same way every time.
 
 ### Agents cannot change these rules
 
