@@ -18,9 +18,10 @@ package gitevidence
 // removed or flipped value before Open or Commit is asked to put it back, so a pass
 // cannot come from a value that was never lost.
 //
-// No row here for: what core.alternateRefsCommand does (the review lists it as
-// untested and the ruling names four keys only), or the shape of any further pin
-// value the rulings leave open. F6 (a global hook) is in h55_v2_hooks_test.go.
+// No row here for the shape of any further pin value the rulings leave open. What
+// core.alternateRefsCommand does is a behavioural row of its own
+// (h55_v2_alternate_refs_test.go, ruling-check-delta.md item 3); F6 (a global hook) is
+// in h55_v2_hooks_test.go.
 import (
 	"errors"
 	"fmt"
