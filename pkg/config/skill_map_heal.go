@@ -24,8 +24,8 @@ func RegisterSkillMapHeal(fn SkillMapHeal) {
 	skillMapHeal = fn
 }
 
-// healSkillMapsOnLoad runs the registered skill-map heal and adds the keys
-// it stored to the loaded config. A failed heal fails the load, like the
+// healSkillMapsOnLoad runs the registered skill-map heal and applies the
+// keys it stored and removed to the loaded config. A failed heal fails the load, like the
 // other load-time rewrites: the stored maps would otherwise miss keys.
 func healSkillMapsOnLoad(cfg *Config, path string, onSelfHeal SelfHealWriteHook) error {
 	if skillMapHeal == nil {
@@ -35,23 +35,38 @@ func healSkillMapsOnLoad(cfg *Config, path string, onSelfHeal SelfHealWriteHook)
 	if err != nil {
 		return err
 	}
-	cfg.Sandbox.SkillPolicies = addMissingSkillKeys(cfg.Sandbox.SkillPolicies, policies)
-	cfg.Sandbox.SkillVisibility = addMissingSkillKeys(cfg.Sandbox.SkillVisibility, visibility)
+	cfg.Sandbox.SkillPolicies = ApplyHealedSkillKeys(cfg.Sandbox.SkillPolicies, policies)
+	cfg.Sandbox.SkillVisibility = ApplyHealedSkillKeys(cfg.Sandbox.SkillVisibility, visibility)
 	if written != nil && onSelfHeal != nil {
 		onSelfHeal(written)
 	}
 	return nil
 }
 
-// addMissingSkillKeys returns dst with every key of src that dst does not
-// hold.
-func addMissingSkillKeys(dst, src map[string]string) map[string]string {
-	for k, v := range src {
+// ApplyHealedSkillKeys brings an in-memory skill map in line with the map
+// the heal left on disk: it adds every key of healed that dst does not hold
+// and drops every project key (project:<W>/<slug>) of dst that healed no
+// longer holds, because the heal removed it with its workspace or folder
+// (FR-080). Stored values are never overwritten. A nil healed (the heal did
+// not run) changes nothing.
+func ApplyHealedSkillKeys(dst, healed map[string]string) map[string]string {
+	if healed == nil {
+		return dst
+	}
+	for k := range dst {
+		if _, _, project := ParseProjectSkillKey(k); !project {
+			continue
+		}
+		if _, ok := healed[k]; !ok {
+			delete(dst, k)
+		}
+	}
+	for k, v := range healed {
 		if _, ok := dst[k]; ok {
 			continue
 		}
 		if dst == nil {
-			dst = make(map[string]string, len(src))
+			dst = make(map[string]string, len(healed))
 		}
 		dst[k] = v
 	}

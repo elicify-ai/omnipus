@@ -50,8 +50,8 @@ func (al *AgentLoop) storeNewProjectSkillKeys(ts *turnState) {
 		if err != nil {
 			return err
 		}
-		live.Sandbox.SkillPolicies = addMissingSkillKeys(live.Sandbox.SkillPolicies, policies)
-		live.Sandbox.SkillVisibility = addMissingSkillKeys(live.Sandbox.SkillVisibility, visibility)
+		live.Sandbox.SkillPolicies = config.ApplyHealedSkillKeys(live.Sandbox.SkillPolicies, policies)
+		live.Sandbox.SkillVisibility = config.ApplyHealedSkillKeys(live.Sandbox.SkillVisibility, visibility)
 		return nil
 	})
 	if err != nil {
@@ -67,19 +67,4 @@ func configFilePath() string {
 		return p
 	}
 	return filepath.Join(omnipusHome(), "config.json")
-}
-
-// addMissingSkillKeys returns dst with every key of src that dst does not
-// hold.
-func addMissingSkillKeys(dst, src map[string]string) map[string]string {
-	for k, v := range src {
-		if _, ok := dst[k]; ok {
-			continue
-		}
-		if dst == nil {
-			dst = make(map[string]string, len(src))
-		}
-		dst[k] = v
-	}
-	return dst
 }

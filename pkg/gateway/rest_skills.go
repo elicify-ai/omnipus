@@ -61,6 +61,10 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) listSkills(w http.ResponseWriter) {
+	if err := a.reconcileSkillKeys(); err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not update the skill permissions", err)
+		return
+	}
 	jsonOK(w, a.skillInventory())
 }
 

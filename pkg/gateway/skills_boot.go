@@ -315,20 +315,6 @@ func healSkillPolicyMaps(cfg *config.Config, homePath, configPath string) {
 	if cfg == nil {
 		return
 	}
-	cfg.Sandbox.SkillPolicies = addMissingKeys(cfg.Sandbox.SkillPolicies, policies)
-	cfg.Sandbox.SkillVisibility = addMissingKeys(cfg.Sandbox.SkillVisibility, visibility)
-}
-
-// addMissingKeys returns dst with every key of src that dst does not hold.
-func addMissingKeys(dst, src map[string]string) map[string]string {
-	for k, v := range src {
-		if _, ok := dst[k]; ok {
-			continue
-		}
-		if dst == nil {
-			dst = make(map[string]string, len(src))
-		}
-		dst[k] = v
-	}
-	return dst
+	cfg.Sandbox.SkillPolicies = config.ApplyHealedSkillKeys(cfg.Sandbox.SkillPolicies, policies)
+	cfg.Sandbox.SkillVisibility = config.ApplyHealedSkillKeys(cfg.Sandbox.SkillVisibility, visibility)
 }

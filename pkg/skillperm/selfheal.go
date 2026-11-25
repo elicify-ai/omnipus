@@ -9,7 +9,9 @@ package skillperm
 // one-time upgrade (Run, C-19) is done, again at every start after the
 // built-in sync, and at a turn start that finds a project skill with no
 // stored key (C-19: the key is created when Omnipus first reads the
-// workspace's project shelf). It is additive and never overwrites: a skill key with no
+// workspace's project shelf). It also removes the project keys of a deleted
+// workspace or a removed project folder (project_keys_gone.go, FR-080). It
+// is otherwise additive and never overwrites: a skill key with no
 // stored permission gets ask (ST-Q3 B), except a built-in skill shipped by
 // a newer release, which gets allow, its shipped default (ST-Q10 A); a key
 // with no stored level gets name_and_description.
@@ -98,11 +100,15 @@ func SelfHeal(home, configPath string, builtins []string) (policies, visibility 
 		}
 	}
 
+	removed, err := removeGoneProjectKeys(home, rawPolicies, rawVisibility)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	healedPolicies, healedVisibility := config.ReconcileSkillPolicyMaps(
 		stringValues(rawPolicies), stringValues(rawVisibility), installed)
 	added := addMissing(rawPolicies, healedPolicies)
 	added = addMissing(rawVisibility, healedVisibility) || added
-	if added {
+	if added || removed {
 		written, err = json.MarshalIndent(cfg, "", "  ")
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("skillperm: self-heal: encode %s: %w", filepath.Base(configPath), err)
