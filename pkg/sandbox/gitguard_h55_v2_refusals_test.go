@@ -39,6 +39,18 @@ func h55RequireRuleA(t *testing.T, d sandbox.ExecDecision, what string) {
 	}
 }
 
+// h55RequireRuleANaming is h55RequireRuleA plus the ruling's visibility clause
+// (ruling-H55-v2 section (2) item 1, "The refusal message must name the marker";
+// ruling-check-delta.md item 1 for the accepted over-refusal): the message names the
+// marker, or its prefix where the marker is a word prefix such as --ex.
+func h55RequireRuleANaming(t *testing.T, d sandbox.ExecDecision, what, marker string) {
+	t.Helper()
+	h55RequireRuleA(t, d, what)
+	if !strings.Contains(strings.ToLower(d.PolicyRule+" | "+d.Reason), marker) {
+		t.Fatalf("ruling-H55-v2 Rule A: the refusal of %s must name the marker %q; got rule %q reason %q", what, marker, d.PolicyRule, d.Reason)
+	}
+}
+
 // R11 (F2), by script: git's unambiguous abbreviations of the override options,
 // quotes and backslashes that split a marker, an alias that carries the
 // abbreviation, and the --config-env marker. Rule A normalises (lower-case, quotes
@@ -95,11 +107,13 @@ func TestGitGuard_H55_V2_R11_DirectGitArgvRefusedByRuleA(t *testing.T) {
 	}
 }
 
-// Ruling section (2) item 1: Rule A runs when the script contains the word git as
-// a command word (at the start, after ; & | ( or a newline, after command or env,
-// or as a path ending in /git). The scope that spares non-git commands must not
-// spare a git command spelled one of these ways. The marker is the abbreviation
-// of the override option with a value that is not itself a marker.
+// Ruling section (2) item 1 (scope widened by ruling-check-delta.md item 2, which
+// reads the word git anywhere): the command-word spellings below - at the start,
+// after ; & | ( or a newline, after command or env, as a path ending in /git - are
+// the narrow subset of that scope and must stay refused. The scope that spares
+// non-git commands must not spare a git command spelled one of these ways. The
+// marker is the abbreviation of the override option with a value that is not itself
+// a marker.
 func TestGitGuard_H55_V2_R11_GitCommandWordFormsKeepRuleAOn(t *testing.T) {
 	l := h55Setup(t)
 	rows := []struct{ name, script string }{
@@ -126,6 +140,73 @@ func TestGitGuard_H55_V2_R11_GitCommandWordFormsKeepRuleAOn(t *testing.T) {
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			h55RequireRuleA(t, l.guard.InspectExec([]string{"sh", "-c", tc.script}, l.mount), tc.script)
+		})
+	}
+}
+
+// CD1, ruling-check-delta.md item 1 (architect, 2026-11-25), which replaces the
+// "segment" reading of ruling-H55-v2 section (2) item 3: a word starting with --ex is
+// a Rule A marker whenever the script holds the word push or send-pack anywhere.
+// There is no segment: segments are cut after quotes are deleted, so a quoted
+// separator inside one real command would otherwise hide the marker. Rows 1 and 2
+// are the ruling's own (the second is its "accepted refusal; pin it"); rows 3 to 5
+// are the three rows of the earlier allowed leaf that read "segment" (round 10),
+// which the ruling now makes refusals of the same kind; the rest are derived from the
+// ruling's reason (a quoted separator of the ratified set, the word send-pack, the
+// direct argv form: "apply the same to the arguments joined with spaces").
+func TestGitGuard_H55_V2_CD1_ExWordWithAPushWordAnywhereIsRefusedByRuleA(t *testing.T) {
+	l := h55Setup(t)
+
+	// Instrument: each half of the condition alone is allowed in this layout, so the
+	// refusals below come from the combination and not from a guard that refuses
+	// either word by itself.
+	for _, alone := range []string{`git ls-files --exclude-standard`, `git push origin main`} {
+		if d := l.guard.InspectExec([]string{"sh", "-c", alone}, l.mount); !d.Allowed {
+			t.Fatalf("instrument (ruling-check-delta item 1): %q holds only one half of the condition and must be allowed in this layout, got refused: %s (%s)", alone, d.Reason, d.PolicyRule)
+		}
+	}
+
+	shell := []struct{ name, script string }{
+		{"CD1_quoted_semicolon_inside_a_push_option", `git push -o 'a;b' --ex=x ev HEAD:master`},
+		{"CD1_push_then_grep_with_an_exclude_option_accepted_refusal", `git push origin main; grep --exclude=x .`},
+		{"CD1_ex_word_before_a_push_after_a_semicolon", `git ls-files --exclude-standard; git push origin main`},
+		{"CD1_ex_word_before_a_push_after_and_and", `git ls-files --exclude-standard && git push origin main`},
+		{"CD1_ex_word_after_a_push_after_a_semicolon", `git push origin main; git ls-files --exclude-standard`},
+		{"CD1_quoted_and_and_inside_a_push_option", `git push -o "a&&b" --exe x ev HEAD:master`},
+		{"CD1_quoted_pipe_inside_a_push_option", `git push -o 'a|b' --ex=x ev`},
+		{"CD1_send_pack_in_another_command", `git ls-files --exclude-standard; git send-pack ev master`},
+	}
+	for _, tc := range shell {
+		t.Run("shell/"+tc.name, func(t *testing.T) {
+			h55RequireRuleANaming(t, l.guard.InspectExec([]string{"sh", "-c", tc.script}, l.mount), tc.script, "--ex")
+		})
+	}
+
+	argv := []string{"git", "push", "-o", "a;b", "--ex=x", "ev", "HEAD:master"}
+	t.Run("argv/CD1_argv_semicolon_inside_a_push_option", func(t *testing.T) {
+		h55RequireRuleANaming(t, l.guard.InspectExec(argv, l.mount), strings.Join(argv, " "), "--ex")
+	})
+}
+
+// CD2, ruling-check-delta.md item 2: Rule A's scope is any word git, or any word
+// ending in /git, anywhere in the normalised text, not only in command position. The
+// ruling's rows: "echo git receive-pack" is refused (accepted over-refusal) and
+// "xargs git push --rece=x" is refused; its reasons name the prefixes sudo, xargs,
+// env, then/do and assignments, which the derived rows use. The allowed twin ("echo
+// receive-pack") is in gitguard_h55_v2_allowed_test.go.
+func TestGitGuard_H55_V2_CD2_GitWordAnywhereKeepsRuleAOn(t *testing.T) {
+	l := h55Setup(t)
+	rows := []struct{ name, script, marker string }{
+		{"CD2_echo_git_receive_pack_accepted_refusal", `echo git receive-pack`, "receive-pack"},
+		{"CD2_xargs_git_push_with_an_abbreviation", `xargs git push --rece=x`, "--rece"},
+		{"CD2_sudo_before_git", `sudo git push --rece=x ev master`, "--rece"},
+		{"CD2_then_before_git", `if true; then git push --rece=x ev master; fi`, "--rece"},
+		{"CD2_do_before_git", `for b in x; do git push --rece=x ev "$b"; done`, "--rece"},
+		{"CD2_path_ending_in_git_as_an_argument", `echo /usr/bin/git receive-pack`, "receive-pack"},
+	}
+	for _, tc := range rows {
+		t.Run("shell/"+tc.name, func(t *testing.T) {
+			h55RequireRuleANaming(t, l.guard.InspectExec([]string{"sh", "-c", tc.script}, l.mount), tc.script, tc.marker)
 		})
 	}
 }
