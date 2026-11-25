@@ -22,6 +22,11 @@ function show(toolName: string, extra: Record<string, unknown> = {}) {
     agentId: 'agent-main', sessionId: 'sess-001', turnId: 'turn-001',
     expiresAt: Date.now() + 300_000,
     args: { id: 'worker', env_overrides: { TOKEN: '••••••' }, cli_args: '--model x --verbose', ...extra },
+    // C-24 / C-26: create_agent and update_agent are ordinary tools, so the
+    // server lists Approve Once, the time choices, Deny and Cancel (both lists
+    // are required by ToolApprovalRequiredFrame).
+    offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+    allowDurations: ['1h', '3h', '1d'],
   }] }))
   return renderWithClient(<Panel />)
 }
@@ -45,6 +50,14 @@ describe('agent change approval is additive, masked and keyboard-stable', () => 
     expect(screen.getByText(/must remain visible/)).toBeInTheDocument()
   })
 
+  // C-26 point 1 and the "Approval card" row of "UI Screens and States" list
+  // the card's choices as Approve Once, Allow for 1 hour / 3 hours / 1 day,
+  // Deny. The earlier expectation that ONE Tab from Approve Once reaches Deny
+  // predates the time choices, which now sit between the two; that is the part
+  // the spec changes. What stays: Approve Once comes first, Deny follows it,
+  // and the keyboard walks the choices in that visible order. The spec lists
+  // the order but never says "tab order" in those words, so the sequence below
+  // reads the listed order as the card's order.
   it('17.7 retains Approve then Deny and gives the mask a readable name', async () => {
     show('update_agent')
     const approve = screen.getByRole('button', { name: /^Approve Once$/i })
@@ -52,7 +65,12 @@ describe('agent change approval is additive, masked and keyboard-stable', () => 
     expect(approve.compareDocumentPosition(deny) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     approve.focus()
     expect(approve).toHaveFocus()
-    await userEvent.setup().tab()
+    const user = userEvent.setup()
+    for (const timed of [/^Allow for 1 hour$/i, /^Allow for 3 hours$/i, /^Allow for 1 day$/i]) {
+      await user.tab()
+      expect(screen.getByRole('button', { name: timed })).toHaveFocus()
+    }
+    await user.tab()
     expect(deny).toHaveFocus()
     expect(screen.getByText(/value hidden/i)).toBeInTheDocument()
   })

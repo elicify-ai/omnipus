@@ -6,7 +6,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import userEvent from '@testing-library/user-event'
 import type { ComponentType } from 'react'
 import type {
   AppState, ErrorResponse, PermissionSettings, Skill, SkillInstallRequest,
@@ -118,14 +117,16 @@ afterEach(async () => {
 
 async function mountAndInstall() {
   const Page = await requirePage()
-  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
   render(<QueryClientProvider client={client}><Page /></QueryClientProvider>)
   await tick()
   fireEvent.click(screen.getByRole('button', { name: /^new skill$/i })); await tick()
   fireEvent.click(screen.getByRole('menuitem', { name: 'Upload a skill' })); await tick()
   const inputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]')
   expect(inputs.length, 'actual upload chooser, no fabricated review props').toBe(1)
-  await user.upload(inputs[0], new File([MARKDOWN], 'weather.md', { type: 'text/markdown' }))
+  // A plain change event, not user-event: under vitest fake timers user.upload never returns
+  // (RTL's asyncWrapper waits on a fake setTimeout that it advances only for jest), and the
+  // timed-out test left the act environment off for every later test of the file.
+  fireEvent.change(inputs[0], { target: { files: [new File([MARKDOWN], 'weather.md', { type: 'text/markdown' })] } })
   await tick()
   const staged = seen.filter((call) => call.method === 'POST' && call.path === '/api/v1/skills/install/review')
   expect(staged).toHaveLength(1)
@@ -144,7 +145,7 @@ async function mountAndInstall() {
   const firstAt = reads()[0].at
   expect(firstAt).toBeGreaterThanOrEqual(installs()[0].at)
   expect(firstAt - installs()[0].at).toBeLessThanOrEqual(1000)
-  return { user, firstAt }
+  return { firstAt }
 }
 function pollTimes(firstAt: number, through: number) {
   return Array.from({ length: Math.max(0, Math.floor((through - firstAt) / 1000) + 1) }, (_, n) => firstAt + n * 1000)

@@ -159,7 +159,8 @@ func TestCredentialLeakage(t *testing.T) {
 	exercise(http.MethodGet, "/api/v1/sessions", nil)
 	exercise(http.MethodGet, "/api/v1/tasks", nil)
 	exercise(http.MethodGet, "/api/v1/audit-log", nil)
-	exercise(http.MethodGet, "/api/v1/security/tool-policies", nil)
+	// C-22 row 6: the permissions read model (C-2) replaces the retired global tool-policy read.
+	exercise(http.MethodGet, "/api/v1/security/permissions", nil)
 	exercise(http.MethodGet, "/api/v1/security/rate-limits", nil)
 	exercise(http.MethodGet, "/api/v1/security/sandbox-status", nil)
 	// Make a provider update that would route the API key through the

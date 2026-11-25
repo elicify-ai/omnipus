@@ -17,40 +17,50 @@ import (
 // W10b — CheckGrantOrRequestApproval's grant read (FR-031/FR-080)
 // ---------------------------------------------------------------------
 
-// TestCheckGrantOrRequestApproval_UsesActingSessionKey is this unit's
-// regression guard for the cross-unit obligation FROM U17a (Integration
-// order, cross-unit requests table): "the two-key grant read — IsAllowed
-// under the child's own session key". U17a's InheritFrom (Wave A,
-// pkg/security/approvalgrants.go) copies a spawn-time grant from a SOURCE
-// {sessionID, agentID} into a DESTINATION {sessionID, agentID} — never into
-// a shared/routing key. This test proves loop.go's READ side
-// (CheckGrantOrRequestApproval, which every ask-policy tool call in runTurn
-// goes through — see its own doc comment's "Identity" paragraph, corrected
-// by this unit) resolves an inherited grant when queried under the CHILD's
-// own (acting) session id, and — the discriminating negative control — does
-// NOT resolve it under the ROOT's session id, the value
-// turnState.routingSessionID would hold for this same child (FR-011:
-// "inherited verbatim from the root of its delegation subtree"). This is
-// the exact mistake FR-014's closed-consumer-set rule exists to prevent:
-// routingSessionID must never be read as an approval-grant key.
+// TestCheckGrantOrRequestApproval_ReadsTheActingAgentsAllowance replaces
+// TestCheckGrantOrRequestApproval_UsesActingSessionKey.
 //
-// The three ids are deliberately NOT a simple two-hop parent/child pair: the
-// ROOT never records or receives any grant of its own (unlike the immediate
-// PARENT, whose own direct "Always Allow" is legitimately valid for the
-// parent's own future calls and would make a parent-keyed read succeed for
-// an unrelated, correct reason — that would NOT discriminate anything). The
-// ROOT is the only id in this fixture with zero grants under it by
-// construction, so approved==true there could only mean the read leaked
-// across keys.
+// WHY THE EXPECTATIONS CHANGED. The old test guarded a session-keyed read (the
+// cross-unit obligation FROM U17a: "IsAllowed under the child's own session
+// key"). The child's own grant had to be created by an InheritFrom copy at
+// spawn, and the discriminating negative control said that a read under the
+// ROOT's session id (the value turnState.routingSessionID holds for this same
+// child, FR-011) must miss, because routingSessionID must never be an
+// approval-grant key (FR-014). C-26 (Skills & Tools redesign, founder R2-Q1,
+// 2026-11-22) replaces that key. An allowance is keyed by (agent id, kind,
+// subject) and "The session id is no longer part of the key" (row Key); it
+// covers "every session of that agent" (row Covers). The code-path rows say
+// ApprovalGrantStore.InheritFrom "copies no grants (self-helpers share the key;
+// other agents get nothing)" and loop_policy.go::checkStandingGrant runs "the
+// same checks keyed by agent". Under that contract a read under any session of
+// the acting agent resolves, so the old root-session control is wrong and a
+// correct GREEN fails it.
+//
+// DISPOSITION (old expectation -> new)
+//
+//	KEPT: the real CheckGrantOrRequestApproval call; the child's own session
+//	resolves the agent's allowance with an empty reason; a miss falls through to
+//	the fail-closed nopPolicyApprover (approved==true is only reachable through
+//	a real grant-store hit, see below); the fixture's distinct ids.
+//	FLIPPED (row Key): the read under the root's session id now RESOLVES.
+//	RETIRED: the spawn-time InheritFrom call and its "SETUP: InheritFrom must
+//	have copied the grant into the child's own key" precondition; they describe
+//	a copy C-26 deletes. The same agent holds the allowance in the child's
+//	session with no copy, and that is now asserted first, on the store itself.
+//	The spawn path is driven by TestTimedAllowance_HelpersAndOtherAgents.
+//	ADDED (row Covers; agent isolation): ANOTHER agent reading the same child
+//	session must miss and fall through to the nop approver. It takes over the
+//	discriminating power of the retired root-session control with the isolation
+//	C-26 keeps.
 //
 // No PolicyApprover is wired on this AgentLoop, so a query that misses the
 // grant-store short-circuit reaches loadToolApprover's nopPolicyApprover
 // fallback, which ALWAYS denies with reason "no_approver_configured"
 // (tool_approver.go's V2.B fail-closed default, never the pre-V2.B
 // auto-approve). approved==true is therefore only reachable via a real
-// grant-store hit — a genuine production fallback proves the read, not a
-// spy recording its argument.
-func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
+// grant-store hit — a genuine production fallback proves the read, not a spy
+// recording its argument.
+func TestCheckGrantOrRequestApproval_ReadsTheActingAgentsAllowance(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
@@ -59,44 +69,48 @@ func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
 		parentSessionID = "u9-parent-session-grant"
 		childSessionID  = "u9-child-session-grant-distinct"
 		agentID         = "u9-grant-agent"
+		otherAgentID    = "u9-other-grant-agent"
 		toolName        = "u9_grant_tool"
 	)
 	require.NotEqual(t, parentSessionID, childSessionID, "fixture defect: parent and child ids must be distinct")
 	require.NotEqual(t, rootSessionID, parentSessionID, "fixture defect: root and parent ids must be distinct")
 	require.NotEqual(t, rootSessionID, childSessionID, "fixture defect: root and child ids must be distinct")
+	require.NotEqual(t, agentID, otherAgentID, "fixture defect: the two agent ids must be distinct")
 
 	grants := security.NewApprovalGrantStore()
-	// The immediate PARENT recorded "Always Allow" under its OWN session
-	// id — the root itself never did...
+	// The agent holds an allowance, recorded while it ran in the PARENT's chat.
+	// The child's session and the root never recorded anything, and nothing is
+	// copied to them below.
 	require.True(t, grants.Record(parentSessionID, agentID, toolName, nil))
-	// ...and InheritFrom (U17a) copies it into the CHILD's OWN session id at
-	// spawn — mirroring what U7's spawnSubTurn call site (Wave F) will do.
-	// routingSessionID for this same child would be the ROOT's id (FR-011),
-	// never the parent's — InheritFrom's source here is the immediate
-	// parent, which is a DIFFERENT value from routing the moment delegation
-	// is two levels deep, exactly the case this test's negative control
-	// exercises against the root.
-	grants.InheritFrom(parentSessionID, agentID, childSessionID, agentID)
 	al.approvalGrants = grants
 
-	// Positive lower bound (Rule 4): the grant genuinely exists under the
-	// child's key, via the store's own read, before the code under test runs.
-	require.True(t, grants.IsAllowed(childSessionID, agentID, toolName, nil),
-		"SETUP: InheritFrom must have copied the grant into the child's own key")
+	// Instrument, flipped (rows Key and Covers): the store itself holds the
+	// agent's allowance in the child's session with no copy at spawn, before the
+	// code under test runs. Today's session-keyed store misses here; that miss is
+	// the root cause the two loop-level checks below report as well, so this one
+	// asserts instead of aborting.
+	assert.True(t, grants.IsAllowed(childSessionID, agentID, toolName, nil),
+		"C-26 Covers: the agent's allowance must be held in the child's own session with no copy at spawn")
 
 	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), childSessionID, agentID, toolName, "u9-tc-1", "u9-turn-1", nil)
-	assert.True(t, approved, "grant read keyed on the child's own (acting) session id must resolve the inherited grant")
+	assert.True(t, approved, "a read in the child's own session must resolve the acting agent's allowance")
 	assert.Empty(t, reason)
 
-	// Discriminating negative control: reading under the ROOT's session id —
-	// the value a buggy caller would pass if it read routingSessionID
-	// instead of transcriptSessionID for this child — must NOT resolve. The
-	// root was never granted anything, directly or via inheritance, so any
-	// approved==true here could only mean the read crossed keys.
-	approvedWrongKey, reasonWrongKey, _ := al.CheckGrantOrRequestApproval(
+	// FLIPPED control (row Key): the old test read here under the ROOT's session
+	// id and demanded a miss. The session id is no longer part of the key, so the
+	// same agent's read under that id resolves too.
+	approvedRoot, reasonRoot, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), rootSessionID, agentID, toolName, "u9-tc-2", "u9-turn-2", nil)
-	assert.False(t, approvedWrongKey, "reading under the root's (routing-shaped) session id must NOT find the child's inherited grant")
-	assert.Equal(t, nopApproverDenialReason, reasonWrongKey,
+	assert.True(t, approvedRoot,
+		"C-26 Key: the session id is no longer part of the key, so the same agent's read under the root's session id must resolve")
+	assert.Empty(t, reasonRoot)
+
+	// ADDED control (row Covers; agent isolation): another agent reading the very
+	// same child session must NOT find this agent's allowance.
+	approvedOther, reasonOther, _ := al.CheckGrantOrRequestApproval(
+		context.Background(), childSessionID, otherAgentID, toolName, "u9-tc-3", "u9-turn-3", nil)
+	assert.False(t, approvedOther, "another agent reading the same session must NOT find this agent's allowance")
+	assert.Equal(t, nopApproverDenialReason, reasonOther,
 		"a miss must fall through to the fail-closed nopPolicyApprover, never silently approve")
 }

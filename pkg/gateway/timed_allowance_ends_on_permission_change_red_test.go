@@ -22,8 +22,10 @@ package gateway
 //        that changes a stored value.
 //
 // Harness: concrete writers, loop-owned store lookups and real next-call
-// approval cards. Only the native duration-bearing seed remains a guarded
-// developer handoff; no boolean observer or reload callback can supply an answer.
+// approval cards. The running allowance each row starts from is seeded through the store's own
+// duration-bearing recording API (seedNativePermissionAllowance, fix round 4 part E; it used to be
+// a loud BLOCKED developer handoff until that API landed); no boolean observer or reload callback
+// can supply an answer, and a seed the store refuses fails the row before any ending assertion.
 import (
 	"encoding/json"
 	"net/http"
@@ -85,11 +87,32 @@ func permissionChangeAudit(t *testing.T, auditDir, key, oldV, newV string) {
 	entries := allowanceEndedEntriesFor(t, auditDir)
 	require.Len(t, entries, 1, "exactly one approval.allowance_ended entry for the change")
 	if len(entries) == 1 {
-		require.Equal(t, key, entries[0]["key"], "the entry names the changed key")
-		require.Equal(t, oldV, entries[0]["old"], "the entry names the old value")
-		require.Equal(t, newV, entries[0]["new"], "the entry names the new value")
-		require.NotEmpty(t, entries[0]["actor"], "the entry names the actor of the change")
+		payload := allowanceEndedPayload(entries[0])
+		require.Equal(t, key, payload["key"], "the entry names the changed key")
+		require.Equal(t, oldV, payload["old"], "the entry names the old value")
+		require.Equal(t, newV, payload["new"], "the entry names the new value")
+		require.NotEmpty(t, payload["actor"], "the entry names the actor of the change")
 	}
+}
+
+// allowanceEndedPayload returns the map that carries the content of one approval.allowance_ended
+// entry. Spec C-26 (Audit paragraph) fixes the CONTENT — "agent, subject, the changed key, old and
+// new value, the actor of the change and reason permission_changed" — and FR-096 the count, one per
+// ended allowance; it does not fix the container. The audit log has two shapes for a decision-like
+// event, the audit.Record envelope (payload under "fields", the shape skill.trust_approved and the
+// approval-decision entry use) and a flat record with the payload at the top level (the shape of
+// the security_setting_change record, contracts AuditEntry.actor). This reader accepts exactly those
+// two and then holds the payload to the spec's content: a payload in neither place, or a field
+// missing from the one that is present, fails the asserting test. Fix round 4, part D item 5: the
+// two tests that read this event (this file and the D10#31 row of skill_consent_table_red_test.go)
+// each assumed a different container — the envelope in one, a flat record in the other — so one of
+// them was wrong for every writer; both now read through this one helper. Spec gap, reported to
+// team-lead: the container is unspecified; pin one in C-26 and this helper tightens to it.
+func allowanceEndedPayload(entry map[string]any) map[string]any {
+	if fields, ok := entry["fields"].(map[string]any); ok {
+		return fields
+	}
+	return entry
 }
 
 func allowanceEndedEntriesFor(t *testing.T, auditDir string) []map[string]any {
@@ -148,7 +171,6 @@ func TestPermissionChangeToolWriter_Fixture(t *testing.T) {
 
 func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	t.Run("D17#10: a global Deny ends Mia's allowance, once audited", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 
@@ -174,7 +196,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#11: after the Deny ends it, setting Ask back does not revive it", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
@@ -189,7 +210,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#14 and #15: a global change ends every agent it affects, then cards return", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
@@ -218,7 +238,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#16: the agent's own PUT ends only that agent's allowances", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "delete_task")
@@ -242,15 +261,15 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		require.Len(t, ended, 1,
 			"D17#16: exactly one audit entry — Jim's allowance did not end")
 		if len(ended) == 1 {
-			require.Equal(t, "delete_task", ended[0]["key"], "D17#16: the entry names the changed key")
-			require.Contains(t, ended[0], "old", "D17#16: the entry names the old value (unset → present)")
-			require.Equal(t, "ask", ended[0]["new"], "D17#16: the entry names the new value")
-			require.NotEmpty(t, ended[0]["actor"], "D17#16: the entry names the actor")
+			payload := allowanceEndedPayload(ended[0])
+			require.Equal(t, "delete_task", payload["key"], "D17#16: the entry names the changed key")
+			require.Contains(t, payload, "old", "D17#16: the entry names the old value (unset → present)")
+			require.Equal(t, "ask", payload["new"], "D17#16: the entry names the new value")
+			require.NotEmpty(t, payload["actor"], "D17#16: the entry names the actor")
 		}
 	})
 
 	t.Run("D17#17: the sysagent writer ends a skill allowance, and clearing keeps it ended", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		installPlanSkillFixture(t, api.homePath)
 		grantPlanSkill(t, api, "mia")
@@ -270,7 +289,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#18 control: sending the stored value ends nothing", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
@@ -288,7 +306,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#19: ending bash allowances revokes the agent's live egress tokens", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		seedRunningAllowance(t, api, "mia", "bash addresses example.com")
 		seedRunningAllowance(t, api, "mia", "bash family npm run test")
@@ -315,7 +332,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17#20 control: a trust change ends nothing", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		installPlanSkillFixture(t, api.homePath)
 		grantPlanSkill(t, api, "mia")
@@ -334,9 +350,8 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	// the allowances it affects; a level change, the Auto-approve switch and
 	// God Mode are not permissions and end nothing.
 	t.Run("D17: a config reload that changes the stored value ends the allowance (C-26 writer 4)", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
-		auditDir := attachTestAuditor(t, api)
+		auditDir := useLoopAuditor(t, api) // a reload writes through the loop's own logger
 		w := patchPermissionSettings(t, api, `{"policies":{"delete_task":"ask"}}`)
 		require.Equal(t, http.StatusOK, w.Code, "setup: the floor stores as Ask, body: %s", w.Body.String())
 		seedRunningAllowance(t, api, "mia", "delete_task")
@@ -355,7 +370,6 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 	})
 
 	t.Run("D17 control: a level change is not a permission and ends nothing", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
 		auditDir := attachTestAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "serve_web")
@@ -370,10 +384,13 @@ func TestTimedAllowance_EndsOnPermissionChange(t *testing.T) {
 		assertPermissionNextGate(t, api, "mia", "serve_web", true)
 	})
 
+	// This control reads the same loop-owned audit directory as the reload row above, whose
+	// positive result (exactly one approval.allowance_ended entry) shows the reader can see the
+	// event; and it now runs through the reload seam that ends allowances, so an ending on an
+	// Auto/God change would be seen (through the earlier Settings-refresh path it could not be).
 	t.Run("D17 control: the Auto-approve switch and God Mode end nothing", func(t *testing.T) {
-		requireNativePermissionSeed(t)
 		api := newPermissionChangeAPI(t)
-		auditDir := attachTestAuditor(t, api)
+		auditDir := useLoopAuditor(t, api)
 		seedRunningAllowance(t, api, "mia", "delete_task")
 
 		applyConfigReload(t, api, func(cfg *config.Config) {

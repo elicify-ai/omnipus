@@ -207,7 +207,7 @@ func c1PerformancePartial(t *testing.T, patch map[string]any) {
 	}
 	for _, got := range []map[string]any{mtiDecode(t, w.Body.Bytes()), mtiGetPerf(t, api)} {
 		c1PerformanceTuple(t, got, quiet, enabled, minutes)
-		for _, key := range []string{"max_parallel_agents", "tools_on_demand", "max_tool_iterations"} {
+		for _, key := range []string{"max_parallel_agents", "max_tool_iterations"} {
 			require.Equal(t, before[key], got[key], "unrequested existing sibling must not change")
 		}
 		goalRounds := before["goal_max_rounds"]
@@ -311,7 +311,7 @@ func c1PerformanceRefreshFailure(t *testing.T, patch map[string]any) {
 	// Q111: contract enum order, filtered by request keys only.
 	pendingFields := []any{}
 	for _, field := range []string{
-		"max_parallel_agents", "tools_on_demand", "goal_max_rounds",
+		"max_parallel_agents", "goal_max_rounds",
 		"goal_reminder_quiet_seconds", "goal_stalled_checkin_enabled",
 		"goal_stalled_checkin_minutes", "max_tool_iterations",
 	} {

@@ -56,10 +56,10 @@ func uat2InstallZip(t *testing.T, api *restAPI, slug string, data []byte) *httpt
 	return uat2InstallNamed(t, api, slug+".zip", data, nil)
 }
 
-// uat2InstallNamed uploads data under fileName (the on-disk and stored name,
-// as the upload handler leaves it) and POSTs the install request with extra
-// fields merged in.
-func uat2InstallNamed(t *testing.T, api *restAPI, fileName string, data []byte, extra map[string]any) *httptest.ResponseRecorder {
+// uat2StoreUpload writes data under fileName (the on-disk and stored name, as
+// the upload handler leaves it) in the owner's upload context and stores it in
+// a test media store, returning the opaque upload ref.
+func uat2StoreUpload(t *testing.T, api *restAPI, fileName string, data []byte) string {
 	t.Helper()
 	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
 	require.NoError(t, os.MkdirAll(uploadDir, 0o755))
@@ -69,6 +69,75 @@ func uat2InstallNamed(t *testing.T, api *restAPI, fileName string, data []byte, 
 	api.mediaStore = store
 	ref, err := store.Store(uploadPath, media.MediaMeta{Filename: fileName, Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
 	require.NoError(t, err)
+	return ref
+}
+
+// uat2PostSkills POSTs the JSON body to path through the skills handler.
+func uat2PostSkills(t *testing.T, api *restAPI, path string, req map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(req)
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+	return w
+}
+
+// uat2ReviewThenInstallZip is uat2ReviewThenInstall for an upload named
+// <slug>.zip, the way uat2InstallZip is uat2InstallNamed.
+func uat2ReviewThenInstallZip(t *testing.T, api *restAPI, slug string, data []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	return uat2ReviewThenInstall(t, api, slug+".zip", data, nil)
+}
+
+// uat2ReviewThenInstall installs an uploaded skill the way
+// skills-tools-redesign-spec.md lets an UNVERIFIED skill install under the
+// default trust, Ask: C-3 ("ask ... proceeds only with a person's review of
+// that exact revision ... POST /skills/install without a review -> 409"), C-13,
+// US-7 AS4 and ST-09 (d). An upload has no registry hash, so it is unverified
+// (C-5) and a direct install of it answers 409; the chain here is what the
+// screen does. It stores the upload once, stages it with
+// POST /skills/install/review, then publishes the staged folder with
+// POST /skills/install carrying the review_id and the SAME upload_id (the
+// SkillInstallRequest schema: "slug or upload_id must still name the same
+// source the review staged"), merging extra (revision, replace_local_changes)
+// into that install request.
+//
+// A review that does not answer 200 ends the chain and its response is
+// returned: C-13 stages "with the existing staging code" of installSkill, so
+// the upload rules (a wrapped zip, a bad file name) refuse while staging, and a
+// caller asserting a refusal sees it from whichever step raises it, while a
+// caller asserting 200 reads the review's own refusal text in its failure
+// message instead of an unrelated install error.
+//
+// The direct helpers uat2InstallNamed / uat2InstallZip stay as they were: they
+// are the "no review" request that the Deny and 409 tests need.
+func uat2ReviewThenInstall(t *testing.T, api *restAPI, fileName string, data []byte, extra map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	ref := uat2StoreUpload(t, api, fileName, data)
+	rv := uat2PostSkills(t, api, "/api/v1/skills/install/review", map[string]any{"upload_id": ref})
+	if rv.Code != http.StatusOK {
+		return rv
+	}
+	var review struct {
+		ReviewID string `json:"review_id"`
+	}
+	require.NoError(t, json.Unmarshal(rv.Body.Bytes(), &review), "the review answer is the SkillInstallReview object: %s", rv.Body.String())
+	require.NotEmpty(t, review.ReviewID, "the review answer carries a review_id: %s", rv.Body.String())
+	req := map[string]any{"upload_id": ref, "review_id": review.ReviewID}
+	for k, v := range extra {
+		req[k] = v
+	}
+	return uat2PostSkills(t, api, "/api/v1/skills/install", req)
+}
+
+// uat2InstallNamed uploads data under fileName (the on-disk and stored name,
+// as the upload handler leaves it) and POSTs the install request with extra
+// fields merged in.
+func uat2InstallNamed(t *testing.T, api *restAPI, fileName string, data []byte, extra map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	ref := uat2StoreUpload(t, api, fileName, data)
 	req := map[string]any{"upload_id": ref}
 	for k, v := range extra {
 		req[k] = v
@@ -107,18 +176,24 @@ func TestInstallSkillZipWrappedInFolder_Returns400SkillMdAtRoot(t *testing.T) {
 	}
 }
 
+// The install of an uploaded zip goes through the install review (spec C-3 ask row,
+// C-13, US-7 AS4, ST-09 d): an upload is unverified and the default trust is Ask, so
+// the direct request this test used to send now answers 409. The upload rules and
+// every assertion below are unchanged.
 func TestInstallSkillZipFlatRoot_InstallsControl(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	data := uat2BuildZip(t, []uat2ZipEntry{
 		{name: "SKILL.md", mode: 0o644, body: uat2SkillMD},
 		{name: "reference/a.md", mode: 0o644, body: "ref\n"},
 	})
-	w := uat2InstallZip(t, api, "demo-a", data)
+	w := uat2ReviewThenInstallZip(t, api, "demo-a", data)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	_, err := os.Stat(filepath.Join(api.homePath, "skills", "demo-a", "SKILL.md"))
 	require.NoError(t, err)
 }
 
+// Installed through the install review for the reason given on the flat-root test
+// above (C-3, C-13, ST-09 d); the exec-bit assertions are unchanged.
 func TestInstallSkillZip_KeepsOwnerExecBitUnderScriptsOnly(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	data := uat2BuildZip(t, []uat2ZipEntry{
@@ -126,7 +201,7 @@ func TestInstallSkillZip_KeepsOwnerExecBitUnderScriptsOnly(t *testing.T) {
 		{name: "scripts/run.sh", mode: 0o755, body: "#!/bin/sh\necho hi\n"},
 		{name: "reference/a.md", mode: 0o644, body: "ref\n"},
 	})
-	w := uat2InstallZip(t, api, "demo-a", data)
+	w := uat2ReviewThenInstallZip(t, api, "demo-a", data)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	root := filepath.Join(api.homePath, "skills", "demo-a")
@@ -150,17 +225,19 @@ func uat2GoodZip(t *testing.T, slug string) []byte {
 	return uat2BuildZip(t, []uat2ZipEntry{{name: "SKILL.md", mode: 0o644, body: md}})
 }
 
+// Both uploads go through the install review (C-3, C-13, ST-09 d); the replacement
+// still carries the installed revision and every assertion is unchanged.
 func TestInstallSkillRepeatUploadRenamedWithTimestamp_InstallsAsOriginalSlug(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	data := uat2GoodZip(t, "good-skill")
-	first := uat2InstallZip(t, api, "good-skill", data)
+	first := uat2ReviewThenInstallZip(t, api, "good-skill", data)
 	require.Equal(t, http.StatusOK, first.Code, "first upload installs: %s", first.Body.String())
 	var skill gen.Skill
 	require.NoError(t, json.Unmarshal(first.Body.Bytes(), &skill))
 	require.NotEmpty(t, skill.Revision)
 
 	// The repeat upload sits in the same upload context under the renamed name.
-	second := uat2InstallNamed(t, api, "good-skill_1730000000000000000.zip", data, map[string]any{"revision": skill.Revision})
+	second := uat2ReviewThenInstall(t, api, "good-skill_1730000000000000000.zip", data, map[string]any{"revision": skill.Revision})
 	require.Equal(t, http.StatusOK, second.Code, "the repeat upload installs, not 502; body: %s", second.Body.String())
 	var again gen.Skill
 	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &again))
@@ -169,10 +246,14 @@ func TestInstallSkillRepeatUploadRenamedWithTimestamp_InstallsAsOriginalSlug(t *
 	assert.ErrorIs(t, statErr, os.ErrNotExist, "no skill folder carries the suffix")
 }
 
+// Every install goes through the install review (C-3, C-13, ST-09 d). The warning
+// and the confirmed replacement are two separate chains, so the confirmed one is a
+// fresh review: the spec does not say whether the 409 for local changes ends the
+// first review, so this test does not rely on reusing it.
 func TestInstallSkillRepeatUploadReplaceAfterLocalChangesWarning(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	data := uat2GoodZip(t, "good-skill")
-	first := uat2InstallZip(t, api, "good-skill", data)
+	first := uat2ReviewThenInstallZip(t, api, "good-skill", data)
 	require.Equal(t, http.StatusOK, first.Code, "body: %s", first.Body.String())
 
 	// An edit made outside Omnipus makes the next replacement need confirmation.
@@ -182,7 +263,7 @@ func TestInstallSkillRepeatUploadReplaceAfterLocalChangesWarning(t *testing.T) {
 	rev, err := skills.ContentRevision(skillDir)
 	require.NoError(t, err)
 
-	warn := uat2InstallNamed(t, api, "good-skill_1730000000000000001.zip", data, map[string]any{"revision": rev})
+	warn := uat2ReviewThenInstall(t, api, "good-skill_1730000000000000001.zip", data, map[string]any{"revision": rev})
 	require.Equal(t, http.StatusConflict, warn.Code, "local changes need confirmation, not 502; body: %s", warn.Body.String())
 	assert.Contains(t, warn.Body.String(), "LOCAL_CHANGES_CONFIRMATION_REQUIRED")
 	raw, readErr := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
@@ -190,7 +271,7 @@ func TestInstallSkillRepeatUploadReplaceAfterLocalChangesWarning(t *testing.T) {
 	require.Equal(t, edited, string(raw), "the warning changed nothing")
 
 	// Replace from the same upload context (same renamed copy confirmed).
-	replace := uat2InstallNamed(t, api, "good-skill_1730000000000000001.zip", data, map[string]any{"revision": rev, "replace_local_changes": true})
+	replace := uat2ReviewThenInstall(t, api, "good-skill_1730000000000000001.zip", data, map[string]any{"revision": rev, "replace_local_changes": true})
 	require.Equal(t, http.StatusOK, replace.Code, "Replace succeeds; body: %s", replace.Body.String())
 	raw, readErr = os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	require.NoError(t, readErr)

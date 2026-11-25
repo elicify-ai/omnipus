@@ -75,3 +75,30 @@ func TestProjectSkillKeys(t *testing.T) {
 // or the refusal line. GREEN wires it to the production resolution; nil
 // keeps the RED run loud (BLOCKED), never a skip.
 var projectSkillWinnerOf func(installedPolicy, projectPolicy string, grantedInstalled bool) (winner, refusal string)
+
+// TestProjectSkillKeys_RealLoadAndWritersApplyTheWinnersKey is the native-path
+// binding obligation for projectSkillWinnerOf (CHECK round 4, false-green
+// table row 5). Two defects of TestProjectSkillKeys are recorded here and not
+// edited away. (1) It calls one pure adapter with literals; its leaf "both
+// stored values survive the loads unchanged" calls the adapter twice and
+// compares the two returns, so it does not observe persistence and passes
+// while a load rewrites config.json. (2) The seam is declared in package config
+// but bound to module pkg/tools: an internal pkg/config test cannot import
+// pkg/tools (pkg/tools imports pkg/config; a probe with go list -test reports
+// "import cycle not allowed in test", a pkg/fileutil control does not), so no
+// init() in this package can bind it as declared. At test-side reconciliation
+// the seam and these leaves move to the package that owns the load-time winner
+// decision (or are bound through an export_test setter and an external test
+// package) and this leaf becomes a real check: seed the installed and project
+// policies in config.json, load through the real Skill load for Mia and Ray,
+// read config.json back byte for byte; CHECK then mutates the bound function
+// and requires it to fail. Loud BLOCKED, never a skip.
+func TestProjectSkillKeys_RealLoadAndWritersApplyTheWinnersKey(t *testing.T) {
+	t.Fatal("BLOCKED: the real Skill load (C-11 E1) and the C-21/C-23 writers are " +
+		"not shown to apply the key of the skill that actually wins " +
+		"ResolveSkillName's precedence, with the stored installed and project " +
+		"values read back unchanged from config.json — required by C-19, C-23 and " +
+		"S-102; projectSkillWinnerOf is declared in package config but bound to " +
+		"module pkg/tools, which an internal pkg/config test cannot import (import " +
+		"cycle), so it cannot be bound as declared")
+}

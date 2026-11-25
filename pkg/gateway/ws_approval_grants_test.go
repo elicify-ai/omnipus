@@ -172,9 +172,13 @@ func TestCheckGrantOrRequestApproval_AskWithoutGrantPrompts(t *testing.T) {
 }
 
 // TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession is an
-// end-to-end proof that recording a grant for one (session, agent) does not
-// leak to a different agent or a different session — the core scoping fix
-// (SEC consent boundary).
+// end-to-end proof that recording a grant for one agent does not leak to a
+// different agent (SEC consent boundary). Under skills-tools-redesign-spec.md
+// C-26 the allowance is keyed by (agent id, kind, subject): "The session id is no
+// longer part of the key" and it "Covers every session of that agent", so the
+// third leg below now expects another session of the SAME agent to be covered
+// (it expected a fresh prompt before). The test keeps its name, which predates
+// C-26, so that existing run commands still select it.
 func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) {
 	al := mustAgentLoop(t, minimalAgentLoopCfg(t), bus.NewMessageBus(), &restMockProvider{})
 
@@ -198,10 +202,10 @@ func TestCheckGrantOrRequestApproval_GrantScopedByAgentAndSession(t *testing.T) 
 	assert.Equal(t, "denied for test", reason)
 	assert.Equal(t, 1, fake.callCount(), "a different agent must trigger a fresh approval request")
 
-	// Different session, same agent/tool -> must still prompt.
+	// Different session, same agent/tool -> covered, no prompt (C-26 Key and Covers).
 	approved, _, _ = al.CheckGrantOrRequestApproval(
 		context.Background(), "session-2", "agent-a", "exec", "c3", "t1", nil,
 	)
-	assert.False(t, approved, "a different session must not reuse the grant")
-	assert.Equal(t, 2, fake.callCount(), "a different session must trigger a fresh approval request")
+	assert.True(t, approved, "C-26: another session of the same agent is covered by the agent's allowance")
+	assert.Equal(t, 1, fake.callCount(), "C-26: a covered session must not trigger a fresh approval request")
 }

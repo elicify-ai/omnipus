@@ -45,10 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
@@ -70,9 +67,7 @@ import {
   fetchGatewayStatus,
   fetchCredentials,
   fetchBuiltinTools,
-  fetchGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   fetchAppState,
   fetchSandboxConfig,
   fetchSandboxStatus,
@@ -170,15 +165,19 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
     </QueryClientProvider>,
   )
 }
 
-/** Open Advanced and return the two rate-limit inputs once they exist. */
-async function openAdvanced() {
+/**
+ * Return the two rate-limit inputs once they exist. The Protection view shows
+ * them in plain view; the legacy layout kept them behind a collapsed Advanced
+ * disclosure, which is gone with that layout (skills-tools-redesign C-22 row
+ * 6), so there is nothing to open.
+ */
+async function findRateLimitInputs() {
   await waitFor(() => expect(screen.getByTestId('security-health-header')).toBeInTheDocument())
-  fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
   // Settings redesign #1519: the wireframe (the wording authority) renames
   // the rows — "Model calls per hour", "Tool calls per minute".
   const llm = (await screen.findByLabelText('Model calls per hour')) as HTMLInputElement
@@ -213,9 +212,7 @@ beforeEach(() => {
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
   vi.mocked(fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' as const })
   vi.mocked(fetchAppState).mockResolvedValue(APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
@@ -232,7 +229,7 @@ afterEach(() => {
 describe('#1882 R1(a) — rate limits save through the rate-limit route', () => {
   it('sends ONE PUT to the rate-limit route with exactly the two values only after Save changes, and no security key in any PUT /config body', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await editDrafts(llm, tool)
 
     // FR-010: the write happens only when Save changes is pressed.
@@ -274,7 +271,7 @@ describe('#1882 R1(a) — rate limits save through the rate-limit route', () => 
 describe('#1882 R1(b) — the screen shows the values the rate-limit route returns', () => {
   it('shows the GET /api/v1/security/rate-limits values, not config.security.rate_limits', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
 
@@ -290,7 +287,7 @@ describe('#1882 R1(b) — the screen shows the values the rate-limit route retur
 describe('#1882 R1(c) — a failed rate-limit save shows the error, never success', () => {
   it('keeps the typed values, shows the server message, and never claims saved (FR-015/FR-020)', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     putStatus = 400
     // T2-1 discipline kept: no failure text is on the screen before the save,
@@ -346,7 +343,7 @@ describe('#1882 R1(c) — a failed rate-limit save shows the error, never succes
 describe('#1882 R1(d) — fields with no server behind them are not shown or sent (chief ruling Q1 A)', () => {
   it('does not show "Exec timeout" or "Background timeout" on the Security section', async () => {
     renderSection()
-    await openAdvanced()
+    await findRateLimitInputs()
 
     expect(
       screen.queryByLabelText(/exec timeout/i),
@@ -362,7 +359,7 @@ describe('#1882 R1(d) — fields with no server behind them are not shown or sen
 
   it('a save never sends exec_timeout_seconds or max_background_seconds anywhere', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await editDrafts(llm, tool)
 
     const everyBody = [

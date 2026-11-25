@@ -74,9 +74,11 @@ func unauthCases() []unauthCase {
 			want:   []int{http.StatusUnauthorized},
 		},
 		{
-			name:   "get_tool_policies",
+			// C-22 row 6 retires GET /security/tool-policies; its replacement is the
+			// permissions read model (C-2), authenticated the same way.
+			name:   "get_permissions",
 			method: http.MethodGet,
-			path:   "/api/v1/security/tool-policies",
+			path:   "/api/v1/security/permissions",
 			want:   []int{http.StatusUnauthorized},
 		},
 		{
@@ -125,10 +127,12 @@ func unauthCases() []unauthCase {
 			want:   []int{http.StatusUnauthorized, http.StatusForbidden},
 		},
 		{
-			name:   "put_tool_policies",
-			method: http.MethodPut,
-			path:   "/api/v1/security/tool-policies",
-			body:   `{"tool_policies":{}}`,
+			// C-22 row 6 retires PUT /security/tool-policies; PATCH /security/permissions is
+			// the only writer of the permission maps now (C-2).
+			name:   "patch_permissions",
+			method: http.MethodPatch,
+			path:   "/api/v1/security/permissions",
+			body:   `{"policies":{"bash":"ask"}}`,
 			want:   []int{http.StatusUnauthorized, http.StatusForbidden},
 		},
 	}
@@ -149,6 +153,23 @@ func TestUnauthenticatedAccessRejected(t *testing.T) {
 
 	cases := unauthCases()
 	require.Len(t, cases, 15, "endpoint list must match the 15 anon_* rows carried forward from authz_matrix_test.go")
+
+	// Instrument for the two permissions rows (C-2): a 401 for an unauthenticated caller only
+	// proves the route is protected if the route exists, so the same gateway must answer the
+	// authenticated read with 200. An unregistered path could otherwise be mistaken for a
+	// protected one.
+	t.Run("permissions_route_exists_for_an_authenticated_caller", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, gw.URL+"/api/v1/security/permissions", nil)
+		require.NoError(t, err, "build request")
+		req.Header.Set("Origin", gw.URL)
+		req.Header.Set("Authorization", "Bearer "+gw.Token())
+		resp, err := gw.HTTPClient.Do(req)
+		require.NoError(t, err, "do request")
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		require.Equal(t, http.StatusOK, resp.StatusCode,
+			"GET /api/v1/security/permissions must exist for a signed-in caller (C-2). Body: %s", string(raw))
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1876,60 +1876,144 @@ func TestContract_AuditLogUpdateResponse_Differentiation(t *testing.T) {
 		"two different AuditLogUpdateResponse fixtures must produce different JSON")
 }
 
-// ── SkillTrustUpdateRequest ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml
+// ── PermissionSettings / PermissionSettingsPatch ─────────────────────────────
+// Traces to: Skills & Tools redesign spec C-2 (GET and PATCH of the permissions route),
+// contracts/components/schemas/PermissionSettings.yaml and PermissionSettingsPatch.yaml.
+//
+// FIX ROUND 4, Part B row 6 (C-22 row 6, C-3). The redesign retires the two security
+// endpoints that carried the global tool policies and the skill trust level, together with
+// their schemas: SkillTrustResponse, SkillTrustUpdateRequest, SkillTrustUpdateResponse and
+// GlobalToolPolicies ("handlers, schemas, inbound schemas", C-22 row 6; "SkillTrust* schemas
+// ... are retired", C-3). The contract tests of those four schemas test removed surface and
+// stop loading or compiling when the schemas and their fixtures go, so they are retired:
+//   - TestContract_SkillTrustUpdateRequest_{Populated,ZeroValue,Edge,Differentiation}
+//   - TestContract_SkillTrustUpdateResponse_{Populated,ZeroValue,Edge,Differentiation}
+//   - TestContract_SkillTrustResponse_RejectsExtraneousField
+//   - TestContract_GlobalToolPolicies_RejectsExtraneousField
+// The invariants they carried that still apply (a wire object refuses a member it does not
+// declare; a value outside the enum is refused; the retired level words are no longer valid)
+// move to the schemas that replace them, below. Every negative case first proves a valid
+// document of the same schema passes, so a refusal can only come from the member under test
+// and never from a schema that failed to load.
 
-func TestContract_SkillTrustUpdateRequest_Populated(t *testing.T) {
-	mustPassComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_Populated())
+// permissionSettingsDoc returns a complete, valid PermissionSettings document (C-2: the five
+// members, tool and skill permissions allow/ask/deny, levels hidden/name_only/
+// name_and_description/full, trust allow/ask/deny).
+func permissionSettingsDoc() map[string]any {
+	return map[string]any{
+		"policies":         map[string]any{"bash": "ask", "read_file": "allow", "mcp_github_*": "deny"},
+		"skill_policies":   map[string]any{"deep-research": "ask", "plan": "allow"},
+		"visibility":       map[string]any{"bash": "full", "serve_web": "name_and_description", "mcp_github_*": "hidden"},
+		"skill_visibility": map[string]any{"deep-research": "name_only"},
+		"skill_trust":      "ask",
+	}
 }
 
-func TestContract_SkillTrustUpdateRequest_ZeroValue(t *testing.T) {
-	// level="" — required, must be one of: block_unverified | warn_unverified | allow_all
-	mustFailComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_ZeroValue(),
-		"zero value has empty level field; not a valid enum value")
+func marshalDoc(t *testing.T, doc map[string]any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return raw
 }
 
-func TestContract_SkillTrustUpdateRequest_Edge(t *testing.T) {
-	mustPassComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_Edge())
+func TestContract_PermissionSettings_AcceptsCompleteReadModel(t *testing.T) {
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, permissionSettingsDoc())),
+		"a complete read model (five members) must validate against PermissionSettings")
 }
 
-func TestContract_SkillTrustUpdateRequest_Differentiation(t *testing.T) {
-	f1 := FixtureSkillTrustUpdateRequest_Populated() // block_unverified
-	f2 := FixtureSkillTrustUpdateRequest_Edge()      // allow_all
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"different skill trust levels must produce different JSON")
-	mustPassComponent(t, "SkillTrustUpdateRequest", f1)
-	mustPassComponent(t, "SkillTrustUpdateRequest", f2)
+func TestContract_PermissionSettings_RejectsExtraneousField(t *testing.T) {
+	// Traces to: PermissionSettings.yaml — additionalProperties: false
+	require.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, permissionSettingsDoc())),
+		"instrument: the unmodified document validates")
+	doc := permissionSettingsDoc()
+	doc["injected"] = "value"
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, doc)),
+		"PermissionSettings with an extraneous member must fail — additionalProperties: false")
 }
 
-// ── SkillTrustUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml
-
-func TestContract_SkillTrustUpdateResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_Populated())
+func TestContract_PermissionSettings_RequiresEveryMember(t *testing.T) {
+	// C-2: the read returns the complete stored global permissions; all five members are required.
+	require.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, permissionSettingsDoc())),
+		"instrument: the complete document validates")
+	for _, member := range []string{"policies", "skill_policies", "visibility", "skill_visibility", "skill_trust"} {
+		t.Run("missing "+member, func(t *testing.T) {
+			doc := permissionSettingsDoc()
+			delete(doc, member)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, doc)),
+				"PermissionSettings without %q must fail — it is required", member)
+		})
+	}
 }
 
-func TestContract_SkillTrustUpdateResponse_ZeroValue(t *testing.T) {
-	// applied_level="" — not in enum
-	mustFailComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_ZeroValue(),
-		"zero value has empty applied_level; not a valid enum value")
+func TestContract_PermissionSettings_RejectsValuesOutsideTheEnums(t *testing.T) {
+	// C-3: skill_trust is allow, ask or deny; the retired wire words are no longer values
+	// (Dataset D3 rows 1-3 migrate them on load, they are never served). C-1: the four
+	// levels are hidden, name_only, name_and_description, full.
+	require.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, permissionSettingsDoc())),
+		"instrument: the unmodified document validates")
+	for _, tc := range []struct {
+		name   string
+		mutate func(doc map[string]any)
+	}{
+		{"retired trust word block_unverified", func(d map[string]any) { d["skill_trust"] = "block_unverified" }},
+		{"retired trust word warn_unverified", func(d map[string]any) { d["skill_trust"] = "warn_unverified" }},
+		{"retired trust word allow_all", func(d map[string]any) { d["skill_trust"] = "allow_all" }},
+		{"unknown tool permission", func(d map[string]any) { d["policies"] = map[string]any{"bash": "maybe"} }},
+		{"unknown skill permission", func(d map[string]any) { d["skill_policies"] = map[string]any{"plan": "always"} }},
+		{"unknown tool level", func(d map[string]any) { d["visibility"] = map[string]any{"bash": "shown"} }},
+		{"unknown skill level", func(d map[string]any) { d["skill_visibility"] = map[string]any{"plan": "visible"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := permissionSettingsDoc()
+			tc.mutate(doc)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettings", marshalDoc(t, doc)),
+				"%s must fail against PermissionSettings", tc.name)
+		})
+	}
 }
 
-func TestContract_SkillTrustUpdateResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_Edge())
+func TestContract_PermissionSettingsPatch_AcceptsEachMemberAlone(t *testing.T) {
+	// C-2: the patch carries the same five members, every one optional; naming one is enough.
+	for name, doc := range map[string]map[string]any{
+		"policies":         {"policies": map[string]any{"bash": "deny"}},
+		"skill_policies":   {"skill_policies": map[string]any{"deep-research": "ask"}},
+		"visibility":       {"visibility": map[string]any{"serve_web": "hidden"}},
+		"skill_visibility": {"skill_visibility": map[string]any{"deep-research": "full"}},
+		"skill_trust":      {"skill_trust": "deny"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettingsPatch", marshalDoc(t, doc)),
+				"a patch naming only %q must validate", name)
+		})
+	}
 }
 
-func TestContract_SkillTrustUpdateResponse_Differentiation(t *testing.T) {
-	f1 := FixtureSkillTrustUpdateResponse_Populated() // allow_all + warning
-	f2 := FixtureSkillTrustUpdateResponse_Edge()      // block_unverified, no warning
-	raw1, _ := json.Marshal(f1)
-	raw2, _ := json.Marshal(f2)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"different SkillTrustUpdateResponse values must produce different JSON")
-	mustPassComponent(t, "SkillTrustUpdateResponse", f1)
-	mustPassComponent(t, "SkillTrustUpdateResponse", f2)
+func TestContract_PermissionSettingsPatch_RejectsWhatC2Refuses(t *testing.T) {
+	// Traces to: PermissionSettingsPatch.yaml — additionalProperties: false, minProperties: 1,
+	// and C-2: "no key at all -> 400", "null for a member or a value is refused", values are
+	// the allow/ask/deny and level enums. The retired request shape ({"level": ...}) is an
+	// undeclared member now.
+	require.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettingsPatch",
+		marshalDoc(t, map[string]any{"policies": map[string]any{"bash": "deny"}})),
+		"instrument: a one-member patch validates")
+	for _, tc := range []struct {
+		name string
+		doc  map[string]any
+	}{
+		{"no member at all", map[string]any{}},
+		{"extraneous member", map[string]any{"policies": map[string]any{"bash": "deny"}, "injected": "value"}},
+		{"retired request shape", map[string]any{"level": "block_unverified"}},
+		{"null member", map[string]any{"skill_trust": nil}},
+		{"null value", map[string]any{"policies": map[string]any{"bash": nil}}},
+		{"retired trust word", map[string]any{"skill_trust": "warn_unverified"}},
+		{"unknown permission", map[string]any{"policies": map[string]any{"bash": "maybe"}}},
+		{"unknown level", map[string]any{"visibility": map[string]any{"bash": "shown"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PermissionSettingsPatch", marshalDoc(t, tc.doc)),
+				"%s must fail against PermissionSettingsPatch", tc.name)
+		})
+	}
 }
 
 // ── PromptGuardUpdateRequest ──────────────────────────────────────────────────
@@ -2914,19 +2998,6 @@ func TestContract_OnboardingCompleteRequest_AcceptsAdminBlockAtSchemaLevel(t *te
 		"admin is a valid schema-level property since WP5 restored local-mode admin creation (ADR-0010)")
 }
 
-func TestContract_GlobalToolPolicies_RejectsExtraneousField(t *testing.T) {
-	// Traces to: GlobalToolPolicies.yaml — additionalProperties: false
-	doc := map[string]any{
-		"default_policy": "ask",
-		"policies":       map[string]any{},
-		"injected":       "value",
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GlobalToolPolicies", raw),
-		"GlobalToolPolicies with extraneous field must fail — additionalProperties: false")
-}
-
 func TestContract_ChannelEntry_RejectsExtraneousField(t *testing.T) {
 	// Traces to: ChannelEntry.yaml — additionalProperties: false
 	doc := map[string]any{
@@ -2947,8 +3018,12 @@ func TestContract_ToolApprovalActionRequest_RejectsExtraneousField(t *testing.T)
 	// Traces to: ToolApprovalActionRequest.yaml — additionalProperties: false.
 	// Replaces the retired ExecAllowlist coverage (ADR-092 D2/D5 — the exec
 	// allowlist and its wire schema are deleted outright, no shim).
+	// The base action is allow_for with its duration: C-26 removes "allow" from the
+	// action enum, so an "allow" document would also fail on the enum and the
+	// extraneous field would no longer be the only cause under test.
 	doc := map[string]any{
-		"action":      "allow",
+		"action":      "allow_for",
+		"duration":    "1h",
 		"scope":       "exact",
 		"bypass_flag": true, // extraneous
 	}
@@ -2968,18 +3043,6 @@ func TestContract_AuditLogToggle_RejectsExtraneousField(t *testing.T) {
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuditLogToggle", raw),
 		"AuditLogToggle with extraneous field must fail — additionalProperties: false")
-}
-
-func TestContract_SkillTrustResponse_RejectsExtraneousField(t *testing.T) {
-	// Traces to: SkillTrustResponse.yaml — additionalProperties: false
-	doc := map[string]any{
-		"level":       "verified_only",
-		"extra_field": "injected",
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SkillTrustResponse", raw),
-		"SkillTrustResponse with extraneous field must fail — additionalProperties: false")
 }
 
 func TestContract_PromptGuardResponse_RejectsExtraneousField(t *testing.T) {

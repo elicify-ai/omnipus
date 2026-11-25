@@ -1,21 +1,28 @@
 package agent
 
 // Order 12 / CHECK F17: S-12, S-13, C-12 and D1#10–11.
-// Real ProcessScheduled -> model tool call -> real Skill/load authority ->
-// transcript/model request. No callback decides whether the skill ran.
+// Real task run (TaskExecutor.ExecuteTask, see unattended_task_run_helper_test.go) ->
+// model tool call -> real Skill/load authority -> transcript/model request. No
+// callback decides whether the skill ran.
 // Only the no-paid-call provider and an unexpected-approval observer are
-// substituted. The observer rejects any prompt: headless runs must never ask.
+// substituted. The observer rejects any prompt: unattended runs must never ask.
 // Missing sandbox.skill_policies is a loud BLOCKED, not a second decision
 // implementation. GREEN/mutation proof remains deferred to independent CHECK.
+//
+// Fix round 4 (team-lead ruling, part B row 8 option 1, part D item 8): the run is a real
+// task run, not a cron-job ProcessScheduled turn, because S-12 says "a scheduled task run of
+// Mia" and the A sentence below is what the task run gives (a cron job keeps the headless
+// sentence, #1263 R4). The refusal is persisted in the denied tool call's Result["text"] (the
+// carrier pkg/gateway/task_run_ask_approval_test.go and TestTimedAllowance_Unattended read), so
+// that is where the exact sentence is read now; the old read of entry.Content alone could not
+// see it. Every other oracle is unchanged.
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -58,6 +65,7 @@ func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
 			cfg.Sandbox.SkillTrust = config.SkillTrustLevel("allow") // C-5: trust is independent of permission.
 			cfg.Sandbox.ToolPolicies["Skill"] = "allow"              // C-0: the infrastructure tool is fixed Allow.
 			cfg.Tools.Manifest.Compressed = false                    // Discovery is not this test's subject.
+			cfg.Planning.GoalMaxRounds = 1                           // the run ends after its one scripted tool call (runRealUnattendedTask).
 			// Literal input through the real config decoder; do not compute an
 			// ask_pending/allowed result in a test adapter. The final assertion
 			// catches today's ignored/missing map rather than silently certifying it.
@@ -70,6 +78,7 @@ func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
 			t.Cleanup(msgBus.Close)
 			al := mustNewAgentLoop(t, cfg, msgBus, provider)
 			t.Cleanup(al.Close)
+			installTestSessionLauncher(t, al) // the production task-start wiring: session task id + lifecycle record
 			mia, ok := al.GetRegistry().GetAgent("mia")
 			require.True(t, ok)
 			mia.ContextBuilder.WithSkillAllowlist(granted.Skills).WithSkillBindings(granted.SkillGrants)
@@ -77,13 +86,7 @@ func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
 			require.True(t, resolved, "fixture: real installed generation is granted, not merely a name")
 			approver := &autoRecordingApprover{approve: false}
 			al.SetToolApprover(approver)
-			meta, err := al.GetSessionStore().NewScheduledSession("mia")
-			require.NoError(t, err)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_, err = al.ProcessScheduled(ctx, "mia", meta.ID, "Load deep-research.", "scheduled", meta.ID)
-			require.NoError(t, err, "real unattended turn finishes without waiting for a person")
-			require.NoError(t, ctx.Err(), "a deadline is not the expected unattended decision")
+			sessionID := runRealUnattendedTask(t, al, "mia", "Load deep-research.")
 			assert.Empty(t, approver.requests(), "S-12/S-13: no card may be requested")
 
 			requests := provider.AllRequests()
@@ -95,12 +98,24 @@ func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
 				}
 			}
 			require.Len(t, toolResults, 1, "one result for the one actual Skill call")
-			entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
+			entries, err := al.GetSessionStore().ReadTranscript(sessionID)
 			require.NoError(t, err)
 			var transcript strings.Builder
+			var deniedSkillTexts []string
 			for _, entry := range entries {
 				transcript.WriteString(entry.Content)
 				transcript.WriteByte('\n')
+				for _, call := range entry.ToolCalls {
+					text, ok := call.Result["text"].(string)
+					if !ok {
+						continue
+					}
+					transcript.WriteString(text)
+					transcript.WriteByte('\n')
+					if call.Tool == "Skill" && call.Status == "denied" {
+						deniedSkillTexts = append(deniedSkillTexts, text)
+					}
+				}
 			}
 			if row.loads {
 				assert.Contains(t, toolResults[0].Content, unattendedSkillSentinel, "the real load returned its instructions")
@@ -108,6 +123,8 @@ func TestSkillLoad_AskUnattendedRefused(t *testing.T) {
 			} else {
 				assert.NotContains(t, toolResults[0].Content, unattendedSkillSentinel, "refused instructions never reach the model")
 				assert.Contains(t, transcript.String(), unattendedSkillRefusal, "S-12: exact transcript refusal, not a fabricated reply")
+				assert.Equal(t, []string{unattendedSkillRefusal}, deniedSkillTexts,
+					"S-12: the one real persisted denial of the one Skill call carries the exact spec sentence")
 				for _, request := range requests {
 					encoded, marshalErr := json.Marshal(request)
 					require.NoError(t, marshalErr)

@@ -46,6 +46,7 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 
 	"github.com/stretchr/testify/require"
 )
@@ -162,24 +163,17 @@ func sysDepsFor(t *testing.T, api *restAPI) *systools.Deps {
 	}
 }
 
-// sysStoredSkillOverrides reads C-4's tools_cfg.skills.policies from the
-// flat durable record, never the unrelated builtin policy map. This JSON
-// storage observation deliberately does not depend on the old AgentConfig
-// decoder, which has no skills member. No invented agent wrapper.
+// sysStoredSkillOverrides reads C-4's per-agent skill overrides from the flat
+// durable record: tools.skills.policies at the top level of the entity file
+// (config.AgentConfig.Tools is json:"tools"; the store marshals AgentConfig
+// directly), never the unrelated builtin policy map, never an outer wrapper and
+// never tools_cfg, which is only the REST request name for that object. This
+// JSON storage observation deliberately does not depend on the old AgentConfig
+// decoder, which has no skills member. The shared reader
+// (tests/helpers/agentrecord) is shown against a record the real store wrote.
 func sysStoredSkillOverrides(t *testing.T, home, agentID string) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(home, "entities", "agents", agentID+".json"))
-	require.NoError(t, err, "entity record must exist")
-	// not-wire-format: independent durable entity-file observation.
-	var stored struct {
-		ToolsCfg struct {
-			Skills struct {
-				Policies map[string]any `json:"policies"`
-			} `json:"skills"`
-		} `json:"tools_cfg"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &stored), "flat entity JSON: %s", raw)
-	return stored.ToolsCfg.Skills.Policies
+	return agentrecord.Policies(t, home, agentID, agentrecord.Skills)
 }
 
 // sysSetAgentPermissions drives the real set_agent_permissions tool with the
@@ -227,7 +221,7 @@ func readBackDurable(t *testing.T, deps *systools.Deps, agentID, key, want strin
 	if want == "" {
 		require.NotContains(t, stored, key, "durable skill override is absent after clearing")
 	} else {
-		require.Equal(t, want, stored[key], "tools_cfg.skills.policies carries the override")
+		require.Equal(t, want, stored[key], "tools.skills.policies carries the override (flat stored record)")
 	}
 }
 
@@ -296,13 +290,28 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 		w1, _ := seedKeyValidationMounts(t, api, "test-agent")
 		deleteKeyValidationWorkspace(t, api, w1)
 	})
-	t.Run("instrument durable reader distinguishes skills from builtin and legacy wrappers", func(t *testing.T) {
+	t.Run("instrument durable reader reads the flat carrier and not the builtin map or the old wrappers", func(t *testing.T) {
 		home := t.TempDir()
 		dir := filepath.Join(home, "entities", "agents")
 		require.NoError(t, os.MkdirAll(dir, 0o700))
-		raw := `{"tools_cfg":{"skills":{"policies":{"plan":"ask"}},"builtin":{"policies":{"plan":"deny","bash":"allow"}}},"tools":{"builtin":{"policies":{"plan":"allow"}}},"agent":{"tools":{"skills":{"policies":{"plan":"deny"}}}}}`
+		// The spec carrier (flat tools.skills.policies, C-4) holds ask; every other place a reader
+		// once looked holds a different value for the same key: the builtin sibling (allow), the
+		// REST request name tools_cfg (deny) and an outer agent wrapper (deny).
+		raw := `{"id":"reader","tools":{"skills":{"policies":{"plan":"ask"}},"builtin":{"policies":{"plan":"allow","bash":"allow"}}},"tools_cfg":{"skills":{"policies":{"plan":"deny"}},"builtin":{"policies":{"plan":"deny"}}},"agent":{"tools":{"skills":{"policies":{"plan":"deny"}}}}}`
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "reader.json"), []byte(raw), 0o600))
 		require.Equal(t, map[string]any{"plan": "ask"}, sysStoredSkillOverrides(t, home, "reader"))
+	})
+	t.Run("instrument durable reader finds the flat record the real store wrote", func(t *testing.T) {
+		// buildExecutorTestAPI persists test-agent through the real store with a complete
+		// tools.builtin.policies map (coreagent.NewCustomAgentToolsCfg): the native positive control
+		// that tools -> <carrier> -> policies is where the store puts overrides. It carries no skill
+		// override, so the skills reader reports none rather than echoing the builtin map.
+		api := buildExecutorTestAPI(t)
+		builtin := agentrecord.Policies(t, api.homePath, "test-agent", agentrecord.Builtin)
+		require.NotEmpty(t, builtin, "the real record carries the agent builtin overrides at the flat tools member: %s",
+			agentrecord.Raw(t, api.homePath, "test-agent"))
+		require.Empty(t, sysStoredSkillOverrides(t, api.homePath, "test-agent"),
+			"a real record with no skill override reads as none")
 	})
 
 	t.Run("D16#1 PUT stores a mounted project key; the read-back pair shows it", func(t *testing.T) {
@@ -369,7 +378,14 @@ func TestSkillKeyValidation_AllWriters(t *testing.T) {
 			"workspace_id":         "w1",
 			"skill_policy_changes": map[string]any{"set": map[string]any{mountedKey: "ask"}},
 		}
-		res := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		// The conversation that creates the agent is W1's own. create_agent lets a conversation name
+		// its own workspace; any other target needs Omnipus's cross-workspace setup authority, a
+		// separate rule (omnipus-system-agent FR-006/FR-043, as quoted in
+		// pkg/sysagent/tools/target_workspace.go::resolveTargetWorkspace) that this row does not test.
+		// A bare context carries no workspace, so the first version of this call was refused with
+		// WORKSPACE_NOT_AUTHORIZED before the project key was looked at: a red for the wrong reason.
+		inW1 := tools.WithWorkspaceID(context.Background(), "w1")
+		res := systools.NewAgentCreateTool(deps).Execute(inW1, args)
 		require.False(t, res.IsError,
 			"D16#5: create_agent must accept the mounted project key; got: %s", res.ForLLM)
 		var created map[string]any

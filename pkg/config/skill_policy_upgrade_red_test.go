@@ -130,3 +130,24 @@ func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
 		})
 	}
 }
+
+// TestSkillPolicyUpgrade_StartupWritesThePlan is the native-path binding
+// obligation for skillPermissionsUpgradePlanOf (CHECK round 4, false-green
+// table row 7). TestSkillPolicyUpgrade_FromSkillTool reads an adapter that
+// computes the plan from raw inputs; it cannot show that the real C-19 upgrade
+// (steps 3 and 4) writes that plan, so a planner only the adapter calls passes
+// it. C-19 step 2 says every target value is computed in memory from the
+// snapshot alone. This can only be checked after GREEN, so it is a loud BLOCKED
+// leaf (never a skip). Real-path observer today: TestSkillPermissionsUpgrade_StopAtEveryStep
+// runs the real startup upgrader through its startSkillUpgradeAtBoot adapter
+// on a literal old home and reads the persisted global skill_policies and Mia's
+// skills.policies from disk; it is unbound (loud BLOCKED) until GREEN. The test
+// author reconciles both at test-side reconciliation, and CHECK then mutates
+// the bound planner and requires that observer to fail.
+func TestSkillPolicyUpgrade_StartupWritesThePlan(t *testing.T) {
+	t.Fatal("BLOCKED: the real C-19 upgrade (steps 3 and 4, run at startup " +
+		"before any turn) is not shown to write the values of the function " +
+		"skillPermissionsUpgradePlanOf binds to, computed from the snapshot " +
+		"alone — required by C-19 steps 2-4, S-16 and Dataset D1 rows 15-16; a " +
+		"planner only this adapter calls must never turn this green")
+}

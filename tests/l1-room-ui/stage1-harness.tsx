@@ -7,7 +7,7 @@ import { vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import type {
   AboutResponse, ActivityEventsResponse, AgentToolsResponse, AppState,
-  GlobalToolPolicies, NotificationList, PerformanceSettings, Session,
+  NotificationList, PerformanceSettings, PermissionSettings, Session,
   SessionDetail, SessionPage, Task, ToolRegistryEntry, VersionResponse,
 } from '@/lib/api/generated/openapi-types'
 import type { ClientFrame, ServerFrame, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
@@ -120,10 +120,16 @@ export class Stage1Network extends Network {
       tools: [], agent_type: 'core',
       skills: [],
     }
-    const globalPolicies: GlobalToolPolicies = { policies: { write_file: 'ask' } }
+    // C-22: the agent's Tools tab reads the one canonical read model, the same
+    // `write_file: ask` ceiling this fixture served through the retired global
+    // policies read, with every other map present and empty.
+    const permissions: PermissionSettings = {
+      policies: { write_file: 'ask' }, skill_policies: {}, visibility: { write_file: 'full' },
+      skill_visibility: {}, skill_trust: 'ask',
+    }
     this.respond('GET', '/api/v1/tools', () => json(tools))
     this.respond('GET', '/api/v1/agents/mia/tools', () => json(agentTools))
-    this.respond('GET', '/api/v1/security/tool-policies', () => json(globalPolicies))
+    this.respond('GET', '/api/v1/security/permissions', () => json(permissions))
     this.respond('GET', '/api/v1/mcp-servers', () => json([]))
     // Deliberately supplied so a forbidden read remains a successful,
     // observable regression rather than being masked by a transport error.

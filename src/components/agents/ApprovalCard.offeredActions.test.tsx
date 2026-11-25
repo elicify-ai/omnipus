@@ -20,6 +20,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 
 // The pack's BLOCKED seam (tests/l1-ui-red-u23/support.tsx::requireModule
 // convention): the missing module is a named, loud failure — never a fake
@@ -44,15 +45,32 @@ beforeEach(async () => {
 })
 
 // The card entry the chat renders for an install_skill / skill-load ask.
-// not-wire-format: test-local projection of the C-12 row inputs until the
-// public carrier lands (the pack's fixture-cast convention).
+// not-wire-format: test-local projection of the C-12 row inputs (the pack's
+// fixture-cast convention) plus the two lists the server computes when it raises
+// the card — `offered_actions` and `allow_durations`, both required fields of the
+// wire frame (C-24, C-26; contracts ToolApprovalRequiredFrame), named here as the
+// store entry names them. The card renders exactly those lists; the decision-table
+// inputs stay on the entry so the card is renderable from either.
 interface CardEntryFixture {
   toolName: string
   skillName?: string
   verified?: boolean
   trustOpen?: boolean
   permissionOpen?: boolean
+  offeredActions: ToolApprovalRequiredFrame['offered_actions']
+  allowDurations: ToolApprovalRequiredFrame['allow_durations']
 }
+type ServerLists = Pick<CardEntryFixture, 'offeredActions' | 'allowDurations'>
+
+// What the server sends for each card kind — the examples in the contract's
+// offered_actions description (C-24, C-26), one per C-12 row below.
+const PERMISSION_CARD: ServerLists = { offeredActions: ['allow_once', 'allow_for', 'deny'], allowDurations: ['1h', '3h', '1d'] }
+const TRUST_CARD: ServerLists = { offeredActions: ['approve_version', 'deny'], allowDurations: [] }
+const COMBINED_CARD: ServerLists = {
+  offeredActions: ['approve_version', 'approve_version_allow_for', 'deny'],
+  allowDurations: ['1h', '3h', '1d'],
+}
+const UNVERIFIED_INSTALL_CARD: ServerLists = { offeredActions: ['allow_once', 'deny'], allowDurations: [] }
 
 function renderCard(entry: CardEntryFixture) {
   return render(<ApprovalCard entry={entry as never} />)
@@ -71,7 +89,7 @@ function expectButtons(names: RegExp[], absent: RegExp[]) {
 
 describe('ApprovalCard — offered actions per the C-12 decision table (order 47)', () => {
   it('C-12 #2: a permission card offers Approve Once, the three time choices and Deny — never Always Allow', () => {
-    renderCard({ toolName: 'install_skill', skillName: 'weather', permissionOpen: true })
+    renderCard({ toolName: 'install_skill', skillName: 'weather', permissionOpen: true, ...PERMISSION_CARD })
     expectButtons(
       [/^approve once$/i, /^deny$/i, ...TIME_CHOICES],
       [/always allow/i, /approve this version/i],
@@ -79,7 +97,7 @@ describe('ApprovalCard — offered actions per the C-12 decision table (order 47
   })
 
   it('C-12 #3: a trust card offers "Approve this version" and Deny with no time choice', () => {
-    renderCard({ toolName: 'Skill', skillName: 'notes-helper', verified: false, trustOpen: true })
+    renderCard({ toolName: 'Skill', skillName: 'notes-helper', verified: false, trustOpen: true, ...TRUST_CARD })
     expectButtons([/^approve this version$/i, /^deny$/i], [/^allow for 1 hour$/i, /^allow for 3 hours$/i, /^allow for 1 day$/i])
   })
 
@@ -90,6 +108,7 @@ describe('ApprovalCard — offered actions per the C-12 decision table (order 47
       verified: false,
       trustOpen: true,
       permissionOpen: true,
+      ...COMBINED_CARD,
     })
     expectButtons(
       [/^approve this version$/i, /^approve this version and allow for 1 hour$/i, /^approve this version and allow for 3 hours$/i, /^approve this version and allow for 1 day$/i, /^deny$/i],
@@ -104,12 +123,13 @@ describe('ApprovalCard — offered actions per the C-12 decision table (order 47
       verified: false,
       trustOpen: true,
       permissionOpen: true,
+      ...UNVERIFIED_INSTALL_CARD,
     })
     expectButtons([/^install and approve this version$/i, /^deny$/i], [/^allow for 1 hour$/i, /^approve once$/i])
   })
 
   it('C-12 #7: a verified install under Ask offers the C-26 choices in place of Always Allow', () => {
-    renderCard({ toolName: 'install_skill', skillName: 'weather', verified: true, permissionOpen: true })
+    renderCard({ toolName: 'install_skill', skillName: 'weather', verified: true, permissionOpen: true, ...PERMISSION_CARD })
     expectButtons(
       [/^approve once$/i, /^deny$/i, ...TIME_CHOICES],
       [/always allow/i, /install and approve this version/i],

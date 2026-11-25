@@ -150,16 +150,27 @@ describe('Skills screen — empty state', () => {
   let SkillsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    // The skills route now lazy-loads its screen; import the screen module
+    // The skills route lazy-loads its screen; import the screen module
     // directly so the test renders real content (not the Suspense fallback).
-    const mod = await import('@/components/screens/SkillsScreen')
-    SkillsScreen = mod.SkillsScreen as () => JSX.Element
+    // Skills & Tools redesign FR-065: at its landing the /skills route renders
+    // the new Skills & Tools page (SkillsToolsPage), so that page is the screen
+    // whose empty state this describe pins.
+    const pageModules = import.meta.glob<Record<string, unknown>>(['/src/components/skills/SkillsToolsPage.tsx'])
+    expect(
+      Object.keys(pageModules),
+      'BLOCKED: SkillsToolsPage is not implemented — required by skills-tools-redesign-spec FR-065',
+    ).toContain('/src/components/skills/SkillsToolsPage.tsx')
+    const mod = (await pageModules['/src/components/skills/SkillsToolsPage.tsx']()) as Record<string, unknown>
+    SkillsScreen = mod.SkillsToolsPage as () => JSX.Element
   }, 60_000)
 
   it('renders "Skills & Tools" as h1 heading', () => {
     render(<SkillsScreen />, { wrapper })
-    const heading = screen.getByRole('heading', { name: /Skills/i })
-    expect(heading.textContent).toContain('Skills')
+    // FR-028 puts the "Unverified skills" block first on the Skills tab, so a second
+    // heading now also contains "skills": the query names the level-1 heading and
+    // pins its whole text ("Skills & Tools", sidebar and FR-065).
+    const heading = screen.getByRole('heading', { level: 1 })
+    expect(heading).toHaveTextContent(/^Skills & Tools$/)
   })
 })
 

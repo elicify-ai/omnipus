@@ -135,7 +135,8 @@ func TestQ7FollowupQ4_ChatCapableAgentsAlwaysAskInEveryConsentMode(t *testing.T)
 				require.NotEqual(t, previous, entry.ApprovalID, "Q4/T-10: fresh approval identity for every identical call")
 				cq2RequireCardModelArguments(t, args, entry.Args)
 				previous = entry.ApprovalID
-				refused := t14Request(t, f, http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, `{"action":"allow"}`, true)
+				// C-26: the remembering answer is "Allow for"; the always-ask tool keeps its 400.
+				refused := t14Request(t, f, http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, `{"action":"allow_for","duration":"1h"}`, true)
 				require.Equal(t, http.StatusBadRequest, refused.Code)
 				require.JSONEq(t, `{"error":"`+q7AlwaysAskText+`"}`, refused.Body.String())
 				rec := t14Request(t, f, http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, `{"action":"allow_once"}`, true)

@@ -114,6 +114,13 @@ type upgradeDiskEntry struct {
 	body []byte
 }
 
+// readUpgradeTree fingerprints every path under home. A symlink is recorded as
+// itself and never followed (CHECK round 4 N22): the fixture's real workspace
+// mount (workspace.CreateMount) is a symlink inside the home to a host
+// directory outside it, so the entry carries the link's own lstat metadata and
+// its target text. Reading through it would fail on a directory target and pull
+// the mounted project into the home fingerprint. A retargeted, retyped or
+// replaced link still changes the fingerprint (target text, mode, inode).
 func readUpgradeTree(t testing.TB, home string) map[string]upgradeDiskEntry {
 	t.Helper()
 	out := map[string]upgradeDiskEntry{}
@@ -125,15 +132,19 @@ func readUpgradeTree(t testing.TB, home string) map[string]upgradeDiskEntry {
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("unexpected symlink in persisted upgrade tree: %s", path)
-		}
 		rel, err := filepath.Rel(home, path)
 		if err != nil {
 			return err
 		}
 		var body []byte
-		if !entry.IsDir() {
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			var target string
+			if target, err = os.Readlink(path); err != nil {
+				return err
+			}
+			body = []byte(target)
+		case !entry.IsDir():
 			body, err = os.ReadFile(path)
 			if err != nil {
 				return err
@@ -245,6 +256,7 @@ func TestSkillPermissionsUpgrade_StopAtEveryStep(t *testing.T) {
 		return
 	}
 	t.Run("disk observer instrument", assertUpgradeDiskInstrument)
+	t.Run("disk observer instrument real workspace mount", assertUpgradeMountInstrument)
 	t.Run("S-110 gateway boot before agent turns", func(t *testing.T) {
 		t.Fatal("BLOCKED: C-19 gateway startup migration/turn-admission wiring is not implemented — required by S-110; a migration helper alone must never turn this boot-order obligation green")
 	})
@@ -346,6 +358,88 @@ func assertUpgradeDiskInstrument(t *testing.T) {
 	require.NotEqual(t, added, upgradeTreeDigest(readUpgradeTree(t, home)), "instrument: changed existing bytes must be visible")
 	object := upgradeReadObject(t, home, "existing.json")
 	require.Equal(t, "after", object["marker"], "instrument: raw reader sees actual changed state")
+}
+
+// upgradeTreeLinks lists the symlink entries of a fingerprint, sorted.
+func upgradeTreeLinks(tree map[string]upgradeDiskEntry) []string {
+	var links []string
+	for name, entry := range tree {
+		if entry.info.Mode()&os.ModeSymlink != 0 {
+			links = append(links, name)
+		}
+	}
+	slices.Sort(links)
+	return links
+}
+
+// assertUpgradeMountInstrument is the positive control for the whole-tree
+// fingerprint on the fixture's real workspace mount (CHECK round 4 N22).
+// workspace.CreateMount puts a symlink to the host project directory inside
+// the home, so the observer has to account for that link as itself: never
+// reject it (a correct upgrader leaves the protected mount intact), never
+// follow it out of the home, and still see an unrelated file change or a
+// replaced link. It runs the real fixture and no upgrader, so it is observed
+// on today's product.
+func assertUpgradeMountInstrument(t *testing.T) {
+	t.Run("the real mount link is recorded as itself and not followed", func(t *testing.T) {
+		home := seedLiteralS110Home(t, false)
+		mount := workspace.AllowedMountRoots(home, "w1")[0]
+		tree := readUpgradeTree(t, home)
+		links := upgradeTreeLinks(tree)
+		require.Len(t, links, 1, "instrument: the fixture's one real workspace mount is the tree's one symlink: %v", links)
+		require.Equal(t, mount, string(tree[links[0]].body), "instrument: the link is recorded with its own target text")
+		for name, entry := range tree {
+			require.False(t, strings.HasPrefix(name, links[0]+string(filepath.Separator)),
+				"instrument: nothing behind the link enters the home fingerprint: %s", name)
+			require.NotContains(t, string(entry.body), "PROJECT-NOTES-9Z",
+				"instrument: the mounted project's files are outside the home fingerprint: %s", name)
+		}
+		assertUpgradeTreeUnchanged(t, tree, readUpgradeTree(t, home))
+	})
+	for _, change := range []struct {
+		name string
+		// digestSees is true when names, modes and bytes already show the
+		// change; false when only the entry's own identity (inode) does, which
+		// is what assertUpgradeTreeUnchanged's same-file check compares.
+		digestSees bool
+		apply      func(t *testing.T, home, link, mount string)
+	}{
+		{"an unrelated file's bytes change", true, func(t *testing.T, home, _, _ string) {
+			require.NoError(t, os.WriteFile(filepath.Join(home, "unrelated", "retain.bin"), []byte("CHANGED-9Z\n"), 0o600))
+		}},
+		{"the mount link is retargeted", true, func(t *testing.T, _, link, _ string) {
+			require.NoError(t, os.Remove(link))
+			require.NoError(t, os.Symlink(t.TempDir(), link))
+		}},
+		{"the mount link is replaced by a regular file", true, func(t *testing.T, _, link, _ string) {
+			require.NoError(t, os.Remove(link))
+			require.NoError(t, os.WriteFile(link, []byte("not a link"), 0o600))
+		}},
+		{"the mount link is replaced by a new link to the same target", false, func(t *testing.T, _, link, mount string) {
+			fresh := link + ".new"
+			require.NoError(t, os.Symlink(mount, fresh))
+			require.NoError(t, os.Rename(fresh, link)) // atomic replace: the new inode exists while the old one does
+		}},
+	} {
+		t.Run("still sees: "+change.name, func(t *testing.T) {
+			home := seedLiteralS110Home(t, false)
+			mount := workspace.AllowedMountRoots(home, "w1")[0]
+			before := readUpgradeTree(t, home)
+			links := upgradeTreeLinks(before)
+			require.Len(t, links, 1, "instrument: the fixture's one real workspace mount is the tree's one symlink: %v", links)
+			change.apply(t, home, filepath.Join(home, links[0]), mount)
+			after := readUpgradeTree(t, home)
+			if change.digestSees {
+				require.NotEqual(t, upgradeTreeDigest(before), upgradeTreeDigest(after),
+					"instrument: the change is visible in the fingerprint")
+				return
+			}
+			require.Equal(t, upgradeTreeDigest(before), upgradeTreeDigest(after),
+				"instrument: a same-target link has the same name, mode and target text")
+			require.False(t, os.SameFile(before[links[0]].info, after[links[0]].info),
+				"instrument: the replacement link's own identity differs from the original's")
+		})
+	}
 }
 
 func assertUpgradeDiagnostic(t *testing.T, raw []byte, level, agent string) {

@@ -29,7 +29,6 @@ import userEvent from '@testing-library/user-event'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { ToolPolicyEditor, type ToolPolicyValue } from './ToolPolicyEditor'
-import { POLICY_PRESETS, type RolePreset } from '@/lib/toolPolicyPresets'
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
 
@@ -76,12 +75,11 @@ const FILE_TOOLS: RegistryTool[] = [
   makeTool({ name: 'list_dir', category: 'file', scope: 'core' }),
 ]
 
-// Real registry names are underscored (confirmed live via GET /api/v1/tools —
-// see toolPolicyPresets.ts's Balanced preset comment on the 2026-07-11 fix).
+// Real registry names are underscored (confirmed live via GET /api/v1/tools).
 // Dotted forms like `browser.navigate` are LEGACY aliases kept only for
 // humanizing old session transcripts (humanizeToolName.ts) — they were never
-// the real registry naming, and using them here previously masked the
-// Balanced-preset override-key mismatch bug (the fixture and the preset
+// the real registry naming, and using them here previously masked a key
+// mismatch in the since-retired role-preset table (the fixture and that
 // table used the same wrong convention, so the tests passed for the wrong
 // reason). Do not revert to dotted names.
 const BROWSER_TOOLS: RegistryTool[] = [
@@ -123,18 +121,25 @@ const SAFE_VALUE: ToolPolicyValue = {
   policies: Object.fromEntries(ALL_TOOLS.map((t) => [t.name, 'allow' as ToolPolicy])),
 }
 
-/** Expand a preset over a tool list the same way applyRolePreset/ToolPolicyEditor do. */
-function expectedPresetMap(role: RolePreset, tools: RegistryTool[]): Record<string, ToolPolicy> {
-  const preset = POLICY_PRESETS[role]
-  return Object.fromEntries(tools.map((t) => [t.name, preset.overrides[t.name] ?? preset.defaultPolicy])) as Record<string, ToolPolicy>
-}
-
 function renderEditor(
   tools: RegistryTool[] = ALL_TOOLS,
   value: ToolPolicyValue = SAFE_VALUE,
   onChange = vi.fn(),
 ) {
   return render(<ToolPolicyEditor tools={tools} value={value} onChange={onChange} />)
+}
+
+// The "Global: <value>" indicator on a locked row is a link to where that
+// global value is changed. It used to point at Settings → Security (`/#/settings`);
+// the global tool grid moved to Skills & Tools (`/skills`), so the link opens that
+// page: skills-tools-redesign-spec.md S-127 ("each row's … link opens Skills &
+// Tools with that row in view and focused"), C-22 (Skills & Tools is `/skills`)
+// and FR-049 ("no link MUST point to Settings for tool permissions"). The spec
+// does not say how the row is brought into view, so only the route is pinned.
+function expectOpensSkillsAndTools(link: HTMLElement) {
+  const href = link.getAttribute('href') ?? ''
+  expect(href, 'the global-override link opens Skills & Tools (S-127)').toMatch(/^\/skills(\?|#|$)/)
+  expect(href, 'no link points to Settings for tool permissions (FR-049)').not.toMatch(/settings/i)
 }
 
 // ── US-1 / AC1: each tool appears exactly once — no duplicates ─────────────────
@@ -285,50 +290,17 @@ describe('ToolPolicyEditor — allow/ask/deny controls present (AC5)', () => {
   })
 })
 
-// ── Preset application ─────────────────────────────────────────────────────────
-
-describe('ToolPolicyEditor — preset application', () => {
-  it('renders all three preset buttons', () => {
-    renderEditor()
-    expect(screen.getByTestId('preset-cautious')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-full_access')).toBeInTheDocument()
-  })
-
-  it('clicking Cautious calls onChange with a complete map — every known tool explicitly "ask"', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
-    renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
-    await user.click(screen.getByTestId('preset-cautious'))
-    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('cautious', ALL_TOOLS) })
-  })
-
-  it('clicking Balanced calls onChange with a complete map applying the §2.1 overrides', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
-    renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
-    await user.click(screen.getByTestId('preset-balanced'))
-    const expected = expectedPresetMap('balanced', ALL_TOOLS)
-    expect(onChange).toHaveBeenCalledWith({ policies: expected })
-    // Sanity-check the §2.1 overrides landed (ADR-036: `bash` isn't in ALL_TOOLS,
-    // but the browser_* tools and write_file are).
-    expect(expected['browser_navigate']).toBe('ask')
-    expect(expected['browser_click']).toBe('ask')
-    expect(expected['browser_type']).toBe('ask')
-    expect(expected['browser_evaluate']).toBe('deny')
-    expect(expected['write_file']).toBe('ask')
-    // Tools with no override fall back to the preset's default ('allow').
-    expect(expected['read_file']).toBe('allow')
-  })
-
-  it('clicking Full access calls onChange with a complete map — every known tool explicitly "allow"', async () => {
-    const user = userEvent.setup()
-    const onChange = vi.fn()
-    renderEditor(ALL_TOOLS, SAFE_VALUE, onChange)
-    await user.click(screen.getByTestId('preset-full_access'))
-    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', ALL_TOOLS) })
-  })
-})
+// ── Role presets: retired ──────────────────────────────────────────────────────
+//
+// The four "preset application" cases that stood here (three preset buttons;
+// Cautious, Balanced and Full access each writing a complete map) are deleted
+// with the feature, not weakened: skills-tools-redesign-spec.md, "Regression
+// Test Requirements", row "Presets" — "Deleted with the feature (T-Q6 A)",
+// "the deletion is the expected change, not a weakened test". US-3 AS1 and
+// FR-022 order the same: no screen shows Cautious / Balanced / Full access and
+// the presets module is removed. Their absence is guarded by
+// ToolPolicyEditor.noPresets.test.tsx (S-18, FR-022); the bulk-write
+// replacement is the Set all control (SkillsToolsPage.setAll.test.tsx, S-02).
 
 // ── Category rollup pills ──────────────────────────────────────────────────────
 
@@ -598,10 +570,9 @@ describe('ToolPolicyEditor — global override locking', () => {
     // literal dot-namespace prefix, and only system.* tools genuinely use
     // dot namespacing in the real registry — browser tool names are flat
     // underscored (browser_navigate etc., confirmed live via GET
-    // /api/v1/tools; see toolPolicyPresets.ts's Balanced preset comment on
-    // the 2026-07-11 fix). A 'browser.*' glob cannot match any real browser
-    // tool post-fix, so this test now exercises the glob mechanism on a
-    // namespace where it actually applies.
+    // /api/v1/tools). A 'browser.*' glob cannot match any real browser
+    // tool, so this test exercises the glob mechanism on a namespace where
+    // it actually applies.
     const user = userEvent.setup()
     render(
       <ToolPolicyEditor
@@ -615,10 +586,10 @@ describe('ToolPolicyEditor — global override locking', () => {
     await user.click(within(categoryGrid).getByRole('button', { name: /system/i }))
 
     const row = screen.getByTestId('tool-row-system.config_read')
-    // A "Global: Deny" indicator links to Settings → Security.
+    // A "Global: Deny" indicator links to the page where the global value is set.
     const link = within(row).getByTestId('global-override-system.config_read')
     expect(link).toHaveTextContent(/global:\s*deny/i)
-    expect(link).toHaveAttribute('href', '/#/settings')
+    expectOpensSkillsAndTools(link)
     // allow + ask are locked (less restrictive than deny); deny stays enabled.
     expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
     expect(within(row).getByRole('button', { name: /ask/i })).toBeDisabled()
@@ -783,7 +754,7 @@ describe('ToolPolicyEditor — MCP tool policy controls', () => {
     // Global lock indicator must be present
     const lockBadge = within(row).getByTestId('global-override-mcp_myserver_search')
     expect(lockBadge).toHaveTextContent(/global:\s*deny/i)
-    expect(lockBadge).toHaveAttribute('href', '/#/settings')
+    expectOpensSkillsAndTools(lockBadge)
 
     // allow and ask are locked (less restrictive than deny); deny is still clickable
     expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
@@ -1168,43 +1139,18 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     })
   })
 
-  it('a role-preset click that would set execute_plan to Allow (Full access) opens the modal naming the preset', async () => {
-    const onChange = vi.fn()
-    const user = userEvent.setup()
-    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
-
-    await user.click(screen.getByTestId('preset-full_access'))
-
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent(/full access/i)
-    expect(dialog).toHaveTextContent(/autonomous multi-task execution without an approval prompt/i)
-    expect(onChange).not.toHaveBeenCalled()
-
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Allow autonomous execution' }))
-    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', PLAN_TOOLS) })
-  })
-
-  it('a role-preset click that leaves execute_plan at Ask (Cautious) never opens the modal', async () => {
-    const onChange = vi.fn()
-    const user = userEvent.setup()
-    render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={onChange} />)
-
-    await user.click(screen.getByTestId('preset-cautious'))
-
-    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('cautious', PLAN_TOOLS) })
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-  })
-
-  it('a role-preset click is applied immediately (no modal) when execute_plan is not in the tool registry', async () => {
-    const onChange = vi.fn()
-    const user = userEvent.setup()
-    render(<ToolPolicyEditor tools={FILE_TOOLS} value={SAFE_VALUE} onChange={onChange} />)
-
-    await user.click(screen.getByTestId('preset-full_access'))
-
-    expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', FILE_TOOLS) })
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-  })
+  // The three role-preset cases that stood here — "a role-preset click that
+  // would set execute_plan to Allow (Full access) opens the modal naming the
+  // preset", "… that leaves execute_plan at Ask (Cautious) never opens the
+  // modal" and "… is applied immediately (no modal) when execute_plan is not
+  // in the tool registry" — are deleted with the presets (spec "Regression
+  // Test Requirements": row "Presets" — "Deleted with the feature (T-Q6 A)" —
+  // and row "execute_plan confirm in the editor" — "Yes — through Set all
+  // (S-05)"). Their bulk-path safety invariants (a bulk Allow that would make
+  // execute_plan Allow asks first and Cancel changes nothing; Confirm applies
+  // it; a bulk change that cannot make it Allow never asks) now live with the
+  // Set all control in SkillsToolsPage.setAll.test.tsx (S-05 and its
+  // companions). The single-click cases above are unchanged.
 })
 
 // ── ADR-092 J14 — per-tool "Under Auto" marker ──────────────────────────────

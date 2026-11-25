@@ -52,6 +52,11 @@ function approval(overrides: Partial<PendingToolApproval> = {}): PendingToolAppr
     turnId: 'turn-1',
     expiresAt: NOW + 600_000,
     workspaceId: 'ws-1',
+    // C-24 / C-26: the answers the server lists for a write_file card (a
+    // narrow card with time choices); both lists are required by
+    // ToolApprovalRequiredFrame. An override can replace them.
+    offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+    allowDurations: ['1h', '3h', '1d'],
     ...overrides,
   }
 }

@@ -77,3 +77,25 @@ func TestSkillsSummary_Levels(t *testing.T) {
 		}
 	})
 }
+
+// TestSkillsSummary_Levels_RealMenuBuilderReadsTheLineAuthority is the
+// native-path binding obligation for skillsMenuLineOf (CHECK round 4,
+// false-green table row 17). TestSkillsSummary_Levels reads one adapter
+// function; it cannot tell whether the real menu builder renders every line
+// through it, so a line function only the adapter calls passes it. The
+// obligation is C-11 E2 (listed at its level only when the outcome is not
+// deny), C-15 and FR-070 (the skill menu reads the one visibility authority and
+// rebuilds when an outcome or level changes: the menu-freeze generation key
+// gains a hash of the agent's skill outcomes and levels). This can only be
+// checked after GREEN, so it is a loud BLOCKED leaf (never a skip); the test
+// author replaces it at test-side reconciliation, and CHECK then mutates the
+// bound function and requires a real-menu test to fail. Real-loop observer for
+// the level and rebuild half today: TestVisibilityTransitions row 6 in
+// pkg/agent (S-43).
+func TestSkillsSummary_Levels_RealMenuBuilderReadsTheLineAuthority(t *testing.T) {
+	t.Fatal("BLOCKED: BuildSkillsSummaryFuncWithProject (pkg/skills/loader.go, " +
+		"C-11 E2, the real menu builder) is not shown to render every skill line " +
+		"through the one function skillsMenuLineOf binds to, nor to omit a skill " +
+		"whose outcome is deny — required by C-1, C-11 E2, C-15, FR-070 and " +
+		"S-42/S-43; a line function only this adapter calls must never turn this green")
+}

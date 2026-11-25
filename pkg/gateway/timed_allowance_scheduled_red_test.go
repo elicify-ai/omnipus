@@ -5,16 +5,34 @@ package gateway
 // Order 52 / CHECK F17: C-26, S-109 and S-113. Moved from pkg/agent so
 // the test can drive the real policy approver/registry/HTTP handler without
 // a circular production import. No test inserts a pending card or grant.
-// Actual ProcessScheduled, actual Skill, protected generation grants, real
-// later model requests/transcript and raw persisted policies are observed.
-// Only a scripted no-paid-call provider and a clock are injectable.
+// Actual task run (TaskExecutor.ExecuteTask), actual Skill, protected generation
+// grants, real later model requests/transcript and raw persisted policies are
+// observed. Only a scripted no-paid-call provider and a clock are injectable.
 //
 // The local weather fixture is genuinely granted under trust Allow. It is
 // NOT a fabricated hash-verified install. Exact S-109 verification metadata
 // and S-113's DIFFERENT unverified/trust-Ask/restart scenario remain explicit
-// BLOCKED obligations. ProcessScheduled is the fired-schedule turn entry,
-// not proof that the scheduler fired or that the full gateway restarted.
+// BLOCKED obligations. A task run is not proof that the scheduler fired or
+// that the full gateway restarted.
 // Mutation probes and complete GREEN acceptance belong to independent CHECK.
+//
+// Fix round 4 (team-lead ruling, part B row 8 option 1, part D item 9):
+//   - The unattended turn is a real task run, not a cron-job ProcessScheduled turn: S-109
+//     says a scheduled TASK, and the "Not run: needs approval, and task and plan runs never
+//     ask." sentence below is what a task run is given (C-12's unattended column, ST-Q9 A);
+//     a cron job keeps the headless sentence today (#1263 R4,
+//     pkg/agent/turn_attendance.go::applyTurnAttendance). Same oracles as before: no card,
+//     the model sees exactly one tool result, refused bytes never reach any request, the
+//     exact sentence is persisted. The run's task is the runner; nothing here decides
+//     whether the Skill may load or supplies the refusal text.
+//   - The interactive chat that raises the card carries a lifecycle record. A web chat gets
+//     its root record from ordinary admission (pkg/agent/ordinary_root_record.go::
+//     ensureOrdinaryRootRecord) before attendance is classified; this fixture enters through
+//     ProcessDirectWithChannelAs, which does not pass that admission, so the record is
+//     persisted the way skill_consent_table_red_test.go::beginNativeD10 does for its chat
+//     rows. Without it #1263 R1 (turn_attendance.go::classifySessionChain) reads the session
+//     as "lifecycle record unreadable or missing", classes it unattended and refuses the
+//     call before any card exists.
 
 import (
 	"context"
@@ -37,6 +55,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,6 +163,7 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 	cfg.Sandbox.ToolPolicies["Skill"] = "allow"
 	cfg.Sandbox.AuditLog = true
 	cfg.Tools.Manifest.Compressed = false // Discovery is not the permission boundary.
+	cfg.Planning.GoalMaxRounds = 1        // a task run ends after its one scripted tool call (runRealTask).
 	require.NoError(t, json.Unmarshal([]byte(`{"skill_policies":{"weather":"`+global+`"}}`), &cfg.Sandbox))
 	store := agentstore.New(home)
 	for _, id := range []string{"mia", "ray"} {
@@ -153,15 +175,20 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 			require.NoError(t, err)
 			var literal map[string]any
 			require.NoError(t, json.Unmarshal(raw, &literal))
-			tools, _ := literal["tools_cfg"].(map[string]any)
-			if tools == nil {
-				tools = map[string]any{}
-				literal["tools_cfg"] = tools
+			// The store record is flat: the agent tool settings are the top-level tools member
+			// (tests/helpers/agentrecord); tools_cfg is only the REST request name, so a value
+			// planted there is dead data no reader ever sees.
+			toolsMember, _ := literal["tools"].(map[string]any)
+			if toolsMember == nil {
+				toolsMember = map[string]any{}
+				literal["tools"] = toolsMember
 			}
-			tools["skills"] = map[string]any{"policies": map[string]string{"weather": own}}
+			toolsMember["skills"] = map[string]any{"policies": map[string]string{"weather": own}}
 			raw, err = json.Marshal(literal)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(path, raw, 0o600))
+			require.Equal(t, map[string]any{"weather": own}, agentrecord.Policies(t, home, id, agentrecord.Skills),
+				"the Given is planted at the carrier the store keeps, not in a place nothing reads")
 		}
 		persisted, err := store.Get(id)
 		require.NoError(t, err)
@@ -225,19 +252,127 @@ func (h *scheduledAllowanceHarness) assertModelResult(t *testing.T, loads bool) 
 	}
 }
 
+// runRealTask runs one real task of owner (prompt as its task prompt) through the loop's own
+// TaskExecutor and returns the task run's session id once the run has ended. It never decides
+// whether a tool may run, never supplies the refusal text and never writes a transcript: the
+// caller reads the real persisted transcript and the real model requests. The mirror of
+// pkg/agent/unattended_task_run_helper_test.go::runRealUnattendedTask for this package.
+//
+// The run ends deterministically after the one scripted tool call: the scripted model answers
+// plain text and never claims the goal, so with one goal try (cfg.Planning.GoalMaxRounds = 1,
+// set by newScheduledAllowanceHarness) and one task attempt the run spends its only try and
+// the task ends Failed. Whether it ends Done or Failed is not what these tests observe.
+func (h *scheduledAllowanceHarness) runRealTask(t *testing.T, owner, prompt string) string {
+	t.Helper()
+	store, executor := agent.GetTaskStore(h.al), agent.GetTaskExecutor(h.al)
+	require.NotNil(t, store, "fixture: the loop owns the real task store")
+	require.NotNil(t, executor, "fixture: the loop owns the real task executor")
+	oneAttempt := 1
+	runner := &task.Task{
+		Title:       "Unattended run of " + owner,
+		Prompt:      prompt,
+		Description: "The task whose real run is the unattended turn under test.",
+		AgentID:     owner,
+		Action:      task.ActionLLM,
+		Priority:    3,
+		WorkspaceID: testHarnessWorkspaceMembershipID,
+		Status:      task.StatusNext,
+		MaxAttempts: &oneAttempt,
+		// One acceptance criterion: a task goal record with none leaves the goal's first move
+		// open, and the engine then narrows the first request to set_goal (and AskUserQuestion)
+		// (pkg/agent/goal_loop_forcing.go::goalTurnRecordState, evaluateGoalForcing), so the
+		// scripted first call to the tool under test would be refused as "not offered in this
+		// request" and never reach the permission decision. The goal record takes its criteria
+		// from the stored task (tools.SyncTaskGoalRecord).
+		Criteria: []task.AcceptanceCriterion{{
+			Kind:   task.KindProse,
+			Text:   "The one scripted model turn of this task has run.",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "ta-fixture"},
+		}},
+	}
+	require.NoError(t, store.Create(runner))
+	// Pair the task with its goal record the way production task creation pairs it
+	// (tools.SyncTaskGoalRecord, both lists given together, GOAL-FR-003/FR-048). The first draft
+	// of this fixture skipped this step; the run then executed with "NO goal loop" ("task has no
+	// paired goal record", GOAL-FR-023), never reached a terminal status and every caller timed
+	// out waiting (proof log fix4-go-fix4d-sched-after.log). That was a defect of the fixture.
+	stored, err := store.Get(runner.ID)
+	require.NoError(t, err)
+	dod := []task.AcceptanceCriterion{{
+		Kind:   task.KindProse,
+		Text:   "The one scripted model turn of this task has run.",
+		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "ta-fixture"},
+	}}
+	require.NoError(t, tools.SyncTaskGoalRecord(tools.GoalStoreForTasks(store), stored, true, dod, true,
+		func() int { return 1 }))
+	// A dispatch whose predecessor on this loop has not yet released its dispatch slot gets
+	// agent.ErrDispatchCapReached ("retry later": the executor's documented, retryable refusal),
+	// so that one error is retried and nothing else is: any other refusal fails the fixture.
+	dispatchDeadline := time.Now().Add(30 * time.Second)
+	for {
+		dispatchErr := executor.ExecuteTask(context.Background(), runner.ID, nil)
+		if dispatchErr == nil {
+			break
+		}
+		require.ErrorIs(t, dispatchErr, agent.ErrDispatchCapReached,
+			"ExecuteTask accepts the dispatch synchronously; the run itself is asynchronous")
+		require.True(t, time.Now().Before(dispatchDeadline),
+			"fixture: the previous run never released its dispatch slot: %v", dispatchErr)
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Wait for the task to be terminal. This helper must not drain the executor afterwards:
+	// TaskExecutor.Drain is a one-way shutdown gate, every later dispatch on the same loop is
+	// then refused ("task_executor: executor is draining for shutdown — new dispatch refused"),
+	// and the rows of this file run several tasks on one loop (a run before the answer, runs
+	// after it, runs after the clock passes the end of the allowance). The first draft drained
+	// after each run and the second run of every such row failed before anything was observed
+	// (proof log fix4-go-fix4e-gateway-sched.log, run against dev code at 186e99344, not a
+	// product PASS): a defect of this fixture. Nothing observed here needs the drain: the denial
+	// text is persisted by the turn, which ends before the task's terminal status is written, and
+	// the loop's own Close drains the executor at the end of the test. The first draft also
+	// required the run's session to read as archived (as pkg/agent's t3WaitForTerminal does); in
+	// an earlier proof run (fix4-go-fix4d-agent-unattended.log, run against dev code at
+	// 901c7381f) two agent-package rows with identical data differed on that flag (0.95 s against
+	// a 25 s timeout) although the product log of both shows the same ending, and the archive
+	// flag is not what these tests observe. The session status is logged, not asserted.
+	deadline := time.Now().Add(30 * time.Second)
+	var final *task.Task
+	// final is assigned only on the line before the break, so the loop needs no test of its own
+	// on it: the deadline is the only way out without a result.
+	for time.Now().Before(deadline) {
+		got, getErr := store.Get(runner.ID)
+		require.NoError(t, getErr)
+		if task.IsTerminal(got.Status) {
+			final = got
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if final == nil {
+		got, getErr := store.Get(runner.ID)
+		require.NoError(t, getErr)
+		t.Fatalf("fixture: the task run did not reach a terminal status within 30 s: status %q, %d attempt(s), result %q",
+			got.Status, got.AttemptCount, got.Result)
+	}
+	require.NotEmpty(t, final.SessionID,
+		"fixture: the task run never reached a session, so nothing was observed (task result: %q)", final.Result)
+	meta, err := h.al.GetSessionStore().GetMeta(final.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, runner.ID, meta.TaskID,
+		"instrument: the observed session is the real task run's session, the one the unattended classification reads")
+	t.Logf("observed: the run ended with task status %q, %d attempt(s), session status %q",
+		final.Status, final.AttemptCount, meta.Status)
+	return final.SessionID
+}
+
 func (h *scheduledAllowanceHarness) scheduled(t *testing.T, owner string, loads bool) {
 	t.Helper()
 	h.script.arm()
-	meta, err := h.al.GetSessionStore().NewScheduledSession(owner)
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = h.al.ProcessScheduled(ctx, owner, meta.ID, "Load weather.", "scheduled", meta.ID)
-	require.NoError(t, err)
-	require.NoError(t, ctx.Err(), "a fixture deadline is not unattended refusal")
+	sessionID := h.runRealTask(t, owner, "Load weather.")
 	assert.Empty(t, h.reg.pendingApprovals(), "unattended turns never raise a card")
 	h.assertModelResult(t, loads)
-	entries, err := h.al.GetSessionStore().ReadTranscript(meta.ID)
+	entries, err := h.al.GetSessionStore().ReadTranscript(sessionID)
 	require.NoError(t, err)
 	var texts []string
 	for _, entry := range entries {
@@ -260,6 +395,11 @@ func (h *scheduledAllowanceHarness) pendingFromRealChat(t *testing.T) (*approval
 	h.script.arm()
 	meta, err := h.al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "mia")
 	require.NoError(t, err)
+	// See the header: the chat's root record, exactly as beginNativeD10 persists it for a chat.
+	require.NoError(t, h.al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+		SessionID: meta.ID, Generation: 1, State: session.LifecycleRunning, AgentID: "mia",
+		OwnerScopeKind: session.OwnerScopeHuman, Origin: &session.Origin{Kind: session.OriginKindChat},
+	}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	done := make(chan error, 1)
 	finished := make(chan struct{})
@@ -368,9 +508,10 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 			require.NoError(t, err)
 			var entity map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(raw, &entity))
+			// A marshalled AgentConfig is flat: tools is the agent tool settings member.
 			tools := map[string]json.RawMessage{}
-			if len(entity["tools_cfg"]) != 0 {
-				require.NoError(t, json.Unmarshal(entity["tools_cfg"], &tools))
+			if len(entity["tools"]) != 0 {
+				require.NoError(t, json.Unmarshal(entity["tools"], &tools))
 			}
 			if len(tools["skills"]) == 0 {
 				t.Fatal("BLOCKED: agent tools.skills.policies is not implemented — required by C-4/C-26 point 5; a global Ask alone does not prove own-Ask retention")
@@ -382,11 +523,20 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 		}
 		t.Fatal("fixture: Mia is missing from the actual runtime roster")
 	})
+	// The two placeholders below were written while C-5 (verified install metadata) and C-24
+	// (durable version approval, combined card) did not exist in the product. Fix round 4, part E
+	// re-read them against the dev branch (proof target 186e99344): both now exist there
+	// (TestSkillConsent_Table/C-5_verified_fixture_uses_native_registry_review_install_and_independent_inventory,
+	// TestSkillConsent_Table/D10#30_real_same-home_restart_after_allowance and
+	// TestSkillApprovalActions_Handler/C-24_actual_combined_card_answer_releases_real_instructions_and_persists_trust
+	// pass there), so "not implemented" would now be a false claim. What is missing is the
+	// composite scenario itself in this scheduled-run harness; the messages say so. They stay
+	// loud failures, never skips, until the composites are written (open item in fix4-report.md).
 	t.Run("S-109 exact verified weather prerequisite", func(t *testing.T) {
-		t.Fatal("BLOCKED: C-5 persisted hash-verified install metadata for weather is not implemented — required by the exact S-109 Given; a local trust-Allow runtime probe above is not a fabricated verified install or full S-109 acceptance")
+		t.Fatal("BLOCKED: test-side gap, not a product gap — the exact S-109 Given (verified `weather`, C-5) is not yet driven in this scheduled-run harness, which still installs weather as a plain folder; the verified install review and publication it needs exist in the dev branch (see TestSkillConsent_Table/C-5_verified_fixture_...). Required by S-109; a trust-Allow runtime probe above is not a verified install")
 	})
 	t.Run("S-113 actual gateway restart retains R1 trust but ends allowance", func(t *testing.T) {
-		t.Fatal("BLOCKED: C-24 durable version-approval/combined-card gateway startup wiring is not implemented — required by S-113; must drive trust Ask, notes-helper R1, Mia/Ray own-Deny, real restart, permission-only then R2 combined card. A new store/loop alone is not gateway restart proof")
+		t.Fatal("BLOCKED: test-side gap, not a product gap — the S-113 composite (trust Ask, notes-helper R1, Mia/Ray own-Deny, combined-card answer, scheduled runs, real restart, permission-only then R2 combined card) is not yet written; its parts exist in the dev branch (TestSkillConsent_Table/D10#30 restart, TestSkillApprovalActions_Handler combined-card answer). Required by S-113; a new store/loop alone is not gateway restart proof")
 	})
 }
 
@@ -408,24 +558,50 @@ func (h *scheduledAllowanceHarness) storedPolicyBytes(t *testing.T) map[string][
 	return out
 }
 
+// assertAllowanceAudit holds the one approval-decision entry of the actual card to spec C-26
+// (Audit paragraph): "A non-shell timed allowance writes the existing approval-decision entry
+// with action: allow_for, duration, expires_at, the agent and the tool or skill key."
+//
+// Fix round 4, part E (fixture defect found in the fix4e3 run): the first version read the
+// entry's content from a member named "details". The audit log's record envelope keeps the
+// content of an approval decision under "fields" (pkg/audit Emit; every sibling reader,
+// skill_approval_actions_red_test.go::assertNativeSkillAudit and
+// skill_consent_table_red_test.go::assertNativeD10TimedAudit, reads it there), so the filter saw
+// no entry at all and the test failed on an empty list instead of on the product. It also
+// compared expires_at as a formatted string; the entry's time is RFC 3339 with nanoseconds, so
+// the end time is now parsed and compared as an instant, as the sibling readers do (a robustness
+// change, not the cause of the failure: this fixture's end time has no fractional part).
+//
+// The spec fixes the content ("the agent and the tool or skill key") but not the member that
+// carries the skill key, so the key is asserted as a value of the entry, never through an
+// invented member name. The earlier unconditional BLOCKED failure that stood here claimed the
+// skill-subject encoding was not implemented; the entry does carry the key, so that claim was
+// wrong for the dev code and the assertion above now does the work: an entry without the key
+// still fails this test, loudly.
 func (h *scheduledAllowanceHarness) assertAllowanceAudit(t *testing.T, approvalID string, end time.Time) {
 	t.Helper()
 	rows := readAllAuditEntries(t, filepath.Join(h.home, "system"))
 	var matching []map[string]any
 	for _, row := range rows {
-		details, _ := row["details"].(map[string]any)
-		if row["event"] == audit.EventToolPolicyAskGranted && details["approval_id"] == approvalID {
-			matching = append(matching, details)
+		fields, _ := row["fields"].(map[string]any)
+		if row["event"] == audit.EventToolPolicyAskGranted && fields["approval_id"] == approvalID {
+			matching = append(matching, fields)
 		}
 		raw, err := json.Marshal(row)
 		require.NoError(t, err)
 		assert.NotContains(t, string(raw), "sandbox.skill_policies", "S-109: no stored permission-change audit")
 	}
 	require.Len(t, matching, 1, "one real approval-decision entry for the actual card")
-	assert.Equal(t, "mia", matching[0]["agent_id"])
-	assert.Equal(t, "admin", matching[0]["approver_user_id"])
-	assert.Equal(t, "allow_for", matching[0]["action"])
-	assert.Equal(t, "1d", matching[0]["duration"])
-	assert.Equal(t, end.Format(time.RFC3339), matching[0]["expires_at"])
-	t.Fatal("BLOCKED: C-26 skill-subject audit encoding is not implemented — required by S-109; reconcile this observer to the actual recorded skill key before claiming exact subject verification, never guess a JSON member")
+	fields := matching[0]
+	assert.Equal(t, "mia", fields["agent_id"])
+	assert.Equal(t, "admin", fields["approver_user_id"])
+	assert.Equal(t, "allow_for", fields["action"])
+	assert.Equal(t, "1d", fields["duration"])
+	assert.Contains(t, nativeAuditScalarValues(fields), "weather",
+		"C-26 Audit: the entry carries the skill key; no member name is invented for it")
+	rawEnd, ok := fields["expires_at"].(string)
+	require.True(t, ok, "expires_at is a time string")
+	got, err := time.Parse(time.RFC3339Nano, rawEnd)
+	require.NoError(t, err)
+	assert.Equal(t, end.UTC(), got.UTC(), "the entry states the answer's end time")
 }

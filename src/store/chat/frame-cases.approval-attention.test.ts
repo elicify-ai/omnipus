@@ -83,6 +83,10 @@ function requiredFrame(sessionId: string): ServerFrame {
     session_id: sessionId,
     turn_id: 'turn-1',
     expires_in_ms: 30_000,
+    // C-24: both lists are required by the frame schema (bash is an ordinary
+    // tool: Approve Once, the time choices, Deny and Cancel).
+    offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+    allow_durations: ['1h', '3h', '1d'],
   } as unknown as ServerFrame
 }
 

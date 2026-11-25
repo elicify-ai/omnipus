@@ -151,3 +151,25 @@ func TestMcpMigration_CoverageMatrix(t *testing.T) {
 // GREEN wires it to the production start-time migration; nil keeps the RED
 // run loud (BLOCKED), never a skip.
 var mcpMigrationPlanOf func(global map[string]string, agentEntry string, godMode bool, phase, service, tool string) (writes map[string]string, effective string)
+
+// TestMcpMigration_CoverageMatrix_UpgradeStepWritesThePlan is the native-path
+// binding obligation for mcpMigrationPlanOf (CHECK round 4, false-green table
+// row 4). TestMcpMigration_CoverageMatrix hands the planner its own phase
+// ("first", "repeat", "new-service") and the persisted map as inputs, so it
+// cannot show that the real upgrade writes the plan, writes only global server
+// keys, or runs once. This can only be checked after GREEN, so it is a loud
+// BLOCKED leaf (never a skip); the test author replaces it at test-side
+// reconciliation with a real upgrade run on a seeded home that carries the D8
+// server entries, read back from config.json after two starts, and CHECK then
+// mutates the bound planner and requires it to fail. Real-path observers today:
+// none for D8 rows 1-9 (the TestSkillPermissionsUpgrade_StopAtEveryStep fixture
+// has "servers":{}); rows 10-11 (a new service) are also written by the
+// add-service writers, whose own tests are mcp_add_ask_wildcard_red_test.go in
+// pkg/gateway and pkg/sysagent/tools.
+func TestMcpMigration_CoverageMatrix_UpgradeStepWritesThePlan(t *testing.T) {
+	t.Fatal("BLOCKED: the C-19 upgrade (step 3, the one atomic config.json write) " +
+		"is not shown to take its external-tool writes from the function " +
+		"mcpMigrationPlanOf binds to, to write only global server keys, or to " +
+		"write them once across two starts — required by C-18, FR-074 and S-88 " +
+		"(Dataset D8); wiring the seam alone must never turn this green")
+}

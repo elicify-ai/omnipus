@@ -51,7 +51,12 @@ func q7AuditAuth(t *testing.T, f *wu6Fixture, sid string) func(string, string, s
 		f.mux.ServeHTTP(rec, req.WithContext(ctx))
 		return rec
 	}
-	probe := httptest.NewRequest(http.MethodGet, "/api/v1/security/tool-policies", nil)
+	// The authenticated read goes through the real mux on GET /status, a plain
+	// withAuth route that exists before and after the Skills & Tools redesign. The
+	// probe used to read /security/tool-policies, which C-22 row 6 retires (that
+	// route now answers 404), and the instrument only needs "an authenticated GET
+	// answers 200", not a permissions read.
+	probe := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	probe.Header.Set("Authorization", "Bearer "+bearer)
 	identity := checkBearerAuth(probe.Context(), httptest.NewRecorder(), probe, f.al.GetConfig())
 	require.True(t, identity.Authenticated, "instrument: configured human bearer is actually authenticated")

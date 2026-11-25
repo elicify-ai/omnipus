@@ -42,6 +42,11 @@ function queue(toolName: string, args: Record<string, unknown>) {
     approvalId: 't8-nested-approval', toolCallId: 't8-nested-call', toolName,
     agentId: 'agent-main', sessionId: 'sess-001', turnId: 'turn-001',
     expiresAt: Date.now() + 300_000, args,
+    // C-24 / C-26: create_agent and update_agent are ordinary tools, so the
+    // server lists Approve Once, the time choices, Deny and Cancel (both lists
+    // are required by ToolApprovalRequiredFrame).
+    offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+    allowDurations: ['1h', '3h', '1d'],
   }] }))
 }
 

@@ -90,13 +90,23 @@ type nativeSkillRun struct {
 
 func newNativeSkillHarness(t *testing.T, trust, permission string) *nativeSkillHarness {
 	t.Helper()
+	return newNativeSkillHarnessWithBody(t, trust, permission, nativeSkillR1)
+}
+
+// newNativeSkillHarnessWithBody is newNativeSkillHarness with the notes-helper SKILL.md bytes
+// chosen by the caller (fix round 4, part D item 7: the card-frame test needs a skill whose
+// metadata carries a display name, which no other native test has). The bytes are written before
+// the agents' generation grants are bound, so the grants are the grants of exactly these bytes.
+// Nothing else differs: newNativeSkillHarness is this function with nativeSkillR1.
+func newNativeSkillHarnessWithBody(t *testing.T, trust, permission, skillMarkdown string) *nativeSkillHarness {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvConfig, filepath.Join(home, "config.json"))
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	root := filepath.Join(home, "skills", "notes-helper")
 	require.NoError(t, os.MkdirAll(root, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "SKILL.md"), []byte(nativeSkillR1), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "SKILL.md"), []byte(skillMarkdown), 0o600))
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "native-consent-script"}

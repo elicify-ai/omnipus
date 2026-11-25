@@ -342,10 +342,16 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 	// was deleted) instead of failing fast — a latent defect in this
 	// goroutine's error handling, not something this list should paper over
 	// again by picking a name we're confident will never go away.
+	// "SkillTrustUpdateRequest" (retired by the Skills & Tools redesign: C-3
+	// retires the SkillTrust* schemas and C-22 row 6 deletes the schema file with
+	// its route) was replaced the same way, with "PermissionSettingsPatch" (C-2),
+	// the request schema of the route that replaces it. Leaving the old name in
+	// the list would hang this test for the ten minutes described above as soon as
+	// the file is deleted.
 	schemas := []string{
 		"AgentCreateRequestMain", "AgentUpdateRequest", "SessionCreateRequest",
 		"ProbeProviderRequest", "SandboxConfigUpdate", "SessionModeUpdateFrame",
-		"SessionScopeRequest", "AuditLogToggleRequest", "SkillTrustUpdateRequest",
+		"SessionScopeRequest", "AuditLogToggleRequest", "PermissionSettingsPatch",
 		"PromptGuardUpdateRequest",
 	}
 

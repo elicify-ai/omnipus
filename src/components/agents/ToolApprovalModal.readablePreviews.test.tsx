@@ -15,8 +15,9 @@
 //  3. request_mount's title/buttons use the operator-approved "Add folder"
 //     copy, but clicking them still dispatches the SAME 'allow_once'/'deny'
 //     wire actions — a label-only rename.
-//  4. Cancel is intentionally absent for request_mount (closed 2-button
-//     spec) — a deliberate, tested design decision, not an oversight.
+//  4. (Retired 2026-09-15, see the MERGE note in the request_mount describe:
+//     the Cancel-less "closed 2-button" card is gone. Cancel is part of the
+//     card again — S-129, Clarifications Q1 — so the lists below include it.)
 //  5. A tool with no registered preview still renders the generic Arguments
 //     JSON dump (registry fallback keeps working).
 //  6. The reconnect-stub case (toolCallId/turnId both empty — see the
@@ -40,6 +41,7 @@ import type { Agent, Session, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 
 import { useToolApprovalStore } from '@/store/toolApproval'
+import type { PendingToolApproval } from '@/store/toolApproval'
 import { useSessionStore } from '@/store/session'
 import type { ComponentType } from 'react'
 import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
@@ -51,6 +53,22 @@ beforeEach(async () => {
   installApprovalNetwork()
   ToolApprovalPanel = await loadApprovalPanel()
 })
+
+// C-24 / C-26: a card renders exactly the answers the server listed when it
+// raised the card. The lists below are the spec's own: S-119 gives an ordinary
+// tool [allow_once, allow_for, deny, cancel] with allow_durations [1h, 3h, 1d];
+// S-129 and Clarifications Q1 give an exact-action tool (request_mount is one,
+// C-26 point 9) Approve Once, Deny and Cancel with an empty allow_durations. No
+// fixture in this file leaves a list out, so no case depends on a rule the
+// client would apply when a list is missing.
+const ORDINARY_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
+}
+const EXACT_ACTION_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'deny', 'cancel'],
+  allowDurations: [],
+}
 
 const MOUNT_APPROVAL = {
   approvalId: 'appr-mount-readable',
@@ -64,6 +82,7 @@ const MOUNT_APPROVAL = {
   sessionId: 'sess-mount',
   turnId: 'turn-mount',
   expiresAt: Date.now() + 300_000,
+  ...EXACT_ACTION_TOOL_ANSWERS,
 }
 
 function seedAgent() {
@@ -209,6 +228,7 @@ describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -232,6 +252,7 @@ describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -251,14 +272,34 @@ describe('ToolApprovalPanel — a normal approval renders the full approvable ca
   // a stub entry (the snapshot requires tool_call_id/turn_id/args). The
   // full-card pin below is their surviving positive counterpart.
   it('L1 §1.2 R6: a normal request_mount approval renders the full approvable card', () => {
+    // C-24 / C-26: the server computes the card's choices when it raises the
+    // card. request_mount is an exact-action tool (C-26 point 9, founder Q5 A):
+    // no time choice, so its frame lists Approve Once, Deny and Cancel and an
+    // empty allow_durations (S-129, Clarifications Q1). MOUNT_APPROVAL carries
+    // exactly those lists (EXACT_ACTION_TOOL_ANSWERS). The two session_state
+    // frames in the reconnect describe below list Approve Once and Deny only
+    // (C-26 point 9 read literally). No assertion in this file depends on
+    // whether Cancel is listed: the cases that look at the choices look for the
+    // time choices and Always Allow, which an exact-action card never offers.
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
-    // Real args are present, so Always Allow must be offered — it remembers
-    // THIS folder, not any folder.
-    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+    // EXPECTATION FLIPPED (CHECK round 4, candidate 12). This line used to
+    // require the Always Allow toggle ("it remembers THIS folder, not any
+    // folder"). That choice is retired: C-26 point 9 gives the exact-action
+    // cards Approve Once and Deny only, "with no time choices, so the person
+    // always sees the exact action"; FR-089 forbids "Always Allow", "Always
+    // allow" and "Allow everywhere" on every card; S-129 says the card offers
+    // no time choice. The sibling ApprovalCard.timeChoices.test.tsx renders
+    // this same panel for an ordinary card and requires the buttons that are
+    // absent here, so these absences are not vacuous. The Add folder button
+    // and the stub-absence check below are kept as they were.
+    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Always Allow/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Allow everywhere/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Allow for (1 hour|3 hours|1 day)/i })).not.toBeInTheDocument()
     // The retired stub surface never returns.
     expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
   })

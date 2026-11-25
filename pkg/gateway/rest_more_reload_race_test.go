@@ -9,7 +9,7 @@
 // a.agentLoop.TriggerReload():
 //
 //  1. setGodMode (rest_god_mode.go)      — POST /api/v1/gateway/god-mode
-//  2. putToolPolicies (rest_tool_policies.go) — PUT /api/v1/security/tool-policies
+//  2. the permissions PATCH (C-2; it replaced putToolPolicies, retired by C-22 row 6) — PATCH /api/v1/security/permissions
 //  3. setAgentMailbox (rest_mailbox.go)  — PUT /api/v1/agents/{id}/mailboxes/{ws}
 //  4. deleteAgentMailbox (rest_mailbox.go) — DELETE /api/v1/agents/{id}/mailboxes/{ws}
 //  5. the provider-update branch of HandleProviders (rest.go) — PUT /api/v1/providers/{id}
@@ -74,26 +74,26 @@ func TestGodMode_POST_ReloadCompletesBeforeResponse(t *testing.T) {
 			"registry swap, never by SwapConfig alone)")
 }
 
-// TestPutToolPolicies_ReloadCompletesBeforeResponse proves site 2:
-// putToolPolicies must not respond 200 until the registry rebuild that
-// actually swaps every agent instance's ToolPolicyCfg.GlobalPolicies has
-// completed — otherwise a global tightening edit (e.g. bash: allow -> deny)
-// would be persisted and shown enforced by a subsequent GET while a tool call
-// racing the response could still execute under the previous, looser policy.
-func TestPutToolPolicies_ReloadCompletesBeforeResponse(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+// TestPermissionsPatch_ReloadCompletesBeforeResponse proves site 2: the global-policy writer must
+// not respond 200 until the registry rebuild that actually swaps every agent instance's
+// ToolPolicyCfg.GlobalPolicies has completed — otherwise a global tightening edit (e.g. bash:
+// ask -> deny) would be persisted and shown enforced by a subsequent GET while a tool call racing
+// the response could still execute under the previous, looser policy.
+//
+// FIX ROUND 4, Part B row 6: the site used to be putToolPolicies behind
+// PUT /security/tool-policies. C-22 row 6 retires that route and C-2 makes
+// PATCH /security/permissions "the only writer of these maps", with "200 stored and applied; 503
+// stored, not applied to running agents", so the same property is re-driven through the real route
+// table with the same body and the same assertion.
+func TestPermissionsPatch_ReloadCompletesBeforeResponse(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
 	wireAsyncReload(t, api, 30*time.Millisecond)
 
-	body := `{"policies":{"bash":"deny","search_web":"allow"}}`
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdmin(t, api, r)
-	w := httptest.NewRecorder()
-	api.HandleToolPolicies(w, r)
+	w := patchPermissions(t, api, routes, `{"policies":{"bash":"deny","search_web":"allow"}}`)
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.False(t, api.agentLoop.IsReloadPending(),
-		"putToolPolicies returned 200 while a config reload was still pending — a tightened global "+
+		"the permissions PATCH returned 200 while a config reload was still pending — a tightened global "+
 			"policy is not guaranteed to be enforced on the very next tool call")
 }
 
