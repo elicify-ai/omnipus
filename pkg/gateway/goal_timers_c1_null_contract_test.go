@@ -28,16 +28,19 @@ func TestPerformanceGoalTimersC1NullContract(t *testing.T) {
 				t.Run(fmt.Sprintf("RejectPresentNull/validation_%t/stalled_%t/%s", validation, enabled, key), func(t *testing.T) {
 					api := c1NullContractSeed(t, validation, enabled)
 					// Establish nonempty pending metadata through an actual failed
-					// refresh, not a handwritten pending object or callback hook.
+					// refresh, not a handwritten pending object or callback hook. The
+					// field is max_parallel_agents (seeded 4, saved as 5, never applied
+					// because the refresh fails); it was tools_on_demand until C-22 row 2
+					// removed that switch from the Performance contract.
 					live := mtiGetPerf(t, api)
 					restore := c1RefreshFault(t, api)
 					defer restore()
-					failed := mtiPutPerf(t, api, `{"tools_on_demand":true}`)
+					failed := mtiPutPerf(t, api, `{"max_parallel_agents":5}`)
 					require.Equal(t, http.StatusInternalServerError, failed.Code, "existing real refresh fault must be reached: %s", failed.Body.String())
 					failure := decodeReloadFailed(t, failed.Body.Bytes())
 					require.Equal(t, "performance_reload_failed", failure.Code)
 					require.Equal(t, "refresh", string(failure.Details.Stage))
-					expectedPending := map[string]any{"stage": "refresh", "changed_fields": []any{"tools_on_demand"}}
+					expectedPending := map[string]any{"stage": "refresh", "changed_fields": []any{"max_parallel_agents"}}
 					expectedLive := make(map[string]any, len(live)+1)
 					for field, value := range live {
 						expectedLive[field] = value
@@ -106,7 +109,7 @@ func c1NullContractSeed(t *testing.T, validation, enabled bool) *restAPI {
 	api := c1NewPerformanceAPI(t)
 	c1PerformanceInbound(t, api, validation)
 	body := map[string]any{
-		"max_parallel_agents": 4, "tools_on_demand": false, "goal_max_rounds": 11,
+		"max_parallel_agents": 4, "goal_max_rounds": 11,
 		"goal_reminder_quiet_seconds": 120, "goal_stalled_checkin_enabled": enabled, "goal_stalled_checkin_minutes": 45,
 	}
 	accepted := mtiPutPerf(t, api, c1PerformanceJSON(t, body))
@@ -115,7 +118,6 @@ func c1NullContractSeed(t *testing.T, validation, enabled bool) *restAPI {
 	require.Equal(t, live, mtiDecode(t, accepted.Body.Bytes()), "full returned state and live GET must agree")
 	c1NullContractValues(t, live, 11, enabled)
 	require.Equal(t, float64(4), live["max_parallel_agents"])
-	require.Equal(t, false, live["tools_on_demand"])
 	data, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	planning, ok := mtiDecode(t, data)["planning"].(map[string]any)

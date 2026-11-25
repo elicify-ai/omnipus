@@ -4,206 +4,157 @@
 
 package gateway
 
+// Skills & Tools redesign (#1963, epic #1519), fix round 4, Part B row 6.
+//
+// This file used to drive the retired `GET/PUT /security/skill-trust` handler (`HandleSkillTrust`).
+// C-3 and C-22 row 6 retire that route and its three schemas: "Trust is read and written as
+// `PermissionSettings.skill_trust` (`allow`/`ask`/`deny`; any other value → 400 "Use allow, ask or
+// deny.")". Every retired case is re-driven through `PATCH/GET /security/permissions` on the real
+// route table (newPermissionsAPI, patchPermissions, getPermissions) with its original oracle kept;
+// the legacy wire words block_unverified / warn_unverified / allow_all become deny / ask / allow
+// (C-3 migration table, Dataset D3 rows 1-3). Nothing here references the retired handler or its
+// generated types, so the file still compiles once the backend deletes them.
+//
+// Retired with the old surface, each citing C-22 row 6 and C-3:
+//   - TestHandleSkillTrust_HotReload: asserted `requires_restart=false`, a member of the retired
+//     SkillTrustUpdateResponse. PermissionSettings has no such member; whether a change reached the
+//     running agents is the 200 / 503 contract of C-2, asserted in
+//     rest_tool_policies_activation_test.go.
+//   - TestHandleSkillTrust_AllowAllWarning: asserted a `warning` string in the retired response. The
+//     Allow warning is page copy now ("Allow turns off the check for unverified skills.", C-3;
+//     Dataset D3 row 8; S-32), covered by src/components/skills/SkillsToolsPage.trust.test.tsx.
+//   - TestHandleSkillTrust_MethodNotAllowed: the route is gone; the replacement route's method
+//     behaviour is TestPermissions_UnsupportedMethodsAnswer405AndStoreNothing.
+//
+// The file name is kept because sibling test files cite it.
+
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// skillTrustPUT is a helper that issues a PUT /api/v1/security/skill-trust
-// with the given level as admin and returns the response recorder.
-func skillTrustPUT(t *testing.T, api *restAPI, level string) *httptest.ResponseRecorder {
+// skillTrustPatch PATCHes {"skill_trust": level} through the real route table and returns the
+// response recorder. The body is marshalled so an empty or odd level is still valid JSON.
+func skillTrustPatch(t *testing.T, api *restAPI, routes routeTable, level string) *httptest.ResponseRecorder {
 	t.Helper()
-	payload := `{"level":"` + level + `"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", strings.NewReader(payload))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-	api.HandleSkillTrust(w, r)
-	return w
+	body, err := json.Marshal(map[string]string{"skill_trust": level})
+	require.NoError(t, err)
+	return patchPermissions(t, api, routes, string(body))
 }
 
-// TestHandleSkillTrust_AllThreeValuesAccepted verifies each canonical value
-// returns 200 with saved=true and requires_restart=false.
-func TestHandleSkillTrust_AllThreeValuesAccepted(t *testing.T) {
-	for _, level := range []string{"block_unverified", "warn_unverified", "allow_all"} {
+// skillTrustRead GETs the read model and returns its skill_trust member.
+func skillTrustRead(t *testing.T, api *restAPI, routes routeTable) any {
+	t.Helper()
+	w := getPermissions(t, api, routes)
+	require.Equal(t, http.StatusOK, w.Code, "GET /security/permissions must exist (C-2); body: %s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	return resp["skill_trust"]
+}
+
+// TestPermissionsPatch_SkillTrust_AllThreeValuesAccepted carries
+// TestHandleSkillTrust_AllThreeValuesAccepted: each canonical value is accepted and reported back.
+// The 200 body is the complete stored PermissionSettings (C-2), so the retired response's
+// saved / requires_restart / applied_level members become `skill_trust` equal to the sent value,
+// checked on the PATCH response and again on a later read.
+func TestPermissionsPatch_SkillTrust_AllThreeValuesAccepted(t *testing.T) {
+	for _, level := range []string{"allow", "ask", "deny"} {
 		t.Run(level, func(t *testing.T) {
-			api := newTestRestAPIWithHome(t)
-			w := skillTrustPUT(t, api, level)
+			api, routes := newPermissionsAPI(t)
+			w := skillTrustPatch(t, api, routes, level)
 
 			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 			var resp map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			assert.Equal(t, true, resp["saved"])
-			assert.Equal(t, false, resp["requires_restart"])
-			assert.Equal(t, level, resp["applied_level"])
+			assert.Equal(t, level, resp["skill_trust"], "the 200 carries the complete stored settings, trust included (C-2)")
+			assert.Equal(t, level, skillTrustRead(t, api, routes), "a later read returns the stored trust")
 		})
 	}
 }
 
-// TestHandleSkillTrust_UppercaseRejected verifies that BLOCK_UNVERIFIED (all-caps)
-// returns 400 and the error message lists all three canonical values.
-func TestHandleSkillTrust_UppercaseRejected(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "BLOCK_UNVERIFIED")
+// TestPermissionsPatch_SkillTrust_OtherValuesRefused carries the retired Uppercase / MixedCase /
+// Invalid / Empty cases (all four answered 400) and adds the retired wire words: C-3 and spec
+// error list ("`skill_trust` other than `allow`/`ask`/`deny` → 400, "Use allow, ask or deny."").
+// Letter case is rejected as today (Dataset D3 row 7). The empty string is "other than
+// allow/ask/deny" read literally; Dataset D3 has no empty PATCH row, so that leg is Inferred
+// (reported as a spec silence). After every refusal the stored trust is still ask, so nothing was
+// stored (C-2). block_unverified / allow_all join warn_unverified (pinned by
+// TestPermissionsPatch_RefusesLegacyTrustValues, D3 row 6).
+func TestPermissionsPatch_SkillTrust_OtherValuesRefused(t *testing.T) {
+	for _, tc := range []struct{ name, level string }{
+		{"all caps ALLOW", "ALLOW"},
+		{"mixed case Ask", "Ask"},
+		{"unknown word nope", "nope"},
+		{"empty string", ""},
+		{"retired block_unverified", "block_unverified"},
+		{"retired allow_all", "allow_all"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, routes := newPermissionsAPI(t)
+			require.Equal(t, "ask", skillTrustRead(t, api, routes), "setup/instrument: trust starts as ask (C-3, D3 row 4)")
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	body := w.Body.String()
-	assert.Contains(t, body, "block_unverified", "error must list canonical value block_unverified")
-	assert.Contains(t, body, "warn_unverified", "error must list canonical value warn_unverified")
-	assert.Contains(t, body, "allow_all", "error must list canonical value allow_all")
-}
+			w := skillTrustPatch(t, api, routes, tc.level)
+			requireErrContains(t, w, http.StatusBadRequest, "Use allow, ask or deny.")
 
-// TestHandleSkillTrust_MixedCaseRejected verifies that Block_Unverified returns 400.
-func TestHandleSkillTrust_MixedCaseRejected(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "Block_Unverified")
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestHandleSkillTrust_InvalidValueRejected verifies that an arbitrary unknown
-// string returns 400.
-func TestHandleSkillTrust_InvalidValueRejected(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "nope")
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestHandleSkillTrust_EmptyValueRejected verifies that an empty string returns 400.
-func TestHandleSkillTrust_EmptyValueRejected(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	payload := `{"level":""}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust", strings.NewReader(payload))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-	api.HandleSkillTrust(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestHandleSkillTrust_HotReload verifies that the response contains requires_restart=false,
-// confirming skill_trust is a hot-reload setting.
-func TestHandleSkillTrust_HotReload(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "warn_unverified")
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, false, resp["requires_restart"], "skill_trust is a hot-reload setting")
-}
-
-// TestHandleSkillTrust_MethodNotAllowed verifies that POST and DELETE return 405.
-func TestHandleSkillTrust_MethodNotAllowed(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	for _, method := range []string{http.MethodPost, http.MethodDelete} {
-		t.Run(method, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(method, "/api/v1/security/skill-trust", nil)
-			api.HandleSkillTrust(w, r)
-			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+			assert.Equal(t, "ask", skillTrustRead(t, api, routes), "a refused change stores nothing (C-2)")
 		})
 	}
 }
 
-// TestHandleSkillTrust_EmitsAuditEntry verifies that a successful PUT emits an
-// audit record via EmitSecuritySettingChange with resource="sandbox.skill_trust".
-func TestHandleSkillTrust_EmitsAuditEntry(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
+// TestPermissionsPatch_SkillTrust_PersistsToDisk carries TestHandleSkillTrust_PersistsToDisk: a
+// successful write reaches config.json as sandbox.skill_trust, stored as the new word (C-3:
+// "`sandbox.skill_trust` stores `allow`/`ask`/`deny`").
+func TestPermissionsPatch_SkillTrust_PersistsToDisk(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
+	w := skillTrustPatch(t, api, routes, "deny")
+	require.Equal(t, http.StatusOK, w.Code, "PATCH must succeed: %s", w.Body)
 
-	auditDir := filepath.Join(api.homePath, "system")
-	require.NoError(t, os.MkdirAll(auditDir, 0o700))
-	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 90})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
-
-	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
-		&config.UserConfig{Username: "admin"})
-
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/skill-trust",
-		strings.NewReader(`{"level":"block_unverified"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = r.WithContext(ctx)
-
-	err = audit.EmitSecuritySettingChange(
-		r.Context(),
-		logger,
-		"sandbox.skill_trust",
-		"warn_unverified",
-		"block_unverified",
-	)
-	require.NoError(t, err, "EmitSecuritySettingChange must not return an error")
-
-	_ = logger.Close()
-
-	data, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
-	require.NoError(t, err)
-	content := string(data)
-	assert.Contains(t, content, "sandbox.skill_trust", "audit entry must include resource=sandbox.skill_trust")
-	assert.Contains(t, content, "security_setting_change", "audit entry must use EventSecuritySettingChange")
-	assert.Contains(t, content, "block_unverified", "audit entry must include the new value")
+	sandbox := permStoredSandbox(t, api.configPath())
+	require.NotEmpty(t, sandbox, "sandbox section must be written to disk")
+	assert.Equal(t, "deny", sandbox["skill_trust"])
 }
 
-// TestHandleSkillTrust_PersistsToDisk verifies that a successful PUT actually
-// writes sandbox.skill_trust to config.json on disk (write+read round-trip).
-func TestHandleSkillTrust_PersistsToDisk(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "block_unverified")
-	require.Equal(t, http.StatusOK, w.Code, "PUT must succeed: %s", w.Body)
+// TestPermissionsPatch_SkillTrust_EmitsAuditEntry carries TestHandleSkillTrust_EmitsAuditEntry,
+// which called audit.EmitSecuritySettingChange itself and so proved only the emitter. This one
+// drives the real PATCH and reads the audit file (C-2 audit rule: "one EmitSecuritySettingChange
+// per changed key with actor, old and new value ... resources ... `sandbox.skill_trust`. A key sent
+// with its stored value writes no entry."). The old value is seeded explicitly rather than assumed
+// from a shipped default.
+func TestPermissionsPatch_SkillTrust_EmitsAuditEntry(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
+	auditDir := attachTestAuditor(t, api)
 
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var onDisk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &onDisk))
-	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
-	require.NotNil(t, sandboxDisk, "sandbox section must be written to disk")
-	assert.Equal(t, "block_unverified", sandboxDisk["skill_trust"])
-}
+	seed := skillTrustPatch(t, api, routes, "allow")
+	require.Equal(t, http.StatusOK, seed.Code, "setup: %s", seed.Body.String())
+	before := len(readAuditEntries(t, auditDir, audit.EventSecuritySettingChange))
 
-// TestHandleSkillTrust_AllowAllWarning verifies that level=="allow_all" includes
-// the advisory warning in the response body.
-func TestHandleSkillTrust_AllowAllWarning(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := skillTrustPUT(t, api, "allow_all")
-
+	w := skillTrustPatch(t, api, routes, "deny")
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	warning, hasWarning := resp["warning"]
-	assert.True(t, hasWarning, "allow_all response must include a warning field")
-	warnStr, ok := warning.(string)
-	assert.True(t, ok, "warning must be a string")
-	assert.Contains(t, warnStr, "allow_all", "warning must reference the level")
+	entries := readAuditEntries(t, auditDir, audit.EventSecuritySettingChange)
+	require.Len(t, entries, before+1, "exactly one change entry for the one changed key")
+	entry := entries[before]
+	assert.Equal(t, "sandbox.skill_trust", entry["resource"])
+	assert.Equal(t, "allow", entry["old_value"])
+	assert.Equal(t, "deny", entry["new_value"])
+	assert.Equal(t, envTokenName, entry["actor"], "the authenticated caller is the actor")
+
+	w = skillTrustPatch(t, api, routes, "deny")
+	require.Equal(t, http.StatusOK, w.Code, "an equal-value write is a valid no-op: %s", w.Body.String())
+	assert.Equal(t, entries, readAuditEntries(t, auditDir, audit.EventSecuritySettingChange),
+		"a key sent with its stored value writes no entry (C-2)")
 }
 
-// TestHandleSkillTrust_GET_DefaultLevel verifies GET returns the configured level.
-func TestHandleSkillTrust_GET_DefaultLevel(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/security/skill-trust", nil)
-	api.HandleSkillTrust(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	level, ok := resp["level"]
-	assert.True(t, ok, "GET response must include level field")
-	assert.NotEmpty(t, level, "level must not be empty")
+// TestPermissionsGet_SkillTrust_DefaultIsAsk carries TestHandleSkillTrust_GET_DefaultLevel, whose
+// oracle was only "level is not empty". The spec fixes the value: stored empty means ask
+// (C-3: "an empty value is treated as `ask`"; Dataset D3 row 4), served as `allow`/`ask`/`deny`.
+func TestPermissionsGet_SkillTrust_DefaultIsAsk(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
+	assert.Equal(t, "ask", skillTrustRead(t, api, routes))
 }

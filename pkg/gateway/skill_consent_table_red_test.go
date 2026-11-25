@@ -36,6 +36,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -125,6 +126,14 @@ func TestSkillConsent_Table(t *testing.T) {
 	t.Run("instrument real session-carrying project entry loads mounted R2 on successive turns", func(t *testing.T) {
 		h, _ := newNativeD10Harness(t, "allow", "allow")
 		seedNativeD10Project(t, h, nativeSkillR2)
+		// Fix round 4, part E item 2: "an allowed project skill loads" needs the PROJECT key
+		// allowed. The harness stores only the installed key `notes-helper: allow`, and by C-19
+		// ("A project skill and an installed skill with the same slug have different keys", S-102)
+		// that value does not reach `project:d10/notes-helper`; with no stored value the project key
+		// starts at Ask (C-19, "Their starting permission is Ask"), which is pinned separately by
+		// TestProjectSkillKey_StartsAtAskAtFirstSight. The instrument's own claim (a real session-
+		// carrying project entry loads the mounted R2 on successive turns) is unchanged.
+		storeNativeD10Permission(t, h, "project:d10/notes-helper", "allow")
 		for range 2 {
 			run := beginNativeD10(t, h, "load", "chat", "test-agent", "project")
 			finishNativeD10(t, h, run, true, false, nativeSkillR2)
@@ -263,13 +272,26 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 	if in.shelf == "builtin" {
 		key = "plan"
 		store := agentstore.New(h.api.homePath)
-		_, err := store.Update("test-agent", func(a *config.AgentConfig) error { a.Skills = append(a.Skills, key); return nil })
-		require.NoError(t, err)
+		// Fix round 4, part E item 1 (follow-up): the built-in's folder must exist BEFORE the grant
+		// is saved. Every agent persist binds each granted name to the generation stamped in its
+		// installed folder at that moment, and a name whose folder is absent stays unbound
+		// (pkg/skills/identity.go::BindGrants: "never a refusal"; SD-30 "unbound = inert"). The
+		// first draft granted `plan` and exported the folder after, so the grant was never bound
+		// and the load was refused with SKILL_GRANT_STALE ("your grant is for a previous skill with
+		// this name") before the first-sight question under test could be asked: an order fault in
+		// the fixture, hidden until the roster fix let the turn run. A real update installs the
+		// shipped folder first and binds the grants after it. Every D10#18 assertion is unchanged.
 		if _, statErr := os.Stat(filepath.Join(h.api.homePath, "skills", key)); os.IsNotExist(statErr) {
 			require.NoError(t, skills.ExportEmbeddedPackage(key, filepath.Join(h.api.homePath, "skills", key)))
 		} else {
 			require.NoError(t, statErr)
 		}
+		_, err := store.Update("test-agent", func(a *config.AgentConfig) error { a.Skills = append(a.Skills, key); return nil })
+		require.NoError(t, err)
+		persistedGrant, err := store.Get("test-agent")
+		require.NoError(t, err)
+		require.NotEmpty(t, persistedGrant.SkillGrants[key],
+			"fixture: the built-in's grant is bound to its installed folder's generation, as the install path leaves it")
 		for i := range cfg.Agents.List {
 			if cfg.Agents.List[i].ID == "test-agent" {
 				record, readErr := store.Get("test-agent")
@@ -318,15 +340,20 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		require.NoError(t, err)
 		var record map[string]any
 		require.NoError(t, json.Unmarshal(raw, &record))
-		ownTools, _ := record["tools_cfg"].(map[string]any)
+		// The store record is flat: the agent tool settings are the top-level tools member
+		// (tests/helpers/agentrecord); tools_cfg is only the REST request name, so a value
+		// planted there is dead data no reader ever sees.
+		ownTools, _ := record["tools"].(map[string]any)
 		if ownTools == nil {
 			ownTools = map[string]any{}
-			record["tools_cfg"] = ownTools
+			record["tools"] = ownTools
 		}
 		ownTools["skills"] = map[string]any{"policies": map[string]string{key: in.own}}
 		raw, err = json.Marshal(record)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(path, raw, 0o600))
+		require.Equal(t, map[string]any{key: in.own}, agentrecord.Policies(t, h.api.homePath, "test-agent", agentrecord.Skills),
+			"the Given is planted at the carrier the store keeps, not in a place nothing reads")
 		persisted, err := agentstore.New(h.api.homePath).Get("test-agent")
 		require.NoError(t, err)
 		for i := range cfg.Agents.List {
@@ -343,6 +370,19 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		if err != nil {
 			t.Fatalf("BLOCKED: native C-3/C-2 config load for new built-in D10#18: %v", err)
 		}
+		// config.LoadConfig always empties agents.list (ADR-054;
+		// pkg/config/legacy_agents_list.go), and the real reload path fills the roster again from
+		// the agent store right after loading (pkg/gateway/gateway_reload.go, the config-watcher
+		// poller: "repopulate cfg.Agents.List from the agent store", via
+		// populateAgentsListFromEntityStoreStrict). Do the same here. The raw LoadConfig result
+		// carries no agents, so reloading it leaves the loop without "test-agent" and every run
+		// fails with "the requested agent is not available" before the first-sight question
+		// under test can be asked — a fixture fault, not product behaviour (fix round 4, part E
+		// item 1; the same fault and the same fix as the D10#30 restart fixture below, part D
+		// item 6). Every D10#18 assertion is unchanged.
+		require.NoError(t, populateAgentsListFromEntityStoreStrict(loaded, h.api.homePath),
+			"the reload fills the roster from the agent store, as the production reload does")
+		require.NotEmpty(t, loaded.Agents.List, "the reloaded config must carry the stored agents, as in production")
 		cfg = loaded
 	}
 	assertNativeD10RawInputs(t, cfg, key, in)
@@ -421,9 +461,10 @@ func assertNativeD10RawInputs(t *testing.T, cfg *config.Config, key string, in d
 		require.NoError(t, err)
 		var entity map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(raw, &entity))
+		// A marshalled AgentConfig is flat: tools is the agent tool settings member.
 		own := map[string]json.RawMessage{}
-		if len(entity["tools_cfg"]) != 0 {
-			require.NoError(t, json.Unmarshal(entity["tools_cfg"], &own))
+		if len(entity["tools"]) != 0 {
+			require.NoError(t, json.Unmarshal(entity["tools"], &own))
 		}
 		var skillsInput struct {
 			Policies map[string]string `json:"policies"`
@@ -640,6 +681,16 @@ func applyNativeD10Before(t *testing.T, h *nativeSkillHarness, key string, clock
 		h.handler.Wait()
 		cfg := &config.Config{}
 		require.NoError(t, json.Unmarshal(readNativeConfig(t, h.api.homePath), cfg))
+		// Fix round 4, part D item 6: config.json never carries the agent list (ADR-054: agents
+		// live in the entity store), so a loop built from the parsed file alone has NO agents and
+		// the restart check then looks at an empty roster. A real boot reads config.json and then
+		// fills the roster from the entity store before it builds the loop
+		// (pkg/gateway/gateway_boot_roster.go::populateAgentsListFromEntityStoreStrict, the same
+		// bridge reload uses); seed it the same way, so the restarted loop holds the agents the
+		// earlier native installs and permission writes stored. Same oracle as before.
+		require.NoError(t, populateAgentsListFromEntityStoreStrict(cfg, h.api.homePath),
+			"a restart loads its roster from the entity store exactly as boot does")
+		require.NotEmpty(t, cfg.Agents.List, "instrument: the restarted loop must have agents to hold the allowance state")
 		msgBus := bus.NewMessageBus()
 		t.Cleanup(msgBus.Close)
 		h.api.agentLoop, _ = ownedNativeD10Loop(t, cfg, msgBus, h.script)
@@ -667,11 +718,18 @@ func applyNativeD10Before(t *testing.T, h *nativeSkillHarness, key string, clock
 		require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
 		ended := nativeD10AllowanceEnded(t, h)
 		require.Len(t, ended, 1, "one real allowance-ended audit, not an adapter string")
-		fields, ok := ended[0]["fields"].(map[string]any)
-		require.True(t, ok, "native audit.Record envelope")
+		// The container is unspecified by C-26 (content only): read through the one shared helper
+		// TestTimedAllowance_EndsOnPermissionChange uses, so both tests hold every writer to the
+		// same content (fix round 4, part D item 5).
+		fields := allowanceEndedPayload(ended[0])
 		assert.Equal(t, "test-agent", fields["agent_id"])
 		assert.Contains(t, nativeAuditScalarValues(fields), key, "C-26 requires the exact skill subject; no absent carrier's subject-field name is invented")
-		assert.Equal(t, key, fields["key"], "the actual changed permission key")
+		// C-26 "Audit" and S-128 say the entry names "the changed key". For a skill permission the
+		// changed key is the skill's key as stored in the permission map (the same bare key the
+		// "agent and the tool or skill key" wording of the same paragraph uses). The spec defines no
+		// "skill:" form for this field, so the bare key is the spec-derived value; a prefixed form
+		// is an implementation choice the spec does not carry (spec gap, reported in fix4-report.md).
+		assert.Equal(t, key, fields["key"], "the actual changed permission key, as the permission map stores it (C-26 Audit: \"the changed key\")")
 		assert.Equal(t, "ask", fields["new"])
 		assert.Equal(t, "admin", fields["actor"])
 		assert.Equal(t, "permission_changed", fields["reason"])
@@ -746,7 +804,7 @@ func applyNativeD10Answer(t *testing.T, h *nativeSkillHarness, key string, run n
 		count := nativeD10TrustAudit(t, h, key)
 		require.Equal(t, 1, count)
 		replay := postToolApprovalRaw(t, h.api, entry.ApprovalID, action)
-		assertNativeSkillRefusal(t, replay, http.StatusNotFound, "approval "+entry.ApprovalID+" not found")
+		assertNativeSkillRefusal(t, replay, http.StatusNotFound, existingApprovalNotFoundText(entry.ApprovalID))
 		assert.Equal(t, trustAfter, readNativeTrustBytes(t, h))
 		assert.Equal(t, count, nativeD10TrustAudit(t, h, key))
 	}

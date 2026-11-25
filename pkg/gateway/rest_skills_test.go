@@ -17,7 +17,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -497,9 +496,13 @@ func TestInstallSkillSuccess(t *testing.T) {
 	assert.True(t, skill.Verified)
 }
 
+// The registry answer is a VERIFIED one (checksum matched, spec C-5/C-13): under the
+// default trust Ask only an unverified skill needs the install review (C-3 table,
+// "applies to unverified skills only"), and this test is about the publish outcome,
+// not trust. A direct install of an unverified skill answers 409 (C-3, ST-09 d).
 func TestInstallSkillReturnsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0", Verified: true}}
 	original := publishRESTSkill
 	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
 		return skills.PublishOutcome{Revision: strings.Repeat("a", 64), PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}, nil
@@ -523,9 +526,10 @@ func TestInstallSkillReturnsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T
 	require.Contains(t, *skill.Message, "cleanup is incomplete")
 }
 
+// Verified registry answer for the reason given on the test above (C-3, C-5, C-13).
 func TestInstallSkillReturnsPartialStateWhenPreviousPackageCannotBeRestored(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0", Verified: true}}
 	original := publishRESTSkill
 	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
 		return skills.PublishOutcome{
@@ -557,24 +561,16 @@ func TestInstallSkillReturnsPartialStateWhenPreviousPackageCannotBeRestored(t *t
 	require.NotContains(t, w.Body.String(), "private restore cause")
 }
 
+// The authorized upload is installed through the install review (spec C-3 ask row,
+// C-13, US-7 AS4, ST-09 d): an upload is unverified and the default trust is Ask, so
+// a direct POST /skills/install of it answers 409. The upload recipe (the owner's
+// upload folder, a test media store, an upload:webchat ref) is the one the helper
+// uat2StoreUpload keeps; every assertion below is unchanged.
 func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
-	require.NoError(t, os.MkdirAll(uploadDir, 0o755))
-	uploadPath := filepath.Join(uploadDir, "local-skill.md")
 	content := "---\nname: local-skill\ndescription: Use when a local uploaded skill is requested.\n---\n\nBody.\n"
-	require.NoError(t, os.WriteFile(uploadPath, []byte(content), 0o644))
-	store := newTestFileMediaStore(t)
-	api.mediaStore = store
-	ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "local-skill.md", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
-	require.NoError(t, err)
 
-	body, err := json.Marshal(map[string]any{"upload_id": ref})
-	require.NoError(t, err)
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	api.HandleSkills(w, r)
+	w := uat2ReviewThenInstall(t, api, "local-skill.md", []byte(content), nil)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var skill gen.Skill
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skill))
@@ -634,24 +630,73 @@ func TestListSkillsBuiltinEnriched(t *testing.T) {
 	assert.Equal(t, "1.2.3", s.Version)
 }
 
+// A skill whose files cannot be read (its content revision cannot be computed) must
+// not fail the whole list: skills-tools-redesign-spec.md FR-063 ("One unreadable skill
+// MUST NOT fail the whole skill list; it shows 'Cannot load' with its reason") and S-80
+// ("10 rows show, and the broken one shows 'Cannot load' with the reason"; rider #1570).
+// This test used to expect the whole list to answer 500 "could not read installed skill
+// state"; FR-063 reverses exactly that, so the 500 and its body text are retired and the
+// list is asserted to answer 200 with every row. Two safety assertions it always carried
+// stay as they were: the answer never contains the raw disk error and never carries an
+// "unavailable" placeholder. A healthy second skill is listed so that "the other rows
+// still show" (S-80) is part of what is asserted.
 func TestListSkillsRevisionReadFailureReturnsVisibleErrorWithoutPlaceholder(t *testing.T) {
 	builtinDir := t.TempDir()
 	seedSkill(t, builtinDir, "daily-briefing",
 		"name: daily-briefing\ndescription: Summarize the day for the operator.",
 		"# daily-briefing\n")
+	seedSkill(t, builtinDir, "plan",
+		"name: plan\ndescription: Plan a task before executing.",
+		"# plan\n")
 	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
 	original := readListedSkillRevision
-	readListedSkillRevision = func(string, string) (string, error) { return "", errors.New("private disk detail") }
+	readListedSkillRevision = func(root, id string) (string, error) {
+		if id == "daily-briefing" {
+			return "", errors.New("private disk detail")
+		}
+		return original(root, id)
+	}
 	t.Cleanup(func() { readListedSkillRevision = original })
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
 	w := httptest.NewRecorder()
 	api.HandleSkills(w, r)
 
-	require.Equal(t, http.StatusInternalServerError, w.Code)
-	assert.Contains(t, w.Body.String(), "could not read installed skill state")
+	require.Equal(t, http.StatusOK, w.Code,
+		"FR-063: one unreadable skill must not fail the whole list; body: %s", w.Body.String())
 	assert.NotContains(t, w.Body.String(), "unavailable")
 	assert.NotContains(t, w.Body.String(), "private disk detail")
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows), "body: %s", w.Body.String())
+	byID := map[string]map[string]any{}
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		byID[id] = row
+	}
+	require.Len(t, byID, 2, "S-80: every row shows, the broken one included; body: %s", w.Body.String())
+	healthy, broken := byID["plan"], byID["daily-briefing"]
+	require.NotNil(t, healthy, "S-80: the healthy skill is still listed; body: %s", w.Body.String())
+	require.NotNil(t, broken, "S-80: the broken skill is still listed; body: %s", w.Body.String())
+	assert.Equal(t, "active", healthy["status"], "the healthy row is unaffected")
+	// SkillStatus "error" is the contract's existing state for a skill that failed to
+	// load (contracts/components/schemas/Skill.yaml, status); FR-063's contract column
+	// says "none — error state already described".
+	assert.Equal(t, "error", broken["status"], "S-80: the broken row is in the error state")
+
+	// "with its reason" (S-80, FR-063). The spec names no wire field for the reason, so
+	// the test pins no field name: the broken row must carry a non-empty text that the
+	// healthy row does not have.
+	reason := ""
+	for key, value := range broken {
+		if _, shared := healthy[key]; shared {
+			continue
+		}
+		if text, ok := value.(string); ok && text != "" {
+			reason = text
+		}
+	}
+	assert.NotEmpty(t, reason, "S-80/FR-063: the broken row carries its reason; row: %v", broken)
 }
 
 // TestListSkillsVersionDefaultsWhenAbsent verifies a builtin skill without a

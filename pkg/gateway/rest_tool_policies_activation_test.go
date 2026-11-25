@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -24,7 +23,19 @@ import (
 // Persistence, handler, reload wait/outcome, registry and request assembly are
 // real. Only the paid provider is scripted; a file blocks the new session-store
 // location on the first rebuild, so the failure is produced, not pre-recorded.
-func TestPutToolPoliciesSavedButNotActiveThenRetryRefreshesGuidance(t *testing.T) {
+//
+// FIX ROUND 4, Part B row 6: this test used to PUT the whole map to the retired
+// /security/tool-policies handler. C-22 row 6 retires it and C-2 makes
+// `PATCH /security/permissions` the only writer, with the same result codes: "503 stored, not
+// applied to running agents (existing text)" and "an equal-value request is valid: 200, nothing
+// written ... and the running agents are reloaded again; this is how "Retry applying" re-applies a
+// saved-but-not-applied change (C-16)". It is re-driven through the real route table, sending the
+// one changed key, and every original assertion is kept: the 503 and its exact text, the stored
+// deny, the untouched old registry on failure, the retry that publishes a new registry, and the
+// next-request guidance. Only the response comparison changes shape: the retired response was the
+// map that was sent, the PATCH response is the complete stored settings (C-2), so each key of the
+// pre-request ceiling must come back with its value and set_todos with deny.
+func TestPermissionsPatchSavedButNotActiveThenRetryRefreshesGuidance(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -41,6 +52,12 @@ func TestPutToolPoliciesSavedButNotActiveThenRetryRefreshesGuidance(t *testing.T
 	api := &restAPI{agentLoop: loop, homePath: home, reloadOutcome: &reloadOutcomeTracker{}}
 	require.NoError(t, config.SaveConfig(api.configPath(), cfg))
 	seedAgentEntities(t, home, cfg.Agents.List)
+
+	// The real route table, authenticated by the env bearer exactly as a signed-in request is.
+	t.Setenv(config.EnvConfig, api.configPath())
+	t.Setenv("OMNIPUS_BEARER_TOKEN", permissionsTestBearer)
+	routes := routeTable{}
+	api.registerAdditionalEndpoints(routes)
 
 	oldRegistry := loop.GetRegistry()
 	oldAgent, ok := oldRegistry.GetAgent("activation-agent")
@@ -78,21 +95,18 @@ func TestPutToolPoliciesSavedButNotActiveThenRetryRefreshesGuidance(t *testing.T
 		return nil
 	})
 
-	policies := make(map[string]gen.GlobalToolPoliciesPolicies, len(cfg.Sandbox.ToolPolicies))
+	// The ceiling as it was before the request, with the one key the request changes.
+	expectedPolicies := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		policies[name] = gen.GlobalToolPoliciesPolicies(policy)
+		expectedPolicies[name] = policy
 	}
-	policies["set_todos"] = gen.GlobalToolPoliciesPolicies("deny")
-	body, err := json.Marshal(gen.GlobalToolPolicies{Policies: policies})
-	require.NoError(t, err)
-	put := func() *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", bytes.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		api.HandleToolPolicies(w, withAdminRole(r))
-		return w
+	expectedPolicies["set_todos"] = "deny"
+	// The retry sends the same body: a key sent with its stored value is valid (C-2).
+	const body = `{"policies":{"set_todos":"deny"}}`
+	patch := func() *httptest.ResponseRecorder {
+		return patchPermissions(t, api, routes, body)
 	}
-	failed := put()
+	failed := patch()
 	require.Equal(t, 1, attempts, "the HTTP save must actually attempt activation")
 	require.ErrorContains(t, rebuildErr, "registry creation failed", "inject an actual failed registry construction")
 	require.ErrorContains(t, rebuildErr, "shared session store", "failure must be at the filesystem boundary")
@@ -112,15 +126,19 @@ func TestPutToolPoliciesSavedButNotActiveThenRetryRefreshesGuidance(t *testing.T
 	require.NoError(t, json.Unmarshal(failed.Body.Bytes(), &failure))
 	assert.Equal(t, "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.", failure.Error)
 
-	retried := put()
+	retried := patch()
 	require.Equal(t, http.StatusOK, retried.Code, "successful retry: %s", retried.Body.String())
 	require.Equal(t, 2, attempts)
 	require.NoError(t, rebuildErr, "retry must perform a successful real rebuild")
 	require.False(t, api.reloadOutcome.lastFailed(), "successful retry must replace the previous failed outcome")
 	require.NotSame(t, oldRegistry, loop.GetRegistry(), "successful retry must publish the rebuilt registry")
-	var response gen.GlobalToolPolicies
+	var response map[string]any
 	require.NoError(t, json.Unmarshal(retried.Body.Bytes(), &response))
-	require.Equal(t, gen.GlobalToolPolicies{Policies: policies}, response)
+	gotPolicies, isObject := response["policies"].(map[string]any)
+	require.True(t, isObject, "the 200 carries the complete stored policies map (C-2), got %T", response["policies"])
+	for name, want := range expectedPolicies {
+		require.Equal(t, want, gotPolicies[name], "stored policy for %q in the retry response", name)
+	}
 	assertPolicyActivationRequestGuidance(t, api, provider, "after-retry", "After retry", false)
 }
 

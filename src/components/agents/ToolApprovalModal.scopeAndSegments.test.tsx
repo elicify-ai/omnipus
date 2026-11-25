@@ -7,9 +7,10 @@
 // the note atop ToolApprovalPanel.tsx):
 //
 //  1. Grant scope (exact vs. prefix). A shell (`bash`) approval offers a
-//     scope choice; the choice actually sent to the server on Always Allow
-//     must match what the user picked. Every other action (Approve/Deny) —
-//     and every other tool's Always Allow — must NOT send a scope at all.
+//     scope choice; the choice actually sent to the server on a timed choice
+//     ("Allow for 1 hour", C-26 — which replaced Always Allow, R2-Q1) must
+//     match what the user picked. Every other action (Approve/Deny) — and
+//     every other tool's timed choice — must NOT send a scope at all.
 //  2. Per-segment display. When the frame carries
 //     ToolApprovalRequiredFrame.segments (a chained command), each segment's
 //     command text renders as its own, separately-readable block, with the
@@ -24,7 +25,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 
-import { useToolApprovalStore } from '@/store/toolApproval'
+import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 import type { ComponentType } from 'react'
 import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
 let ToolApprovalPanel: ComponentType
@@ -35,6 +36,17 @@ beforeEach(async () => {
   ToolApprovalPanel = await loadApprovalPanel()
 })
 
+// C-24 / C-26: a card renders exactly the answers the server listed when it
+// raised the card (`offered_actions`, `allow_durations`; both required by
+// contracts ToolApprovalRequiredFrame). bash and fetch_url are ordinary tools:
+// Approve Once, the time choices, Deny and Cancel. Every fixture below carries
+// the list the server sends for its tool, so no test depends on a rule the
+// client would apply when a list is missing.
+const ORDINARY_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
+}
+
 const BASH_APPROVAL_NO_SEGMENTS = {
   approvalId: 'appr-shell-001',
   toolCallId: 'call-shell-001',
@@ -44,6 +56,7 @@ const BASH_APPROVAL_NO_SEGMENTS = {
   sessionId: 'sess-001',
   turnId: 'turn-001',
   expiresAt: Date.now() + 300_000,
+  ...ORDINARY_TOOL_ANSWERS,
 }
 
 const CHAINED_APPROVAL = {
@@ -55,6 +68,7 @@ const CHAINED_APPROVAL = {
   sessionId: 'sess-001',
   turnId: 'turn-002',
   expiresAt: Date.now() + 300_000,
+  ...ORDINARY_TOOL_ANSWERS,
   segments: [
     {
       segment_index: 0,
@@ -90,6 +104,7 @@ const CHAINED_APPROVAL_RESOLVED_PATHS = {
   sessionId: 'sess-001',
   turnId: 'turn-004',
   expiresAt: Date.now() + 300_000,
+  ...ORDINARY_TOOL_ANSWERS,
   segments: [
     {
       segment_index: 0,
@@ -121,10 +136,17 @@ const NON_SHELL_APPROVAL = {
   sessionId: 'sess-001',
   turnId: 'turn-003',
   expiresAt: Date.now() + 300_000,
+  ...ORDINARY_TOOL_ANSWERS,
 }
 
 describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
-  it('L1 §1.2 R6: defaults to "exact" and sends scope:"exact" on Always Allow for a shell command', async () => {
+  // The three cases that clicked Always Allow below are rewritten to their
+  // C-26 timed-choice equivalents (skills-tools-redesign-spec, Regression Test
+  // Requirements row "Always Allow on approval cards"; C-26 point 1, S-119,
+  // R2-Q1: no card offers Always Allow and action:"allow" left the wire). The
+  // oracle moves with the wire: allow_for + duration, and a bash card keeps
+  // its exact or prefix scope (ADR-092 D4/FR-024).
+  it('L1 §1.2 R6 → C-26: defaults to "exact" and sends allow_for with scope:"exact" on "Allow for 1 hour" for a shell command', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [BASH_APPROVAL_NO_SEGMENTS] })
     })
@@ -134,10 +156,13 @@ describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
     const exactOption = screen.getByRole('radio', { name: /Allow this exact command/i })
     expect(exactOption).toHaveAttribute('aria-checked', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Allow for 1 hour$/i }))
 
     await waitFor(() => {
-      expect(approvalPosts()).toContainEqual({ id: 'appr-shell-001', body: { action: 'allow', scope: 'exact' } })
+      expect(approvalPosts()).toContainEqual({
+        id: 'appr-shell-001',
+        body: { action: 'allow_for', duration: '1h', scope: 'exact' },
+      })
     })
   })
 
@@ -150,7 +175,7 @@ describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
     expect(screen.queryByTestId('scope-prefix')).not.toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6: offers and sends scope:"prefix" once the server supplies a suggested prefix', async () => {
+  it('L1 §1.2 R6 → C-26: offers and sends allow_for with scope:"prefix" once the server supplies a suggested prefix', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [CHAINED_APPROVAL] })
     })
@@ -163,10 +188,13 @@ describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
     fireEvent.click(prefixOption)
     expect(prefixOption).toHaveAttribute('aria-checked', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Allow for 1 hour$/i }))
 
     await waitFor(() => {
-      expect(approvalPosts()).toContainEqual({ id: 'appr-shell-002', body: { action: 'allow', scope: 'prefix' } })
+      expect(approvalPosts()).toContainEqual({
+        id: 'appr-shell-002',
+        body: { action: 'allow_for', duration: '1h', scope: 'prefix' },
+      })
     })
   })
 
@@ -197,7 +225,7 @@ describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
     })
   })
 
-  it('L1 §1.2 R6: does not render a scope choice at all for a non-shell tool, and Always Allow sends no scope', async () => {
+  it('L1 §1.2 R6 → C-26: does not render a scope choice at all for a non-shell tool, and "Allow for 1 hour" sends no scope', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [NON_SHELL_APPROVAL] })
     })
@@ -206,12 +234,15 @@ describe('ToolApprovalPanel — grant scope (ADR-092 D4/FR-024)', () => {
     expect(screen.queryByText('Allow this exact command')).not.toBeInTheDocument()
     expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Allow for 1 hour$/i }))
 
     await waitFor(() => {
-      expect(approvalPosts()).toContainEqual({ id: 'appr-fetch-001', body: { action: 'allow' } })
+      expect(approvalPosts()).toContainEqual({ id: 'appr-fetch-001', body: { action: 'allow_for', duration: '1h' } })
     })
-    expect(approvalPosts()).not.toContainEqual({ id: 'appr-fetch-001', body: { action: 'allow', scope: 'exact' } })
+    expect(approvalPosts()).not.toContainEqual({
+      id: 'appr-fetch-001',
+      body: { action: 'allow_for', duration: '1h', scope: 'exact' },
+    })
   })
 })
 

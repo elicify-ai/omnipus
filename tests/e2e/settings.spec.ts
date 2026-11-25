@@ -92,54 +92,21 @@ test('(d) all tabs reachable via keyboard navigation (ArrowKeys)', async ({ page
   }
 });
 
-test('(e) tool-policy "Always Allow" toggle persists across page reload', async ({ page }) => {
-  // The "Always Allow" toggle (data-testid="always-allow-toggle") is rendered inside
-  // ExecApprovalBlock when a pending approval is present. Triggering a real approval
-  // requires an LLM call with policy=ask — which is unavailable in the E2E environment.
-  // Instead, we inject a pending approval into the chat store via page.evaluate and
-  // verify the toggle is rendered and interactive.
-  //
-  // Persistence of the "always" decision is enforced server-side via the exec_approval_response
-  // WebSocket frame; the UI correctly reflects the "Always Allowed" state after the decision.
-
-  // Navigate to chat screen
-  await page.goto('/');
-  await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
-
-  // Inject a pending approval into the Zustand chat store
-  await page.evaluate(() => {
-    // Access the Zustand store via the window.__ZUSTAND__ debug hook if available,
-    // or use the module-level store import exposed for testing.
-    // The chat store registers on window.__omnipus_chat_store in dev/debug builds.
-    const w = window as unknown as Record<string, unknown>;
-    if (typeof w.__omnipus_set_pending_approval === 'function') {
-      (w.__omnipus_set_pending_approval as (id: string, cmd: string) => void)('test-approval-id', 'echo hello');
-    }
-  });
-
-  // Wait briefly for any async rendering
-  await page.waitForTimeout(300);
-
-  // If the approval block is visible, check the Always Allow toggle
-  const alwaysAllowBtn = page.getByTestId('always-allow-toggle');
-  const approvalVisible = await alwaysAllowBtn.isVisible().catch(() => false);
-
-  if (approvalVisible) {
-    // Toggle is visible — verify it exists and is clickable
-    await expect(alwaysAllowBtn).toBeVisible({ timeout: 5_000 });
-    // The element must be accessible (no aria-disabled)
-    const ariaDisabled = await alwaysAllowBtn.getAttribute('aria-disabled');
-    expect(ariaDisabled).not.toBe('true');
-  } else {
-    // Approval block injection via evaluate did not work (debug hook not present).
-    // Verify the toggle element exists in the codebase by checking the component
-    // renders when approval state is present — this is covered by the unit tests.
-    // The data-testid="always-allow-toggle" is confirmed present in ExecApprovalBlock.tsx.
-    // This test verifies the element is accessible when the approval UI is triggered.
-    //
-    // Minimal assertion: the settings page loads without errors (covered by (b))
-    await page.goto('/#/settings');
-    const securityTab = page.locator('button[role="tab"]', { hasText: 'Security' });
-    await expect(securityTab).toBeVisible({ timeout: 10_000 });
-  }
-});
+// (e) retired: 'tool-policy "Always Allow" toggle persists across page reload'.
+// Skills & Tools redesign, C-26 point 1 / S-119 / R2-Q1: no approval card offers
+// Always Allow any more, and its replacement, a timed allowance, is not a
+// setting (C-26 point 3: it is held in memory, ends at its time or when the
+// gateway restarts, and has no storage object), so Settings has nothing for a
+// page reload to keep. There is no C-26 equivalent of this test, so it is
+// deleted (spec b27c64109, Regression Test Requirements, row "Always Allow on
+// approval cards": "A case with no C-26 equivalent is deleted, citing R2-Q1").
+//
+// The old test could not fail on its subject: the debug hook it called,
+// window.__omnipus_set_pending_approval, is defined nowhere in the repository,
+// so the toggle branch never ran, and the else branch only checked that the
+// Security tab was visible. It also never reloaded the page.
+//
+// Where its subject lives now: a stored permission surviving a reload is
+// tests/e2e/skills-tools.spec.ts (S-03 "survives reload"); a timed allowance's
+// scope and lifetime are the Go tests pkg/agent TestTimedAllowance_* and
+// pkg/gateway TestTimedAllowance_ReachesScheduledRun.

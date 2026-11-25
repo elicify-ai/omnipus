@@ -180,4 +180,43 @@ describe('SkillsToolsPage — autosave (order 24)', () => {
     expectPermissionPatches(permissions(), { policies: { fetch_url: 'deny' } })
     expect(permissions().stored.policies).toEqual({ send_email: 'ask', bash: 'deny', fetch_url: 'deny' })
   })
+
+  // CHECK round 4, candidate 11: the "applies directly, no confirmation" half of
+  // the retired SecuritySection case 'global tool-policy save' (FR-OB-046),
+  // moved to the replacement. Oracle: the spec's Qualitative Prohibitions ("must
+  // not show a Save bar, Discard, a leave prompt or a Set all confirm ... because
+  // T-Q3 B chose autosave with no confirm") and C-16 ("Requests use fetch with
+  // keepalive ... No leave prompt"). The legacy case's second half, "no consent
+  // token", has no line in the redesign spec: the PATCH contract declares no
+  // re-authentication header, and a step-up would open a dialog, which the
+  // absence checks below catch. It is listed in the report as a spec gap.
+  it('T-Q3 B: one change saves by itself — no dialog, Save, Discard or leave prompt, before or after the save', async () => {
+    const leavePromptShown = (): boolean => {
+      const leaving = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(leaving)
+      return leaving.defaultPrevented
+    }
+    // Instrument control: this probe sees a leave prompt when one is planted.
+    const planted = (event: Event) => event.preventDefault()
+    window.addEventListener('beforeunload', planted)
+    expect(leavePromptShown(), 'instrument: a planted prompt is seen').toBe(true)
+    window.removeEventListener('beforeunload', planted)
+    expect(leavePromptShown(), 'instrument: and gone once removed').toBe(false)
+
+    render(<SkillsToolsPage />, { wrapper: pageWrapper })
+    const row = await openGroupAndClick('send_email', /^communication/i, 'deny')
+    expect(leavePromptShown(), 'no leave prompt while the change is still pending').toBe(false)
+
+    await waitFor(() => {
+      expect(screen.getByText('Saved')).toBeInTheDocument()
+    })
+    expect(leavePromptShown(), 'no leave prompt after the save').toBe(false)
+    for (const role of ['alertdialog', 'dialog'] as const) {
+      expect(screen.queryByRole(role), `no ${role} for a single change`).toBeNull()
+    }
+    expect(screen.queryByRole('button', { name: /^(save|save changes|discard)$/i })).toBeNull()
+    expect(screen.queryByText(/leave without saving/i)).toBeNull()
+    expect(pressedPolicy(row)).toBe('deny')
+    expectPermissionPatches(permissions(), { policies: { send_email: 'deny' } })
+  })
 })

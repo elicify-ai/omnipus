@@ -18,7 +18,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
-import { useToolApprovalStore } from '@/store/toolApproval'
+import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 import type { AskUserQuestionCard, GoalStatusFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { fetchAgents } from '@/lib/api'
@@ -40,6 +40,15 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 }
 
 import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
+// C-24 / C-26: the answers the server lists when it raises a bash card (an
+// ordinary tool: Approve Once, the time choices, Deny and Cancel). Both lists
+// are required by ToolApprovalRequiredFrame, so every pending approval here
+// carries them.
+const BASH_CARD_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
+}
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -364,6 +373,7 @@ describe('live inline indicator', () => {
       approvalId: 'correlated-approval', toolCallId: 'tc-correlated', toolName: 'bash',
       args: { command: 'git status' }, agentId: 'agent-jim', sessionId: sid,
       turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000,
+      ...BASH_CARD_ANSWERS,
     }], resolvedIds: [] }))
     expect(within(bubble).getByText('Waiting for your approval — bash')).toBeInTheDocument()
     expectMarkMotion(bubble, 'waiting')
@@ -483,6 +493,7 @@ describe('live inline indicator', () => {
         sessionId: sid,
         turnId: 'turn-1',
         expiresAt: Date.now() + 60_000,
+        ...BASH_CARD_ANSWERS,
       }],
       resolvedIds: [],
     })
@@ -580,7 +591,7 @@ describe('current todo yields to notices in the real live runtime — round 2', 
 
     act(() => {
       if (notice === 'approval') {
-        useToolApprovalStore.setState({ queue: [{ approvalId: 'notice-approval', toolCallId: 'notice-exec', toolName: 'bash', args: {}, agentId: 'agent-1', sessionId: sid, turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000 }], resolvedIds: [] })
+        useToolApprovalStore.setState({ queue: [{ approvalId: 'notice-approval', toolCallId: 'notice-exec', toolName: 'bash', args: {}, agentId: 'agent-1', sessionId: sid, turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000, ...BASH_CARD_ANSWERS }], resolvedIds: [] })
       } else if (notice === 'question') {
         const pendingAsk: AskUserQuestionCard = {
           card_id: 'notice-question', session_id: sid, agent_id: 'agent-1', status: 'pending', created_at: '2026-10-21T12:00:00Z',

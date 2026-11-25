@@ -42,10 +42,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
     fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
-    fetchSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
@@ -67,9 +64,7 @@ import {
   fetchGatewayStatus,
   fetchCredentials,
   fetchBuiltinTools,
-  fetchGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   fetchAppState,
   fetchSandboxConfig,
   fetchSandboxStatus,
@@ -170,15 +165,19 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
     </QueryClientProvider>,
   )
 }
 
-/** Open Advanced and return the two rate-limit inputs once they exist. */
-async function openAdvanced() {
+/**
+ * Return the two rate-limit inputs once they exist. The Protection view shows
+ * them in plain view; the legacy layout kept them behind a collapsed Advanced
+ * disclosure, which is gone with that layout (skills-tools-redesign C-22 row
+ * 6), so there is nothing to open.
+ */
+async function findRateLimitInputs() {
   await waitFor(() => expect(screen.getByTestId('security-health-header')).toBeInTheDocument())
-  fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
   // Settings redesign #1519: the wireframe (the wording authority) renames
   // the rows — "Model calls per hour", "Tool calls per minute".
   const llm = (await screen.findByLabelText('Model calls per hour')) as HTMLInputElement
@@ -204,9 +203,7 @@ beforeEach(() => {
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
   vi.mocked(fetchBuiltinTools).mockResolvedValue([])
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' as const })
   vi.mocked(fetchAppState).mockResolvedValue(APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
@@ -223,7 +220,7 @@ afterEach(() => {
 describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) through the rate-limit route', () => {
   it('clearing "LLM calls / hour" PUTs max_agent_llm_calls_per_hour: 0 and keeps the tool value', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     // Both fields show the route's stored values before the edit. F3 /
     // FR-015: keeping the tool limit means leaving it OUT of this partial
     // update, never echoing the tab's possibly stale cached 9.
@@ -253,7 +250,7 @@ describe('#1882 follow-up F-PTA-1 — a cleared field saves 0 (Unlimited) throug
 
   it('clearing "Tool calls / minute" PUTs max_agent_tool_calls_per_minute: 0 and keeps the LLM value', async () => {
     renderSection()
-    const { llm, tool } = await openAdvanced()
+    const { llm, tool } = await findRateLimitInputs()
     await settleTo(llm, String(ROUTE_LLM))
     await settleTo(tool, String(ROUTE_TOOL))
     fireEvent.change(tool, { target: { value: '' } })
@@ -282,7 +279,7 @@ describe('#1882 follow-up F-PTA-2 — a failing rate-limits GET shows the load-f
   it('shows the load-failure banner and sends no rate-limit save after edits when the GET fails', async () => {
     rateLimitsGetStatus = 500
     renderSection()
-    await openAdvanced()
+    await findRateLimitInputs()
 
     // Instrument check: the failure must come from the real GET having been
     // made and answered 500 — not from a never-fired request.

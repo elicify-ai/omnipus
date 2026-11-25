@@ -137,7 +137,17 @@ func TestGetAgent_DetailAndModelChain(t *testing.T) {
 	assert.Contains(t, last["warning"], "no configured provider")
 }
 func TestGetAgent_FieldValidation_ThroughRegistry(t *testing.T) {
-	const valid = "name, description, type, locked, figure, role, color, voice, model, provider, reasoning_effort, fallback_models, model_chain, model_params, max_tool_iterations, context_window_override, memory_enabled, soul, agent_md, skills, stale_skill_grants, tool_permissions, stored_overrides, connectors, executor, runnable, program_warning, activation_status, editable_fields, has_main_chat"
+	// The 31 selectable names: the 30 this test pinned before (tool-parity §7.12.1
+	// plus the effort feature's reasoning_effort) and, new, skill_permissions
+	// (Skills & Tools spec C-9: "AgentDetail adds skill_permissions:
+	// AgentSkillPermission[] (returned for fields: [\"skill_permissions\"])";
+	// FR-055: "get_agent MUST return skill_permissions"). Every name is still
+	// pinned exactly and in order, so a dropped, renamed or reordered name fails.
+	// POSITION of the new name: the spec text does not state it (a spec gap). The
+	// contract-first file contracts/components/schemas/AgentDetail.yaml, committed
+	// before any code in 61a4364fb, lists skill_permissions directly after
+	// tool_permissions and before stored_overrides, so that is the oracle here.
+	const valid = "name, description, type, locked, figure, role, color, voice, model, provider, reasoning_effort, fallback_models, model_chain, model_params, max_tool_iterations, context_window_override, memory_enabled, soul, agent_md, skills, stale_skill_grants, tool_permissions, skill_permissions, stored_overrides, connectors, executor, runnable, program_warning, activation_status, editable_fields, has_main_chat"
 	for _, tc := range []struct {
 		name    string
 		fields  any

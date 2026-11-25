@@ -32,7 +32,9 @@ func declaredObjectProperties(t *testing.T, params map[string]any) map[string]bo
 // TestAgentCreateTool_NoOrphanedParameters guards the declared creation
 // surface against the contract, not a transcription of Execute's reads.
 // r17 T-AGENT keeps ordinary fields (AG-02), retires heartbeat/cli_path
-// (AG-06/AG-10), and adds env_overrides/cli_args (AG-12/AG-13).
+// (AG-06/AG-10), and adds env_overrides/cli_args (AG-12/AG-13). Skills & Tools
+// C-21 / FR-077 add skill_policy_changes ("create_agent gains
+// skill_policy_changes ({set} only), listed in agentCreateArgNames").
 // This schema-only guard does not prove that a declared field is consumed;
 // persistence and refusal tests must establish that separate behavior.
 func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
@@ -48,7 +50,8 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"reasoning_effort": true, // effort-levels spec FR-064
 		"figure":           true, "role": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
-		"memory_enabled": true, "voice": true,
+		"skill_policy_changes": true, // Skills & Tools spec C-21, FR-077 ({set} only on create)
+		"memory_enabled":       true, "voice": true,
 		"context_window_override": true, "model_params": true,
 		"workspace_id": true,
 	}

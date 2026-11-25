@@ -137,3 +137,22 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 		}
 	})
 }
+
+// TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority is the
+// native-path binding obligation for levelTurnPlanOf (CHECK round 4,
+// false-green table row 2). TestManifest_LevelsShapeTurn reads the output of
+// one adapter function: a function only that adapter calls passes it while the
+// real turn builds its request, its ToolSearch membership and its skill menu
+// some other way. C-15 and FR-070 require ONE visibility authority for all
+// three. This can only be checked after GREEN, so it is a loud BLOCKED leaf
+// (never a skip); the test author replaces it at test-side reconciliation with
+// real-loop checks, and CHECK then mutates the bound function and requires
+// them to fail. Real-loop observers in this pack today: TestVisibilityTransitions
+// (D11 rows 1, 2, 3, 6) and TestToolSearch_FindsSkills.
+func TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority(t *testing.T) {
+	t.Fatal("BLOCKED: the real turn is not shown to take its request manifest, " +
+		"its ToolSearch membership and its skill menu from the one function " +
+		"levelTurnPlanOf binds to — required by C-15 and FR-070 (manifest, search " +
+		"membership and skill menu MUST read one visibility authority); wiring the " +
+		"seam, or adding a production function nothing calls, must never turn this green")
+}

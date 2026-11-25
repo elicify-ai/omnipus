@@ -167,6 +167,10 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
             sessionId: 'sess-1',
             turnId: 'turn-1',
             expiresAt: oldExpiresAt,
+            // The answers the server listed when it raised this card: the same
+            // lists the refreshing frame below carries (C-24, C-26).
+            offeredActions: ['allow_once', 'allow_for', 'deny'],
+            allowDurations: ['1h', '3h', '1d'],
           },
         ],
       })
@@ -228,6 +232,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
             sessionId: 'sess-1',
             turnId: 'turn-known',
             expiresAt: Date.now() + 5_000,
+            // The lists the refreshing frame below carries for the same card.
+            offeredActions: ['allow_once', 'allow_for', 'deny'],
+            allowDurations: ['1h', '3h', '1d'],
           },
         ],
       })
@@ -296,6 +303,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
             sessionId: 'sess-1',
             turnId: 'turn-x',
             expiresAt: Date.now() + 5_000,
+            // An ordinary card as the server raised it (C-24: permission part open).
+            offeredActions: ['allow_once', 'allow_for', 'deny'],
+            allowDurations: ['1h', '3h', '1d'],
           },
         ],
       })

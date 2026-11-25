@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockRunGated = vi.fn(async (fn: (token: string) => unknown) => fn(''))
 
-vi.mock('@/lib/api', () => ({
+// The agent-tools edge of the API module is doubled. The global value is not:
+// the real client reads it from GET /security/permissions through the fetch
+// double below (C-22 row 6 retires GET /security/tool-policies, this tab's
+// last reader), so a held or failed read of it is a held or failed fetch.
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
+  fetchGodMode: vi.fn(),
   reAuth: vi.fn(),
   isApiError: vi.fn(() => false),
-  REAUTH_HEADER: 'X-Reauth-Token',
 }))
 
 vi.mock('@/components/settings/useReAuthGate', () => ({
@@ -32,6 +36,15 @@ vi.mock('@/store/ui', () => ({
 import * as api from '@/lib/api'
 import type { RegistryTool, AgentToolsCfg, McpServer } from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+// The global value the badges are floored by (Skills & Tools). These are the
+// two values this file's earlier global-policies double returned; a test that
+// needs another says so in its own Given. Only the fetch edge is doubled.
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: { read_file: 'allow', ToolSearch: 'allow' },
+  skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 const READ_FILE: RegistryTool = {
   name: 'read_file',
@@ -79,7 +92,7 @@ beforeEach(() => {
     tools: [],
     skills: [],
   })
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { read_file: 'allow', ToolSearch: 'allow' } })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: false, available: true, supported: true })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([SERVER])
   vi.mocked(api.updateAgentTools).mockImplementation(async (_id, cfg) => ({
     revision: REVISION,
@@ -103,7 +116,9 @@ describe('ToolsAndPermissions — sparse inherit and discovery', () => {
         onChange={() => {}}
       />,
     )
-    await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())
+    // The editor is on screen when its category grid is (this wait used to be
+    // the role-preset button, retired by US-3 AS1).
+    await screen.findByTestId('category-grid')
     fireEvent.click(screen.getByRole('button', { name: /Files/ }))
     const inherit = await screen.findByTestId('inherit-read_file')
     // The Inherit button renders before the tools draft hydrates; await
@@ -129,8 +144,10 @@ describe('ToolsAndPermissions — sparse inherit and discovery', () => {
         onChange={() => {}}
       />,
     )
-    await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('category-pill-system').closest('button')!)
+    // The system category's pill is the control this test needs; it renders
+    // with the editor (this wait used to be the retired role-preset button).
+    const systemPill = await screen.findByTestId('category-pill-system')
+    fireEvent.click(systemPill.closest('button')!)
     expect(await screen.findByTestId('toolsearch-always-available')).toBeInTheDocument()
     expect(screen.queryByTestId('inherit-ToolSearch')).not.toBeInTheDocument()
     const discoveryRow = screen.getByTestId('tool-row-ToolSearch')
@@ -200,10 +217,9 @@ function lastToolsConfig() {
   }
 }
 
-// The residual-GET, preset and MCP-binding cases are split across three describe
-// blocks so each callback stays under the function-size budget
-// (scripts/check-function-budget.sh); the cases are unchanged and in their
-// original order.
+// The residual-GET, global-value and MCP-binding cases are split across three
+// describe blocks so each callback stays under the function-size budget
+// (scripts/check-function-budget.sh); they keep their original order.
 describe('ToolsAndPermissions — MCP bindings: policy-only saves and unassign', () => {
   it('keeps assigned connectors when a policy-only inherit is saved', async () => {
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
@@ -359,7 +375,7 @@ describe('ToolsAndPermissions — MCP bindings: connector tool subsets', () => {
   })
 })
 
-describe('ToolsAndPermissions — residual GET failures, preset gating, and overrides', () => {
+describe('ToolsAndPermissions — residual GET failures, global-value gating, and overrides', () => {
   it('surfaces an agent-tools GET failure with retry', async () => {
     vi.mocked(api.fetchAgentTools)
       .mockRejectedValueOnce(new Error('offline'))
@@ -385,31 +401,43 @@ describe('ToolsAndPermissions — residual GET failures, preset gating, and over
     expect(await screen.findByTestId('tool-policy-editor')).toBeInTheDocument()
   })
 
-  it('disables presets and individual policies until the global ceiling has loaded', async () => {
-    vi.mocked(api.fetchGlobalToolPolicies).mockReturnValue(new Promise(() => {}))
+  // The role-preset half of this case ("disables presets and individual
+  // policies ...") is retired with the presets (US-3 AS1, T-Q6 A; CHECK round 4,
+  // candidate 9). The individual-policy half is kept, on the same oracle: a tab
+  // whose global value has not loaded edits nothing (state table, "Agent Tools
+  // tab": loading "as today"; global value missing "read-only").
+  it('keeps individual policies disabled until the global ceiling has loaded', async () => {
+    // The global value's read stays unanswered; every other read lands.
+    permissions().holdReads()
     renderWithQuery(
       <ToolsAndPermissions
         agentId="mia"
         agentType="core"
         isEditable
+        isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
       />,
     )
-    const cautious = await screen.findByTestId('preset-cautious')
-    expect(cautious).toBeDisabled()
+    await screen.findByTestId('category-grid')
     fireEvent.click(screen.getByRole('button', { name: /Files/ }))
     const row = await screen.findByTestId('tool-row-read_file')
-    expect(within(row).getByRole('button', { name: 'Allow' })).toBeDisabled()
-    fireEvent.click(cautious)
-    fireEvent.click(within(row).getByRole('button', { name: 'Allow' }))
+    // The agent's own draft HAS hydrated: the connector control waits for that
+    // draft alone and is enabled. So the disabled badge below is the pending
+    // global value, not a tab that has not finished loading.
+    await waitFor(() => expect(screen.getByLabelText('Assign Docs')).toBeEnabled())
+    const allow = within(row).getByRole('button', { name: 'Allow' })
+    expect(allow).toBeDisabled()
+    fireEvent.click(allow)
+    // Past the 500 ms autosave debounce, so an accepted edit would have been
+    // sent by now (the earlier check ran before the debounce could fire).
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)) })
     expect(api.updateAgentTools).not.toHaveBeenCalled()
   })
 
   it('surfaces a global ceiling GET failure and enables policy editing only after retry', async () => {
-    vi.mocked(api.fetchGlobalToolPolicies)
-      .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValue({ policies: { read_file: 'allow', ToolSearch: 'allow' } })
+    // The first read of the global value fails; the read after Retry answers.
+    permissions().failNextRead(500, 'offline')
     renderWithQuery(
       <ToolsAndPermissions
         agentId="mia"
@@ -485,7 +513,7 @@ describe('ToolsAndPermissions — residual GET failures, preset gating, and over
         onChange={() => {}}
       />,
     )
-    await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())
+    await screen.findByTestId('category-grid')
     fireEvent.click(screen.getByRole('button', { name: /Files/ }))
     const row = await screen.findByTestId('tool-row-read_file')
     // The badge renders before the tools draft hydrates; await enablement

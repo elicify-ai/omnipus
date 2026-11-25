@@ -47,6 +47,11 @@ function queueApproval(args: Record<string, unknown>) {
           sessionId: 'sess-001',
           turnId: 'turn-001',
           expiresAt: Date.now() + 300_000,
+          // C-24 / C-26: the answers the server lists when it raises a bash
+          // card (an ordinary tool: Approve Once, the time choices, Deny and
+          // Cancel). Both lists are required by ToolApprovalRequiredFrame.
+          offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+          allowDurations: ['1h', '3h', '1d'],
         },
       ],
     })
@@ -122,12 +127,21 @@ describe('ToolApprovalPanel — Auto pre-flight escalation explanation', () => {
     expect(screen.queryByTestId('auto-escalation-explanation')).not.toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6: labels the primary action "Approve Once" — a one-time affordance distinct from "Always Allow"', () => {
+  // Regression row "Always Allow on approval cards" (skills-tools-redesign-spec,
+  // Regression Test Requirements): C-26 point 1 / S-119 removed Always Allow
+  // from every card; its replacement is the three timed choices. The R6 case
+  // keeps what it was for - the primary action is labelled Approve Once, a
+  // one-time affordance - and the thing it was distinct from is now the time
+  // limit ("Allow for 1 hour" and the others), with no Always Allow at all.
+  it('L1 §1.2 R6 → C-26: labels the primary action "Approve Once" — a one-time affordance distinct from the timed "Allow for" choices', () => {
     queueApproval({ command: 'npm test' })
     render(<ToolApprovalPanel />)
 
-    expect(screen.getByRole('button', { name: /Approve Once/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Always Allow$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Approve Once$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Allow for 1 hour$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Allow for 3 hours$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Allow for 1 day$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Always Allow/i })).not.toBeInTheDocument()
   })
 })
 

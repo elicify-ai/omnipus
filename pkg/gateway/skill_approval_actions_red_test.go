@@ -294,9 +294,20 @@ func testNativeSkillStale(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Contains(t, results[0], "The skill changed after this request.", "same refusal reaches the actual waiting call")
 	w = postToolApprovalRaw(t, h.api, entry.ApprovalID, `{"action":"approve_version_allow_for","duration":"3h"}`)
-	assertNativeSkillRefusal(t, w, http.StatusNotFound, "approval "+entry.ApprovalID+" not found")
+	assertNativeSkillRefusal(t, w, http.StatusNotFound, existingApprovalNotFoundText(entry.ApprovalID))
 	assert.Equal(t, prior, readNativeTrustBytes(t, h))
 	assertNativeSkillAllowance(t, h, false)
+}
+
+// existingApprovalNotFoundText is the 404 text the approval handler already gives for an unknown,
+// answered or expired approval id. Spec C-24 server rules, row "Replay and expiry": "the existing 404
+// 'approval … not found'". The existing text quotes the id (pkg/gateway/rest_tool_registry.go::
+// HandleToolApprovals, `approval %q not found`, unchanged since the round-4 base 456e35108), so a
+// replay's expected text quotes it too; the first RED draft wrote the id without quotes, which was
+// not "the existing 404" (fix round 4, part D item 3). Built by concatenation, not by calling any
+// production helper, so the oracle stays the spec's wording.
+func existingApprovalNotFoundText(approvalID string) string {
+	return `approval "` + approvalID + `" not found`
 }
 func testNativeSkillUnoffered(t *testing.T) {
 	h := newNativeSkillHarness(t, "ask", "ask")
@@ -319,13 +330,28 @@ func testNativeSkillUnoffered(t *testing.T) {
 	h.finish(t, run, true)
 }
 
+// assertNativeSkillAllowance reads the real timed-allowance store the loop owns (the one the card
+// handler records into) for the skill-kind allowance of C-26 — Key = (agent id, kind, subject), the
+// subject here being the skill key. It never supplies a boolean or a record: the answer under test
+// is posted over HTTP and only the store's own readback is observed.
+//
+// Fix round 4, part D item 1: the first RED draft called t.Fatalf("BLOCKED: …") unconditionally
+// because no skill-kind readback existed then, so every test that reached this helper failed here
+// whatever the code did. The readback now exists (ApprovalGrantStore.IsSkillAllowed(agentID,
+// skillKey)); the assertion is kept as the BLOCKED message stated it: notes-helper is allowed for the
+// answering agent exactly when active, and no other agent and no other skill is ever covered by the
+// card's answer. An ordinary whole-tool grant (IsAllowed with tool "Skill") is a different, wider
+// key and is deliberately not what is read here.
 func assertNativeSkillAllowance(t *testing.T, h *nativeSkillHarness, active bool) {
 	t.Helper()
-	require.NotNil(t, h.api.agentLoop.ApprovalGrants(), "fixture: real store exists")
-	// C-26 makes an ordinary tool allowance whole-tool. Using IsAllowed with
-	// tool=Skill here would accidentally require that wider key, not the new
-	// skill-kind subject. Do not invent a public method or a returned boolean.
-	t.Fatalf("BLOCKED: native skill-kind allowance record/readback is not implemented — required by C-24 effect order and C-26 (agent, kind, subject); need actual notes-helper active=%t, other skills/agents false. Reconcile this assertion against the native store when it exists; successful release is independently driven through actual unattended calls", active)
+	grants := h.api.agentLoop.ApprovalGrants()
+	require.NotNil(t, grants, "fixture: real store exists")
+	assert.Equal(t, active, grants.IsSkillAllowed("test-agent", "notes-helper"),
+		"C-24 effect order / C-26: the skill allowance of notes-helper for the answering agent must be active=%t at this point", active)
+	assert.False(t, grants.IsSkillAllowed("peer-agent", "notes-helper"),
+		"C-26: the allowance belongs to the answering agent; another agent holding the same skill is never covered")
+	assert.False(t, grants.IsSkillAllowed("test-agent", "unrelated-helper"),
+		"C-26: the subject is the one skill the card named; another skill is never covered")
 }
 func assertNativeSkillRefusal(t *testing.T, w *httptest.ResponseRecorder, status int, text string) {
 	t.Helper()

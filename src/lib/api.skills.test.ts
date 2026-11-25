@@ -21,6 +21,27 @@ function makeOkResponse(body: unknown): Response {
   })
 }
 
+// A complete, schema-valid Skill. contracts/components/schemas/Skill.yaml
+// requires revision, id, name, version, verified, status, has_local_changes,
+// category (Skills & Tools C-5) and trust_approved (C-24). The fixtures below
+// used to omit the last two, so the strict Skill schema rejected them and the
+// "valid" skills were dropped for the wrong reason (CHECK round 4, candidate
+// 19). Each case overrides only what it is about, so a fixture cannot become
+// invalid by omission again; the invalid cases stay spelled out in full.
+function validSkill(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    has_local_changes: false,
+    revision: '0'.repeat(64),
+    category: 'tools', // a member of SkillCategory.yaml
+    trust_approved: false,
+    verified: false,
+    status: 'active',
+    source: 'global',
+    version: '1.0.0',
+    ...overrides,
+  }
+}
+
 describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
@@ -40,7 +61,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   describe('fetchSkills (tolerant installed-skills list)', () => {
     it('keeps valid skills and drops a malformed one (one bad skill must not hide the whole list)', async () => {
       const payload = [
-        { has_local_changes: false, revision: '0'.repeat(64), id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
+        validSkill({ id: 'good', name: 'Good', version: '2.1.0' }),
         // Structurally invalid: missing required version/verified/status.
         { id: 'bad', name: 'Bad' },
       ]
@@ -53,9 +74,28 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
       expect(result.map((s) => s.id)).toEqual(['good'])
     })
 
+    it('drops a skill that omits category or trust_approved, which the contract requires', async () => {
+      // Control for the fixture migration above: the complete skill survives
+      // and each one-field-short copy is dropped, so the completed fixtures
+      // are valid because of those two members and for no other reason.
+      const without = (skill: Record<string, unknown>, member: string) =>
+        Object.fromEntries(Object.entries(skill).filter(([key]) => key !== member))
+      const payload = [
+        validSkill({ id: 'complete', name: 'Complete' }),
+        without(validSkill({ id: 'no-category', name: 'No Category' }), 'category'),
+        without(validSkill({ id: 'no-trust', name: 'No Trust' }), 'trust_approved'),
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills } = await import('./api')
+      const result = await fetchSkills()
+
+      expect(result.map((s) => s.id)).toEqual(['complete'])
+    })
+
     it('accepts a non-semver version like "1.0" (ClawHub versions are arbitrary)', async () => {
       const payload = [
-        { has_local_changes: false, revision: '0'.repeat(64), id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
+        validSkill({ id: 'cw', name: 'ClawHub Skill', version: '1.0' }),
       ]
       fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
 
@@ -75,28 +115,18 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
     // object in a component test.
     it('merges last_invoked from the raw response even though the Skill schema does not declare it', async () => {
       const payload = [
-        {
-          has_local_changes: false,
-          revision: '0'.repeat(64),
+        validSkill({
           id: 'release-notes',
           name: 'Release Notes',
-          version: '1.0.0',
           verified: true,
-          status: 'active',
-          source: 'global',
           last_invoked: '2026-08-15T10:00:00Z',
-        },
-        {
-          has_local_changes: false,
-          revision: '0'.repeat(64),
+        }),
+        // no last_invoked at all — the granted-but-never-invoked case.
+        validSkill({
           id: 'never-called',
           name: 'Never Called',
-          version: '1.0.0',
           verified: true,
-          status: 'active',
-          source: 'global',
-          // no last_invoked at all — the granted-but-never-invoked case.
-        },
+        }),
       ]
       fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
 
@@ -151,8 +181,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   })
 
   describe('installSkillBySlug', () => {
-    const okSkill = {
-      has_local_changes: false,
+    const okSkill = validSkill({
       revision: 'b'.repeat(64),
       persistence_status: 'complete',
       activation_status: 'active',
@@ -160,9 +189,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
       id: 'web-search',
       name: 'web-search',
       version: '1.4.0',
-      status: 'active',
-      verified: false,
-    }
+    })
 
     it('POST /api/v1/skills/install — sends {slug} body + CSRF', async () => {
       fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))

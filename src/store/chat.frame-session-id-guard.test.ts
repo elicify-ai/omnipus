@@ -128,6 +128,10 @@ describe('chat frame routing — missing session_id is always dropped, never rea
         agent_id: 'agent-x',
         turn_id: 'turn-x',
         expires_in_ms: 300_000,
+        // C-24: both lists are required by the frame schema; with them present
+        // the only thing wrong with this frame is its missing session_id.
+        offered_actions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+        allow_durations: ['1h', '3h', '1d'],
       } as unknown as ServerFrame)
     })
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)

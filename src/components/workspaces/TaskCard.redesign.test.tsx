@@ -83,7 +83,7 @@ it('T26 agent/activity/elapsed occupy row four, checklist row five is optional, 
 
 it('the founder card-alert correction keeps approval and assignee warning icons visible in controls, with the exact meaning in info', async () => {
   const warning = 'Allow goal_claim for Worker or assign another agent.'
-  useToolApprovalStore.setState({ queue: [{ approvalId: 'approval', toolCallId: 'call', toolName: 'bash', args: {}, agentId: 'ray', sessionId: 'session-task', turnId: 'turn', expiresAt: Date.now() + 60_000, workspaceId: 'ws-layout' }], resolvedIds: [] })
+  useToolApprovalStore.setState({ queue: [{ approvalId: 'approval', toolCallId: 'call', toolName: 'bash', args: {}, agentId: 'ray', sessionId: 'session-task', turnId: 'turn', expiresAt: Date.now() + 60_000, workspaceId: 'ws-layout', offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'], allowDurations: ['1h', '3h', '1d'] }], resolvedIds: [] })
   renderLayout(<TaskCard task={layoutTask({ status: 'in_progress', session_id: 'session-task', assignee_warning: { field: 'agent_id', message: warning } })} onClick={vi.fn()} />)
   const approval = screen.getByRole('img', { name: 'Waiting for your approval to use bash' })
   const assignee = screen.getByRole('img', { name: warning })

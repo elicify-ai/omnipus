@@ -2,10 +2,49 @@
  * SecuritySection tests.
  *
  * Coverage:
- *   US-B1 — two-layer IA: jargon hidden until Advanced is expanded (#327)
- *   US-B3 — ToolPolicyEditor replaces GlobalToolPoliciesSection (#329)
+ *   US-B1 — the plain Protection page carries no jargon (#327; the Advanced
+ *     layer that used to hold it is gone, see "Moved off the legacy layout")
  *   US-B4 — score deduction links to fix; score=100 reassurance (#330)
- *   #340   — SkillTrustSection is mounted in the Security tab
+ *
+ * Retired in Skills & Tools fix round 4 (CHECK round 4, candidates 9, 11, 22):
+ * eleven cases that drove SecuritySection's legacy layout, which
+ * skills-tools-redesign C-22 row 6 deletes together with its global tool grid
+ * and skill trust card (the Skills & Tools page holds both, C-22 row 1). No
+ * case with a replacement was dropped without moving it:
+ *   US-B3 preset buttons (1)  — presets are retired (FR-022, T-Q6 A; Regression
+ *     row "Presets | preset cases ... | Deleted with the feature").
+ *   US-B3 system.* flat grid, Mixed pill (2) — the same invariants stay pinned
+ *     on the editor itself in ToolPolicyEditor.test.tsx and AgentTools.test.tsx.
+ *   #340 SkillTrustSection mounted, three radios (2) — the trust block with
+ *     Allow / Ask / Deny is SkillsToolsPage.trust.test.tsx (S-26, S-32); the
+ *     Block / Warn / Allow vocabulary is retired (FR-027).
+ *   global tool-policy save (1) — "saves directly, no confirmation" is
+ *     SkillsToolsPage.autosave.test.tsx (T-Q3 B); its apply/recovery checks are
+ *     SaveQueue.states.test.ts (C-16).
+ *   MCP tools in the global editor (5) — External tools tab rows (S-03, S-04,
+ *     S-45, C-2): src/components/skills/SkillsToolsPage.external.test.tsx; the
+ *     spec's test plan also maps S-03 to tests/e2e/skills-tools.spec.ts.
+ *
+ * Moved off the legacy layout in Skills & Tools fix round 4, Part C item 1
+ * (item 11): SettingsSectionBody always passes view="protection" or
+ * view="keys" (spec C-22, "The Settings base" table, Global tool grid row),
+ * and C-22 "What this landing does" row 6 deletes "SecuritySection's legacy
+ * layout" — the layout with no view, with its Advanced disclosure that held
+ * the rate limits, the Auto-approve Save bar and the jargon. Every case below
+ * renders the view its content lives in; no assertion was weakened:
+ *   - the Auto-approve, rate-limit hydration and US-B4 cases render
+ *     view="protection" and no longer open an Advanced disclosure (it is gone);
+ *   - the credential vault cases render view="keys";
+ *   - "does not render the retired Shell command approval or Enable deny
+ *     patterns controls" keeps its absence checks on the Protection view, where
+ *     the page that held them now lives; its instrument waits for the rows that
+ *     sat beside them instead of waiting for the jargon the Advanced layer held;
+ *   - RETIRED, one case: "expanding Advanced reveals jargon (Landlock / SSRF)
+ *     that was hidden" drove only the removed disclosure (C-22 row 6). Its
+ *     other half, "no jargon on the plain page", stays pinned by "shows
+ *     Security health header without jargon in the initial render" above, now on
+ *     the Protection view; the jargon itself belongs to the Sandbox section
+ *     (SandboxSection.test.tsx), outside SecuritySection.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -27,14 +66,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     addCredential: vi.fn(),
     deleteCredential: vi.fn(),
     rotateCredentials: vi.fn(),
-    fetchBuiltinTools: vi.fn(),
-    fetchRegistryTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
-    updateGlobalToolPolicies: vi.fn(),
     fetchDoctorResults: vi.fn(),
     runDoctor: vi.fn(),
-    fetchSkillTrust: vi.fn(),
-    updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
     // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
     // layer, unlike SandboxSection (Advanced, collapsed by default) — its
@@ -69,11 +102,7 @@ import {
   fetchCredentials,
   addCredential,
   deleteCredential,
-  fetchBuiltinTools,
-  fetchGlobalToolPolicies,
-  updateGlobalToolPolicies,
   fetchDoctorResults,
-  fetchSkillTrust,
   rotateCredentials,
   fetchAppState,
   fetchSandboxConfig,
@@ -88,7 +117,6 @@ import { SecuritySection } from './SecuritySection'
 import { SettingsShellContext, type SettingsShellApi } from './SettingsShellContext'
 import { useSavePasswordPrompt } from './useSavePasswordPrompt'
 import { ApiError } from '@/lib/api-error'
-import type { RegistryTool } from '@/lib/api'
 
 // Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
 // ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
@@ -121,26 +149,6 @@ const MINIMAL_CONFIG = {
   },
 }
 
-const BUILTIN_TOOLS: RegistryTool[] = [
-  { name: 'exec', description: 'Execute shell commands', category: 'code', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'read_file', description: 'Read file content', category: 'file', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'system.status', description: 'System status', category: 'system', scope: 'core', source: 'builtin', visibility: 'full', visibility_locked: false, permission_fixed: false },
-]
-
-/**
- * Mixed payload: same builtin tools PLUS two MCP tools from 'testsvr'.
- * Used in the MCP-tool-in-global-editor tests below.
- */
-const BUILTIN_AND_MCP_TOOLS: RegistryTool[] = [
-  ...BUILTIN_TOOLS,
-  { name: 'mcp_testsvr_list', description: 'List resources', category: 'search', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
-  { name: 'mcp_testsvr_read', description: 'Read a resource', category: 'web', scope: 'general', source: 'mcp', visibility: 'full', visibility_locked: false, permission_fixed: false },
-]
-
-const GLOBAL_POLICIES = {
-  policies: {},
-}
-
 const DOCTOR_RESULT_ISSUES = {
   score: 75,
   checked_at: new Date().toISOString(),
@@ -163,8 +171,6 @@ const DOCTOR_RESULT_PERFECT = {
   issues: [],
 }
 
-const SKILL_TRUST_RESPONSE = { level: 'warn_unverified' as const }
-
 // ── Helper ─────────────────────────────────────────────────────────────────────
 
 function makeClient() {
@@ -173,10 +179,20 @@ function makeClient() {
   })
 }
 
+/** Settings → Protection: the layout SettingsSectionBody passes (view="protection"). */
 function renderSection(client = makeClient()) {
   return render(
     <QueryClientProvider client={client}>
-      <SecuritySection />
+      <SecuritySection view="protection" />
+    </QueryClientProvider>
+  )
+}
+
+/** Settings → Keys & secrets: the credential vault (view="keys"). */
+function renderKeysSection(client = makeClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <SecuritySection view="keys" />
     </QueryClientProvider>
   )
 }
@@ -216,7 +232,7 @@ function renderSectionWithShell(client = makeClient()) {
   return render(
     <QueryClientProvider client={client}>
       <SettingsShellProvider>
-        <SecuritySection />
+        <SecuritySection view="protection" />
       </SettingsShellProvider>
     </QueryClientProvider>
   )
@@ -232,10 +248,7 @@ beforeEach(() => {
   vi.mocked(fetchConfig).mockResolvedValue(MINIMAL_CONFIG as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
   vi.mocked(fetchCredentials).mockResolvedValue([])
-  vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_TOOLS)
-  vi.mocked(fetchGlobalToolPolicies).mockResolvedValue(GLOBAL_POLICIES)
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
-  vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
   vi.mocked(fetchRateLimits).mockResolvedValue({ enabled: true, max_agent_llm_calls_per_hour: 0, max_agent_tool_calls_per_minute: 0 } as never)
@@ -256,7 +269,8 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
       expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
     })
 
-    // Jargon words must NOT appear until Advanced is expanded
+    // Jargon words must NOT appear on the plain Protection page (the technical
+    // layer that held them behind Advanced is the Sandbox section now)
     const bodyText = document.body.textContent ?? ''
     expect(bodyText).not.toMatch(/Landlock/)
     expect(bodyText).not.toMatch(/SSRF/)
@@ -286,37 +300,18 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
 
     // Both wrote fields the backend never read (security.exec_approval,
     // security.enable_deny_patterns) — deleted outright, not just hidden.
-    // Expand Advanced too, since "Enable deny patterns" used to live there.
-    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
-    fireEvent.click(advancedTrigger)
-    await waitFor(() => {
-      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
-    })
+    // "Enable deny patterns" used to live in the Advanced layer, which is gone
+    // with the legacy layout (C-22 row 6): the Protection view shows its whole
+    // content at once. The instrument: the rows that sat beside it — the
+    // per-agent rate limits, the prompt-injection defence and the audit log —
+    // must be on the page before the absence checks mean anything.
+    expect(await screen.findByRole('heading', { name: 'Rate limits per agent' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Prompt injection defense' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'View Log' })).toBeInTheDocument()
 
     expect(screen.queryByText(/shell command approval/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/enable deny patterns/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/enable deny patterns/i)).not.toBeInTheDocument()
-  })
-
-  it('expanding Advanced reveals jargon (Landlock / SSRF) that was hidden', async () => {
-    renderSection()
-
-    // Wait for the component to settle
-    await waitFor(() => {
-      expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
-    })
-
-    // Jargon hidden before expand
-    expect(document.body.textContent).not.toMatch(/Landlock/i)
-
-    // Find and click the Advanced/technical details trigger
-    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
-    fireEvent.click(advancedTrigger)
-
-    // After expanding, jargon is visible
-    await waitFor(() => {
-      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
-    })
   })
 })
 
@@ -350,7 +345,7 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
 //     says each chat can still turn it off with its Auto button." — the help
 //     text, not a dialog, carries the explanation now.
 //
-// Harness: the real chain — SecuritySection (old view) + useSaveBar +
+// Harness: the real chain — SecuritySection (Protection view) + useSaveBar +
 // useSavePasswordPrompt + the real ConfirmDialog — with the @/lib/api client
 // functions mocked at the API edge and a global fetch recorder (404 default)
 // proving no POST /auth/reauth and no other un-mocked state change. The
@@ -392,9 +387,10 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   })
 
   /**
-   * Toggle Auto-approve and reach the Save bar. The legacy view keeps the
-   * bar inside the collapsed Advanced disclosure, so expanding it is part of
-   * reaching the oracle — the counting itself happened at the toggle.
+   * Toggle Auto-approve and reach the Save bar. The Protection view carries
+   * the section's one Save bar in plain view; the legacy layout kept it inside
+   * a collapsed Advanced disclosure, which is gone (C-22 row 6), so there is
+   * nothing to expand — the counting itself happens at the toggle.
    */
   async function draftAndOpenBar() {
     renderSectionWithShell()
@@ -409,7 +405,6 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // FR-010: nothing is stored by the toggle itself.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    fireEvent.click(await screen.findByTestId('advanced-disclosure-trigger'))
     // FR-011: the change counts, and counts as needing the password
     // (FR-025: Auto-approve is a Password-badged row).
     await screen.findByText('1 unsaved change')
@@ -708,72 +703,6 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   })
 })
 
-// ── US-B3: ToolPolicyEditor replaces GlobalToolPoliciesSection ────────────────
-
-describe('SecuritySection — US-B3 ToolPolicyEditor in advanced section', () => {
-  it('ToolPolicyEditor renders inside Advanced section with preset buttons', async () => {
-    renderSection()
-
-    // Expand Advanced
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-
-    // Preset buttons: Cautious / Balanced / Full access
-    expect(screen.getByTestId('preset-cautious')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
-    expect(screen.getByTestId('preset-full_access')).toBeInTheDocument()
-  })
-
-  it('system.* tool appears in the flat category grid (no separate system-disclosure-wrapper)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-
-    // The old system-disclosure-wrapper must NOT exist (#357 flat list fix).
-    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
-
-    // The category-grid must contain a 'system' category pill (system tools in the grid).
-    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
-    expect(screen.getByTestId('category-pill-system')).toBeInTheDocument()
-  })
-
-  it('a category with mixed policies shows a Mixed pill', async () => {
-    // Set exec to 'ask' and read_file to 'allow' — both in different categories,
-    // so each category is uniform. We only test that the ToolPolicyEditor is
-    // wired up and renders category pills; mixed-pill logic is tested in ToolPolicyEditor.test.tsx.
-    vi.mocked(fetchGlobalToolPolicies).mockResolvedValue({
-      policies: {},
-    })
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('category-grid')).toBeInTheDocument()
-    })
-
-    // Categories present (exec = code, read_file = file)
-    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
-  })
-})
-
 // ── US-B4: Score-as-control-surface ──────────────────────────────────────────
 
 describe('SecuritySection — US-B4 score control surface', () => {
@@ -825,66 +754,11 @@ describe('SecuritySection — US-B4 score control surface', () => {
   })
 
   it('Credential Vault shows encryption reassurance line', async () => {
-    renderSection()
+    renderKeysSection()
 
     await waitFor(() => {
       expect(screen.getByText(/encrypted and stored only on this server/i)).toBeInTheDocument()
     })
-  })
-})
-
-// ── #340: SkillTrustSection mounted in Security ───────────────────────────────
-
-describe('SecuritySection — #340 SkillTrustSection mounted', () => {
-  it('renders SkillTrustSection (Skill Trust heading) inside Security tab', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByText(/skill trust/i)).toBeInTheDocument()
-    })
-  })
-
-  it('renders the three trust-level radios (Block / Warn / Allow)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      const radios = screen.getAllByRole('radio')
-      expect(radios.length).toBeGreaterThanOrEqual(3)
-    })
-  })
-})
-
-// ── Global tool policies — no step-up, and no confirmation (FR-OB-046) ───────
-//
-// rest_tool_policies.go:69 removed this endpoint's server gate deliberately, so
-// the client used to ask for a password the server never demanded. It is not one
-// of ADR-0008 ruling 6's six controls, so it gets no confirmation either.
-
-describe('SecuritySection — global tool-policy save', () => {
-  it('saves directly with no confirmation and no consent token', async () => {
-    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({ policies: {} } as never)
-
-    renderSection()
-
-    // Expand Advanced to reveal the ToolPolicyEditor.
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('preset-balanced')).toBeInTheDocument()
-    })
-
-    // Switch the default policy ask → allow; this triggers the debounced PUT.
-    fireEvent.click(screen.getByTestId('preset-balanced'))
-
-    await waitFor(() => {
-      expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(1)
-    })
-    // One argument only — the consent-token parameter is gone.
-    expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0]).toHaveLength(1)
-    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
 
@@ -897,7 +771,7 @@ describe('SecuritySection — global tool-policy save', () => {
 
 describe('SecuritySection — credential vault confirmations', () => {
   async function openAddCredentialForm() {
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByText('Add key'))
     fireEvent.change(await screen.findByPlaceholderText('e.g. OPENAI_API_KEY'), {
       target: { value: 'MY_KEY' },
@@ -944,7 +818,7 @@ describe('SecuritySection — credential vault confirmations', () => {
 
   async function openDeleteConfirmation() {
     vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'MY_KEY' }] as never)
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByTestId('delete-cred-MY_KEY'))
   }
 
@@ -988,7 +862,7 @@ describe('SecuritySection — credential vault confirmations', () => {
   })
 
   async function openRotateConfirmation() {
-    renderSection()
+    renderKeysSection()
     fireEvent.click(await screen.findByTestId('rotate-master-key'))
     fireEvent.change(await screen.findByTestId('rotate-passphrase-input'), {
       target: { value: 'new-pass-phrase' },
@@ -1031,105 +905,6 @@ describe('SecuritySection — credential vault confirmations', () => {
   })
 })
 
-// ── MCP tools in the global Settings → Security editor ───────────────────────
-
-describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
-  /**
-   * Helper: render SecuritySection with MCP tools included in fetchBuiltinTools,
-   * expand the top-level Advanced disclosure, and wait for the ToolPolicyEditor.
-   */
-  async function renderWithMcpAndExpand() {
-    // Override the default stub so MCP tools are returned alongside builtins.
-    vi.mocked(fetchBuiltinTools).mockResolvedValue(BUILTIN_AND_MCP_TOOLS)
-
-    renderSection()
-
-    // Wait for the section to load and find the single top-level Advanced trigger.
-    await waitFor(() => {
-      expect(screen.getByTestId('advanced-disclosure-trigger')).toBeInTheDocument()
-    })
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
-    // Wait for the ToolPolicyEditor to mount and its data to settle.
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
-    })
-  }
-
-  it('MCP tools render in the mcp-tools-section inside the global editor', async () => {
-    await renderWithMcpAndExpand()
-
-    // The mcp-tools-section must be present inside the ToolPolicyEditor.
-    expect(screen.getByTestId('mcp-tools-section')).toBeInTheDocument()
-  })
-
-  it('MCP server disclosure is present for the testsvr MCP server', async () => {
-    await renderWithMcpAndExpand()
-
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    // 'mcp_testsvr_list' and 'mcp_testsvr_read' both belong to server 'testsvr' →
-    // exactly one server disclosure in the MCP section.
-    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
-    expect(triggers.length).toBe(1)
-  })
-
-  it('expanding the MCP server disclosure shows both MCP tool rows', async () => {
-    await renderWithMcpAndExpand()
-
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
-    fireEvent.click(serverTrigger)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
-      expect(screen.getByTestId('tool-row-mcp_testsvr_read')).toBeInTheDocument()
-    })
-  })
-
-  it('MCP tools do NOT appear in the builtin category grid', async () => {
-    await renderWithMcpAndExpand()
-
-    const categoryGrid = screen.getByTestId('category-grid')
-    // MCP tool names must not appear as category-grid tool rows
-    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_list')).not.toBeInTheDocument()
-    expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_read')).not.toBeInTheDocument()
-  })
-
-  it('changing an MCP tool policy fires updateGlobalToolPolicies directly', async () => {
-    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({
-      policies: {},
-    } as never)
-
-    await renderWithMcpAndExpand()
-
-    // Expand the MCP server disclosure to access the tool rows.
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
-    fireEvent.click(serverTrigger)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-row-mcp_testsvr_list')).toBeInTheDocument()
-    })
-
-    // Click Deny on the MCP tool row.
-    const listRow = screen.getByTestId('tool-row-mcp_testsvr_list')
-    fireEvent.click(within(listRow).getByRole('button', { name: /deny/i }))
-
-    // The auto-save debounce fires updateGlobalToolPolicies with the MCP tool name.
-    await waitFor(
-      () => {
-        expect(vi.mocked(updateGlobalToolPolicies)).toHaveBeenCalled()
-        const [calledValue] = vi.mocked(updateGlobalToolPolicies).mock.calls[0]
-        expect(calledValue).toMatchObject({
-          policies: expect.objectContaining({ mcp_testsvr_list: 'deny' }),
-        })
-      },
-      { timeout: 3000 },
-    )
-  })
-
-})
-
 // D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
 //
 // Root cause: the security fields start at hardcoded useState defaults ('').
@@ -1159,14 +934,13 @@ describe('SecuritySection — D3: hydration must not trigger a spurious PUT', ()
     } as never)
     renderSection()
 
-    // Wait for the component to settle (config fetched, disclosure rendered).
+    // Wait for the component to settle (config fetched, section rendered).
     await waitFor(() => {
       expect(screen.getByTestId('security-health-header')).toBeInTheDocument()
     })
-    // The numeric security fields render inside the collapsed
-    // AdvancedDisclosure — expand it so the hydrated values are in the DOM.
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-
+    // The numeric rate-limit fields render in the Protection view itself — the
+    // collapsed Advanced disclosure that used to hold them is gone (C-22 row 6)
+    // — so the hydrated values reach the DOM without an expansion step.
     await waitFor(() => {
       expect(screen.getByDisplayValue(String(HYDRATED_LLM))).toBeInTheDocument()
       expect(screen.getByDisplayValue(String(HYDRATED_TOOL))).toBeInTheDocument()

@@ -24,9 +24,6 @@ package systools_test
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/tests/helpers/agentrecord"
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 
 	"github.com/stretchr/testify/require"
@@ -74,21 +72,13 @@ func TestSetAgentPermissions_SkillPolicyChangesParity(t *testing.T) {
 		"S-70: skill_policy_changes must be accepted with the tool_policy_changes parity shape; got: %s",
 		res.ForLLM)
 
-	// Stored: Mia's override plan: allow on the agent's tools (C-4 shape).
-	raw, err := os.ReadFile(filepath.Join(deps.Home, "entities", "agents", "subject.json"))
-	require.NoError(t, err, "entity record must exist")
-	var stored struct {
-		Agent struct {
-			Tools struct {
-				Skills struct {
-					Policies map[string]string `json:"policies"`
-				} `json:"skills"`
-			} `json:"tools"`
-		} `json:"agent"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &stored), "entity JSON: %s", string(raw))
-	require.Equal(t, "allow", stored.Agent.Tools.Skills.Policies["plan"],
-		"S-70: the override is stored; entity: %s", string(raw))
+	// Stored: Mia's override plan: allow on the agent's tools (C-4 shape). The
+	// record is the flat AgentConfig the store writes — tools.skills.policies at
+	// the top level, no outer wrapper (tests/helpers/agentrecord documents the
+	// carrier and shows the reader against a record the real store wrote).
+	stored := agentrecord.Policies(t, deps.Home, "subject", agentrecord.Skills)
+	require.Equal(t, "allow", stored["plan"],
+		"S-70: the override is stored; entity: %s", agentrecord.Raw(t, deps.Home, "subject"))
 
 	// The clamp sentence names the global value (S-70): the result carries a
 	// note that the global Ask applies to plan while the override is allow.

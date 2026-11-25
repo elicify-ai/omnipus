@@ -10,6 +10,15 @@
 //         saved; Cancel leaves every row unchanged;
 //   S-06: Set all → Deny on a group containing Tool search denies the other
 //         rows; Tool search keeps its fixed sentence and no badges.
+//   S-84: Set all → Allow on a group of 12 that includes the always-ask tool
+//         skips it ("Set 11 of 12 to Allow"), saves the other 11 and says what
+//         it skipped (C-20, FR-076, Dataset D4 row 7).
+// CHECK round 4, candidate 9 (ported from the retired role-preset cases of
+// ToolPolicyEditor.test.tsx, spec Regression row "execute_plan confirm in the
+// editor — Yes, through Set all (S-05)"): the bulk-path safety those cases held
+// now lives here, under FR-010 and the "no Set all confirm except the plan
+// warning" rule — Confirm applies the change; Deny, or an Allow on a group
+// without execute_plan, never asks; an always-ask tool is never sent Allow.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -64,10 +73,13 @@ import { expectPermissionPatches, useSkillPermissionNetwork } from '../../../tes
 const permissions = useSkillPermissionNetwork(() => ({
   policies: Object.fromEntries([
     ...FILE_TOOLS.map(({ name }) => [name, 'deny'] as const),
+    ...CHANNEL_TOOLS.map(({ name }) => [name, name === ALWAYS_ASK_TOOL ? 'ask' : 'deny'] as const),
     ['execute_plan', 'ask'], ['fetch_url', 'ask'], ['ToolSearch', 'allow'],
   ]),
   skill_policies: {},
-  visibility: Object.fromEntries([...FILE_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS].map(({ name }) => [name, 'full'])),
+  visibility: Object.fromEntries(
+    [...FILE_TOOLS, ...CHANNEL_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS].map(({ name }) => [name, 'full']),
+  ),
   skill_visibility: {}, skill_trust: 'ask',
 }))
 
@@ -86,6 +98,15 @@ function makeTool(name: string, category: string, overrides: Partial<RegistryToo
 }
 
 const FILE_TOOLS = Array.from({ length: 12 }, (_, i) => makeTool(`file_tool_${i + 1}`, 'file'))
+// S-84 / Dataset D4 row 7: a group of 12 rows, one of them the always-ask tool
+// (`pkg/tools/always_ask.go::AlwaysAskTools`, today exactly set_channel_outbound).
+// The group's label comes from the existing category map
+// (src/lib/toolCategories.ts: channels → "Channels").
+const ALWAYS_ASK_TOOL = 'set_channel_outbound'
+const CHANNEL_TOOLS = [
+  makeTool(ALWAYS_ASK_TOOL, 'channels'),
+  ...Array.from({ length: 11 }, (_, i) => makeTool(`channel_tool_${i + 1}`, 'channels')),
+]
 const PLANS_TOOLS = [makeTool('execute_plan', 'plans')]
 const GENERAL_TOOLS = [
   makeTool('fetch_url', 'core'),
@@ -128,7 +149,7 @@ async function useSetAll(label: RegExp, choice: 'Ask' | 'Allow' | 'Deny') {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchSkills).mockResolvedValue([])
-  vi.mocked(api.fetchRegistryTools).mockResolvedValue([...FILE_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS])
+  vi.mocked(api.fetchRegistryTools).mockResolvedValue([...FILE_TOOLS, ...CHANNEL_TOOLS, ...PLANS_TOOLS, ...GENERAL_TOOLS])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([])
   vi.mocked(api.fetchProviders).mockResolvedValue([])
   vi.mocked(api.fetchSkillMarketplaceStatus).mockResolvedValue({} as never)
@@ -186,5 +207,83 @@ describe('SkillsToolsPage — Set all (order 23)', () => {
     for (const policy of ['allow', 'ask', 'deny']) {
       expect(within(searchRow).queryByRole('button', { name: new RegExp(`^${policy}$`, 'i') })).not.toBeInTheDocument()
     }
+  })
+
+  it('S-84: Set all Allow skips the always-ask tool, reads "Set 11 of 12 to Allow" and says what it skipped', async () => {
+    const user = userEvent.setup()
+    await mountPage()
+    await openGroup(/^channels/i)
+    await user.click(screen.getByRole('button', { name: /^set all/i }))
+    // The item counts only the rows that will change (C-20): 11 of the 12.
+    await user.click(screen.getByRole('menuitem', { name: 'Set 11 of 12 to Allow' }))
+
+    const changed = CHANNEL_TOOLS.filter(({ name }) => name !== ALWAYS_ASK_TOOL)
+    for (const tool of changed) {
+      const row = screen.getByTestId(`tool-row-${tool.name}`)
+      expect(within(row).getByRole('button', { name: /^allow$/i })).toHaveAttribute('aria-pressed', 'true')
+    }
+    // The always-ask row keeps its value and cannot take Allow (C-20 table).
+    const skipped = screen.getByTestId(`tool-row-${ALWAYS_ASK_TOOL}`)
+    expect(within(skipped).getByRole('button', { name: /^ask$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(skipped).getByRole('button', { name: /^allow$/i })).toBeDisabled()
+
+    // One save of exactly the 11 changed keys: the page never sends a value
+    // the server's always-ask guard would refuse (C-20, D4 row 7).
+    await waitFor(() => expectPermissionPatches(permissions(), {
+      policies: Object.fromEntries(changed.map(({ name }) => [name, 'allow'])),
+    }))
+    // The spec's note reads "1 skipped: Send to channel always asks."; where the
+    // row's display name comes from ("Send to channel") is not specified, so the
+    // name is the one free part of the match.
+    expect(await screen.findByText(/1 skipped: .+ always asks\./)).toBeInTheDocument()
+  })
+})
+
+// FR-010 and the single-exception rule (spec: "must not show … a Set all
+// confirm on Skills & Tools … The single exception is the existing
+// autonomous-plan warning"): the Set all path to execute_plan Allow asks and
+// applies on Confirm; nothing else about Set all ever asks.
+describe('SkillsToolsPage — Set all and the autonomous-plan confirm (FR-010)', () => {
+  it('S-05 confirm leg: choosing "Allow autonomous execution" applies the Set all with one save', async () => {
+    const user = userEvent.setup()
+    await mountPage()
+    await openGroup(/^plans/i)
+    await useSetAll(/^set all/i, 'Allow')
+
+    expect(screen.getByText('Confirm autonomous plan execution')).toBeInTheDocument()
+    expectPermissionPatches(permissions()) // nothing saved before the person confirms
+
+    await user.click(screen.getByRole('button', { name: 'Allow autonomous execution' }))
+
+    const row = screen.getByTestId('tool-row-execute_plan')
+    await waitFor(() => expect(within(row).getByRole('button', { name: /^allow$/i })).toHaveAttribute('aria-pressed', 'true'))
+    await waitFor(() => expectPermissionPatches(permissions(), { policies: { execute_plan: 'allow' } }))
+    expect(screen.queryByText('Confirm autonomous plan execution')).not.toBeInTheDocument()
+  })
+
+  it('control: Set all Deny on Plans never asks for the plan confirm and saves once', async () => {
+    await mountPage()
+    await openGroup(/^plans/i)
+    await useSetAll(/^set all/i, 'Deny')
+
+    const row = screen.getByTestId('tool-row-execute_plan')
+    expect(within(row).getByRole('button', { name: /^deny$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('Confirm autonomous plan execution')).not.toBeInTheDocument()
+    await waitFor(() => expectPermissionPatches(permissions(), { policies: { execute_plan: 'deny' } }))
+  })
+
+  it('control: Set all Allow on a group without execute_plan applies at once, with no confirm', async () => {
+    await mountPage()
+    await openGroup(/^files/i)
+    await useSetAll(/^set all/i, 'Allow')
+
+    for (const tool of FILE_TOOLS) {
+      const row = screen.getByTestId(`tool-row-${tool.name}`)
+      expect(within(row).getByRole('button', { name: /^allow$/i })).toHaveAttribute('aria-pressed', 'true')
+    }
+    expect(screen.queryByText('Confirm autonomous plan execution')).not.toBeInTheDocument()
+    await waitFor(() => expectPermissionPatches(permissions(), {
+      policies: Object.fromEntries(FILE_TOOLS.map(({ name }) => [name, 'allow'])),
+    }))
   })
 })

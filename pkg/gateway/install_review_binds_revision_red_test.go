@@ -13,11 +13,21 @@ package gateway
 //        review. Review it again." and nothing is installed; Cancel before
 //        Install discards the staged copy with "Nothing was installed.".
 //
-// Harness: the real install route and the package's upload recipe
-// (skills_uat2_zip_install_test.go::uat2InstallNamed — a real upload in a
-// test media store). The review route path is the one already cited by
-// order 6's test (POST /skills/install/review); the S-94 texts are quoted
-// from the spec, never from an implementation.
+// Harness: the real install and review routes and the package's upload recipe
+// (skills_uat2_zip_install_test.go::uat2StoreUpload, uat2PostSkills and
+// uat2InstallNamed — a real upload in a test media store). The review route
+// path is the one already cited by order 6's test (POST /skills/install/review);
+// the S-94 texts are quoted from the spec, never from an implementation.
+//
+// Fix round 4 (Part B row 4): the two S-94 rows stage a FLAT-ROOT zip. C-13 has
+// the review stage "with the existing staging code in
+// pkg/gateway/rest_skills.go::installSkill", and that code's upload rule refuses a
+// zip whose files sit inside one top-level folder (400 "ZIP must contain SKILL.md
+// at its root", UAT run 2 R2-2), so the wrapped-folder zip these rows first built
+// never reached the review. The cancel row no longer expects the staged copy at one
+// fixed path: C-13 says only that DELETE "discards the staged folder" and C-12 says
+// "the existing staging area", so the spec names no staging path; the row checks
+// whatever the review staged, wherever it was put.
 //
 // RED today: the install path reads no trust and no review binding at all
 // (rest_skills.go::installSkill → publishSkillInstall has no trust gate and
@@ -29,10 +39,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/elicify-ai/omnipus/pkg/media"
 
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +49,14 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 	const staleText = "The skill changed after review. Review it again."
 	// CHECK round 1 finding 14: no cancelText — C-13's cancel answers 204
 	// with no body, so no user-facing copy is asserted on it.
+
+	// SKILL.md at the zip ROOT, named like the upload (weather.zip -> weather), so
+	// the review stages it: a wrapped folder or a name that differs from the file
+	// name is the uploader's mistake and is refused as a 400 before any review.
+	weatherZip := func(t *testing.T) []byte {
+		t.Helper()
+		return uat2BuildZip(t, []uat2ZipEntry{{name: "SKILL.md", body: "---\nname: weather\ndescription: Use when the install review test needs a skill.\n---\n\nBody.\n"}})
+	}
 
 	t.Run("S-95: a direct install of an unverified skill under trust Ask is refused without a review", func(t *testing.T) {
 		api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
@@ -62,22 +77,15 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 
 	t.Run("S-94: the stage-only review endpoint exists and binds the revision", func(t *testing.T) {
 		api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
-		zip := uat2BuildZip(t, []uat2ZipEntry{{name: "weather/SKILL.md", body: uat2SkillMD}})
-		uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
-		require.NoError(t, os.MkdirAll(uploadDir, 0o755))
-		uploadPath := filepath.Join(uploadDir, "weather.zip")
-		require.NoError(t, os.WriteFile(uploadPath, zip, 0o644))
-		store := newTestFileMediaStore(t)
-		api.mediaStore = store
-		ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "weather.zip", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
-		require.NoError(t, err)
+		// One upload, stored once: the install that follows the review names the
+		// SAME upload_id (the SkillInstallRequest schema: "slug or upload_id must
+		// still name the same source the review staged"), so the tamper below is the
+		// only thing that differs from the reviewed state.
+		ref := uat2StoreUpload(t, api, "weather.zip", weatherZip(t))
 
 		// Stage-only review: returns the review id, the reviewed revision and
 		// the verification result (C-13), installs nothing.
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install/review", strings.NewReader(`{"upload_id":"`+ref+`"}`))
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		api.HandleSkills(w, r)
+		w := uat2PostSkills(t, api, "/api/v1/skills/install/review", map[string]any{"upload_id": ref})
 		require.NotEqual(t, http.StatusNotFound, w.Code, "C-13: the stage-only review endpoint POST /skills/install/review must exist (S-94), got 404, body: %s", w.Body.String())
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
@@ -108,7 +116,7 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 		require.GreaterOrEqual(t, changed, 1,
 			"S-94: the tamper must have provably changed at least one staged file")
 
-		w = uat2InstallNamed(t, api, "weather.zip", zip, map[string]any{"review_id": review.ReviewID})
+		w = uat2PostSkills(t, api, "/api/v1/skills/install", map[string]any{"upload_id": ref, "review_id": review.ReviewID})
 		require.Equal(t, http.StatusConflict, w.Code, "S-94: the stale review must refuse the install, got %d, body: %s", w.Code, w.Body.String())
 		require.Contains(t, w.Body.String(), staleText, "S-94: the stale-review refusal carries the spec's text")
 		// The refusal publishes nothing (CHECK finding 14: the stale refusal
@@ -124,40 +132,34 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 	t.Run("S-94: cancelling a staged review discards the staged copy — nothing was installed", func(t *testing.T) {
 		api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 		// Stage a REAL review so the cancel discards a real staged copy.
-		zip := uat2BuildZip(t, []uat2ZipEntry{{name: "weather/SKILL.md", body: uat2SkillMD}})
-		uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
-		require.NoError(t, os.MkdirAll(uploadDir, 0o755))
-		uploadPath := filepath.Join(uploadDir, "weather.zip")
-		require.NoError(t, os.WriteFile(uploadPath, zip, 0o644))
-		store := newTestFileMediaStore(t)
-		api.mediaStore = store
-		ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "weather.zip", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
-		require.NoError(t, err)
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install/review", strings.NewReader(`{"upload_id":"`+ref+`"}`))
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		api.HandleSkills(w, r)
+		ref := uat2StoreUpload(t, api, "weather.zip", weatherZip(t))
+		w := uat2PostSkills(t, api, "/api/v1/skills/install/review", map[string]any{"upload_id": ref})
 		require.Equal(t, http.StatusOK, w.Code, "setup: the review stages, body: %s", w.Body.String())
 		var review struct {
 			ReviewID string `json:"review_id"`
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &review), "setup: the review response carries a review_id: %s", w.Body.String())
 		require.NotEmpty(t, review.ReviewID, "setup: the review response carries a review_id")
-		stagedWeather := filepath.Join(api.homePath, "skills", ".staging", "weather")
-		_, err = os.Stat(stagedWeather)
-		require.NoError(t, err, "setup: the staged copy exists before the cancel")
+		// What the review staged, wherever it was put (the spec names no staging path;
+		// see the header). The staging area holds only this review's copy in a fresh home.
+		stagingRoot := filepath.Join(api.homePath, "skills", ".staging")
+		stagedBefore, err := os.ReadDir(stagingRoot)
+		require.NoError(t, err, "setup: the staging area exists after the review")
+		require.NotEmpty(t, stagedBefore, "setup: the review staged a copy before the cancel")
 
 		// C-13: DELETE the review — 204, no body.
-		r = httptest.NewRequest(http.MethodDelete, "/api/v1/skills/install/review/"+review.ReviewID, nil)
+		r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/install/review/"+review.ReviewID, nil)
 		w = httptest.NewRecorder()
 		api.HandleSkills(w, r)
 		require.Equal(t, http.StatusNoContent, w.Code,
 			"S-94/C-13: the review cancel is DELETE {id} answering 204, got %d, body: %s", w.Code, w.Body.String())
 
 		// The staged copy is discarded; nothing was installed.
-		_, err = os.Stat(stagedWeather)
-		require.True(t, os.IsNotExist(err),
-			"S-94: the cancel discards the staged copy")
+		for _, staged := range stagedBefore {
+			_, err = os.Stat(filepath.Join(stagingRoot, staged.Name()))
+			require.True(t, os.IsNotExist(err),
+				"S-94/C-13: the cancel discards the staged folder %q", staged.Name())
+		}
 		_, err = os.Stat(filepath.Join(api.homePath, "skills", "weather"))
 		require.True(t, os.IsNotExist(err),
 			"S-94: the cancel installs nothing — Nothing was installed.")

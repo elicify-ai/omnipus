@@ -137,8 +137,9 @@ func onboardCSRFAdmin(t *testing.T, gw *testutil.TestGateway, password string) (
 // reAuthHeader mirrors pkg/gateway's unexported const of the same name — the
 // header the caller replays a single-use re-auth consent token in (Spec-6
 // FR-12.2). The re-auth gate (requireReAuth) sits on several sensitive PUT
-// routes (/security/tool-policies, /performance, /security/sandbox-config,
-// /providers/{id}, /agents/{id}/tools) and rejects an otherwise-authorized
+// routes (/performance, /security/sandbox-config, /providers/{id},
+// /agents/{id}/tools; the retired /security/tool-policies is gone, C-22 row 6, and
+// its replacement PATCH /security/permissions needs no token, C-2) and rejects an otherwise-authorized
 // request that lacks this token with 403. Re-declared here (not imported)
 // because tests/security is an external package.
 const reAuthHeader = "X-Reauth-Token"
@@ -191,8 +192,7 @@ func isReAuthGatedPUT(method, path string) bool {
 		return false
 	}
 	switch {
-	case strings.HasSuffix(path, "/security/tool-policies"),
-		strings.HasSuffix(path, "/performance"),
+	case strings.HasSuffix(path, "/performance"),
 		strings.HasSuffix(path, "/security/sandbox-config"),
 		strings.HasSuffix(path, "/tools"): // /agents/{id}/tools
 		return true

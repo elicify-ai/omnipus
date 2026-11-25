@@ -211,14 +211,19 @@ done`)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() {
-		_ = input.Close()
+		// Test cleanup: a Close error is inconsequential here. A stdin that did not close
+		// leaves the command running, and the deadline branch below reports exactly that.
+		if closeErr := input.Close(); closeErr != nil {
+			_ = closeErr
+		}
 		select {
 		case waitErr := <-done:
 			assert.NoError(t, waitErr, "running command ended unexpectedly: %s", stderr.String())
 		case <-ctx.Done():
 			cancel()
-			<-done
-			t.Error("fixture: running command did not exit after stdin closed")
+			// The command is killed at the deadline, so its Wait error is expected; the
+			// failure names it instead of dropping it.
+			t.Errorf("fixture: running command did not exit after stdin closed (killed at the deadline: %v)", <-done)
 		}
 		cancel()
 	})

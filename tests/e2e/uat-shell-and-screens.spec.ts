@@ -409,7 +409,9 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; expect: RegExp }> = [
 const BYPASS_GUARDED = [
   '/api/v1/performance',
   '/api/v1/gateway/god-mode',
-  '/api/v1/security/skill-trust',
+  // The skill-trust read left this list with its endpoint (Skills & Tools C-22
+  // row 6, S-101). Its replacement, GET /api/v1/security/permissions, is served
+  // under authentication only, so a 503 from it is a failure, not an allowance.
   '/api/v1/providers/default-model',
   '/api/v1/config/pending-restart',
 ];

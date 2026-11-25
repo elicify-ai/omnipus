@@ -13,7 +13,9 @@
  *    (the Sheet primitive) — tested at the integration level via dialog role.
  * 8. G8: edit mode pre-populates fields and submits via updateMcpServer.
  * 9. G9: new fields (headers, env_file) included in payload.
- * 10. G7: Test button in SkillsScreen calls testMcpServer and toasts the result.
+ * 10. G7 (Test button calls testMcpServer and toasts the result) lived on the old
+ *     SkillsScreen; it moved to SkillsToolsPage.external.test.tsx when that screen
+ *     retired (spec C-22 and FR-065; spec line 72). Both toast checks were ported there.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -43,7 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { addMcpServer, updateMcpServer, testMcpServer } from '@/lib/api'
+import { addMcpServer, updateMcpServer } from '@/lib/api'
 import { McpServerModal } from './McpServerModal'
 import { MCPServerPicker } from '@/components/agents/MCPServerPicker'
 
@@ -431,79 +433,6 @@ describe('McpServerModal — G9: new fields', () => {
     })
   })
 
-})
-
-// ── G7: Test button (via SkillsScreen) ───────────────────────────────────────
-
-describe('SkillsScreen — G7: Test button calls testMcpServer and toasts result', () => {
-  it('calls testMcpServer and shows success toast on success', async () => {
-    vi.mocked(testMcpServer).mockResolvedValueOnce({
-      success: true,
-      message: 'Connected to my-server (sse); 5 tools.',
-      tool_count: 5,
-      tools: ['a', 'b', 'c', 'd', 'e'],
-    })
-
-    // SkillsScreen renders server list from fetchMcpServers
-    const { SkillsScreen } = await import('@/components/screens/SkillsScreen')
-    const { fetchMcpServers } = await import('@/lib/api')
-    vi.mocked(fetchMcpServers).mockResolvedValue([
-      { id: 's1', name: 'my-server', transport: 'sse', status: 'connected', tool_count: 5 },
-    ])
-
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <SkillsScreen />
-      </QueryClientProvider>
-    )
-
-    // Navigate to MCP tab
-    const user = userEvent.setup()
-    await user.click(screen.getByText('MCP Servers'))
-
-    // Wait for server row to appear then click Test
-    await waitFor(() => screen.getByTestId('test-mcp-s1'))
-    await user.click(screen.getByTestId('test-mcp-s1'))
-
-    await waitFor(() => {
-      expect(vi.mocked(testMcpServer)).toHaveBeenCalledWith('s1')
-      expect(addToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success', message: expect.stringMatching(/Connected.*5 tool/i) })
-      )
-    })
-  })
-
-  it('calls testMcpServer and shows error toast on failure', async () => {
-    vi.mocked(testMcpServer).mockResolvedValueOnce({
-      success: false,
-      message: 'Connection refused: dial tcp :3000',
-    })
-
-    const { SkillsScreen } = await import('@/components/screens/SkillsScreen')
-    const { fetchMcpServers } = await import('@/lib/api')
-    vi.mocked(fetchMcpServers).mockResolvedValue([
-      { id: 's2', name: 'broken-server', transport: 'stdio', status: 'error', tool_count: 0 },
-    ])
-
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <SkillsScreen />
-      </QueryClientProvider>
-    )
-
-    const user = userEvent.setup()
-    await user.click(screen.getByText('MCP Servers'))
-
-    await waitFor(() => screen.getByTestId('test-mcp-s2'))
-    await user.click(screen.getByTestId('test-mcp-s2'))
-
-    await waitFor(() => {
-      expect(vi.mocked(testMcpServer)).toHaveBeenCalledWith('s2')
-      expect(addToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error', message: 'Connection refused: dial tcp :3000' })
-      )
-    })
-  })
 })
 
 describe('MCPServerPicker — no raw transport string (US-E1)', () => {

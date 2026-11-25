@@ -175,3 +175,28 @@ func TestVisibilityStartingLevels_Upgrade(t *testing.T) {
 		})
 	}
 }
+
+// TestVisibilityStartingLevels_Upgrade_StartupWritesTheConversion is the
+// native-path binding obligation for visibilityConversionPlanOf (CHECK round 4,
+// false-green table row 9). TestVisibilityStartingLevels_Upgrade hands the
+// conversion raw old switches and compares the returned map; its "second start
+// writes nothing" check (D7 row 15) only calls the same pure function twice. It
+// cannot show that the real C-19 upgrade (step 3) writes the converted levels,
+// or that a second start leaves them alone. This can only be checked after
+// GREEN, so it is a loud BLOCKED leaf (never a skip); the test author replaces
+// it at test-side reconciliation with a real upgrade run on a seeded home that
+// carries the D7 old switches, read back from config.json after two starts, and
+// CHECK then mutates the bound function and requires it to fail. Real-path
+// observers of the stored levels today: none cited (the
+// TestSkillPermissionsUpgrade_StopAtEveryStep fixture seeds compressed and
+// discovery switches but its persisted-value assertions do not name the
+// visibility maps); TestToolSurface_ConversionToolSearch observes only D7
+// row 16's request surface.
+func TestVisibilityStartingLevels_Upgrade_StartupWritesTheConversion(t *testing.T) {
+	t.Fatal("BLOCKED: the real C-19 upgrade (step 3) is not shown to write the " +
+		"starting levels of the function visibilityConversionPlanOf binds to " +
+		"into config.json from the old switches, nor to leave them untouched on " +
+		"a second start — required by C-6, C-19 step 3, S-41 and Dataset D7 " +
+		"(rows 1-16); a conversion function only this adapter calls must never " +
+		"turn this green")
+}

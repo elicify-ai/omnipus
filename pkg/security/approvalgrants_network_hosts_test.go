@@ -14,7 +14,17 @@ import (
 	"testing"
 )
 
-func TestApprovalGrantStore_RecordNetworkHosts_SessionScoped(t *testing.T) {
+// TestApprovalGrantStore_RecordNetworkHosts_AgentScoped replaces
+// TestApprovalGrantStore_RecordNetworkHosts_SessionScoped.
+//
+// FLIPPED by C-26 (Lifetime and scope, rows Key and Covers; founder R2-Q1,
+// 2026-11-22): the old expectation "a DIFFERENT session for the same agent
+// must not see this host — the grant is scoped to the session (founder
+// decision B)" is superseded; the key is the agent and the session id is no
+// longer part of it, so the same agent in another chat sees the named
+// address. KEPT: no host before a record, the recorded set, a different agent
+// seeing nothing (now also in another chat), and union-not-replace.
+func TestApprovalGrantStore_RecordNetworkHosts_AgentScoped(t *testing.T) {
 	s := NewApprovalGrantStore()
 
 	if got := s.NetworkHostsFor("session-1", "agent-a"); got != nil {
@@ -28,14 +38,18 @@ func TestApprovalGrantStore_RecordNetworkHosts_SessionScoped(t *testing.T) {
 		t.Errorf("NetworkHostsFor = %v, want [example.com]", got)
 	}
 
-	// A DIFFERENT agent in the same session, and a DIFFERENT session for
-	// the same agent, must not see this host — "the grant is scoped to the
-	// session" (founder decision B).
+	// A DIFFERENT agent must not see this host, in this chat or in another.
 	if got = s.NetworkHostsFor("session-1", "agent-b"); got != nil {
 		t.Errorf("a different agent in the same session saw %v, want nil", got)
 	}
-	if got = s.NetworkHostsFor("session-2", "agent-a"); got != nil {
-		t.Errorf("a different session for the same agent saw %v, want nil", got)
+	if got = s.NetworkHostsFor("session-2", "agent-b"); got != nil {
+		t.Errorf("a different agent in a different session saw %v, want nil", got)
+	}
+	// The SAME agent in another chat holds the address too (C-26 Key/Covers).
+	got = s.NetworkHostsFor("session-2", "agent-a")
+	if len(got) != 1 || got[0] != "example.com" {
+		t.Errorf("C-26: the same agent in a different session saw %v, want [example.com] "+
+			"(the session id is no longer part of the key)", got)
 	}
 
 	// Union, not replace: a second, different host is added, not swapped in.
@@ -139,6 +153,49 @@ func TestApprovalGrantStore_NetworkTokensForSession_ThenClearSession(t *testing.
 	// A different session's own token must survive session-1's clear.
 	if got := s.NetworkTokensForSession("session-2"); len(got) != 1 {
 		t.Errorf("NetworkTokensForSession(session-2) after clearing session-1 = %v, want 1 token untouched", got)
+	}
+}
+
+// TestApprovalGrantStore_ClearSession_KeepsHostAllowanceDropsSessionTokens
+// pins both halves of C-26's ClearSession row in one fixture: ClearSession "no
+// longer clears allowances (they belong to the agent); still revokes the
+// session's egress tokens (NetworkTokensForSession -> RevokeRunToken)". The
+// test above (NetworkTokensForSession_ThenClearSession) seeds tokens and no
+// host allowance, so it cannot tell whether an allowance survives; here a host
+// allowance and a token are seeded for the same (session, agent). After the
+// chat closes, the session's token record is gone (the egress half, true
+// before and after C-26) and the agent's host allowance still resolves, in
+// that chat and in another (the allowance half, RED on today's store, which
+// clears the session's hosts together with its tokens).
+func TestApprovalGrantStore_ClearSession_KeepsHostAllowanceDropsSessionTokens(t *testing.T) {
+	s := NewApprovalGrantStore()
+	if !s.RecordNetworkHosts("session-1", "agent-a", []string{"example.com"}) {
+		t.Fatal("fixture: RecordNetworkHosts must succeed")
+	}
+	tok := s.SessionEgressToken("session-1", "agent-a")
+	if tok == "" {
+		t.Fatal("fixture: SessionEgressToken must not be empty for a well-formed key")
+	}
+
+	// INSTRUMENT: both observers see what was seeded, so the two "after"
+	// checks below are statements about the close.
+	if got := s.NetworkTokensForSession("session-1"); len(got) != 1 || got[0] != tok {
+		t.Fatalf("instrument: NetworkTokensForSession(session-1) = %v, want exactly [%q]", got, tok)
+	}
+	if got := s.NetworkHostsFor("session-1", "agent-a"); len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("instrument: NetworkHostsFor(session-1, agent-a) = %v, want [example.com]", got)
+	}
+
+	s.ClearSession("session-1")
+
+	if got := s.NetworkTokensForSession("session-1"); got != nil {
+		t.Errorf("C-26: ClearSession still revokes the session's egress tokens; NetworkTokensForSession after the close = %v, want nil", got)
+	}
+	for _, sid := range []string{"session-1", "session-2"} {
+		got := s.NetworkHostsFor(sid, "agent-a")
+		if len(got) != 1 || got[0] != "example.com" {
+			t.Errorf("C-26: ClearSession no longer clears allowances; NetworkHostsFor(%s, agent-a) after the close = %v, want [example.com]", sid, got)
+		}
 	}
 }
 

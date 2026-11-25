@@ -352,10 +352,12 @@ func TestHandleSandboxConfig_EmitsAuditEntry(t *testing.T) {
 	// Inject the logger into the agent loop so the handler finds it.
 	// AgentLoop exposes AuditLogger() but no setter — so we emit the
 	// expected records directly here to validate the audit shape,
-	// matching the approach already used in rest_skill_trust_test.go's
-	// TestHandleSkillTrust_EmitsAuditEntry. The handler's actual wire-up
-	// runs through the same helper; that path is covered by unit tests
-	// of EmitSecuritySettingChange in pkg/audit.
+	// matching the approach the skill-trust test file used before the
+	// permissions route replaced its handler (C-22 row 6; the successor,
+	// TestPermissionsPatch_SkillTrust_EmitsAuditEntry in
+	// rest_skill_trust_test.go, drives the real PATCH instead). The handler's
+	// actual wire-up runs through the same helper; that path is covered by
+	// unit tests of EmitSecuritySettingChange in pkg/audit.
 	ctx := context.WithValue(context.Background(), ctxkey.UserContextKey{},
 		&config.UserConfig{Username: "admin"})
 
