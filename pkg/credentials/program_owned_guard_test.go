@@ -78,8 +78,8 @@ func snapshotStore(t *testing.T, store *Store) storeSnapshot {
 		progGen:  map[string]int64{},
 	}
 	for _, n := range names {
-		v, err := store.Get(n)
-		require.NoError(t, err, "decrypt %s for snapshot", n)
+		v, getErr := store.Get(n)
+		require.NoError(t, getErr, "decrypt %s for snapshot", n)
 		snap.values[n] = v
 		gen, ok := store.ProgramEntryGeneration(n)
 		if ok {
@@ -270,7 +270,8 @@ func TestCredentialStore_ProgramOwnedGuard(t *testing.T) {
 		root := repoRootFromCaller()
 		var offenders []string
 		walkGoFiles(t, root, func(path, src string) {
-			rel, _ := filepath.Rel(root, path)
+			rel, relErr := filepath.Rel(root, path)
+			require.NoError(t, relErr, "a walked file must lie under the repository root: %s", path)
 			if !strings.HasPrefix(rel, "pkg/") && !strings.HasPrefix(rel, "cmd/") {
 				return
 			}
