@@ -56,7 +56,7 @@ export function resolveOfferedActions(
   toolName: string,
   offered: readonly ApprovalAction[] | undefined,
 ): readonly ApprovalAction[] {
-  if (offered && offered.length > 0) return offered
+  if (offered) return offered
   if (EXACT_ACTION_TOOLS.includes(toolName) || isAlwaysAskTool(toolName)) {
     return ['allow_once', 'deny', 'cancel']
   }
@@ -70,7 +70,9 @@ export function resolveDurations(
 ): readonly ApprovalDuration[] {
   const timed = offered.includes('allow_for') || offered.includes('approve_version_allow_for')
   if (!timed) return []
-  return durations && durations.length > 0 ? durations : ALL_DURATIONS
+  // The card's own list wins, even when empty: a time choice the server did
+  // not list would be refused. Only an entry built without a frame has none.
+  return durations ?? ALL_DURATIONS
 }
 
 export function coversSentence(agentName: string): string {
