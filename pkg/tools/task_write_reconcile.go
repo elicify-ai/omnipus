@@ -117,7 +117,7 @@ func WriteTaskReconciled(store *task.Store, id string, req TaskWriteRequest) (Ta
 		out.GoalDefinitionErr = req.SyncGoalDefinition(out.Updated)
 	}
 	if req.Patch.Prompt != nil || req.Patch.Title != nil {
-		out.GoalPromptErr = SyncTaskGoalPrompt(GoalStoreForTasks(store), out.Updated)
+		out.GoalPromptErr = SyncTaskGoalPrompt(GoalStoreForTasks(store), out.Updated, req.Patch.JoinProvenance)
 	}
 	// Steps 2 and 3 are independent: a goal failure never skips this one.
 	if req.ReconcileSchedule != nil {
@@ -129,7 +129,12 @@ func WriteTaskReconciled(store *task.Store, id string, req TaskWriteRequest) (Ta
 // SyncTaskGoalPrompt sets the prompt of the goal record paired with t to the
 // first 4,000 characters of t's prompt, or t's title when the prompt is
 // empty. A task with no paired goal gets none (r17 TK-03).
-func SyncTaskGoalPrompt(gs *goal.Store, t *task.Task) error {
+//
+// joinProvenance is the task write's Patch.JoinProvenance (I-2, S-111): an
+// agent's instruction edit joins its turn's origins into the goal in the same
+// goal write, because a running task session's goal wakes read the goal's
+// provenance, not the task record's. Nil (a person's edit) joins nothing.
+func SyncTaskGoalPrompt(gs *goal.Store, t *task.Task, joinProvenance *[]string) error {
 	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
 	if err != nil {
 		if errors.Is(err, goal.ErrOwnerNotFound) {
@@ -141,7 +146,7 @@ func SyncTaskGoalPrompt(gs *goal.Store, t *task.Task) error {
 	if existing.Prompt == want {
 		return nil
 	}
-	if _, err := gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
+	if _, err := gs.Update(existing.GoalID, goal.Write{Provenance: joinProvenance, Mutate: func(g *goal.Goal) error {
 		g.Prompt = want
 		return nil
 	}}); err != nil {
