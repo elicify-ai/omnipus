@@ -2,7 +2,7 @@ title: ContextSettings
 description: >
   Global context-budget controls (ADR-066 D9), as returned by
   GET /api/v1/settings/context and echoed by PUT. User-facing location is
-  Settings → Models. Every successful PUT triggers a registry reload so the
+  Settings → Limits. Every successful PUT triggers a registry reload so the
   next turn uses the new values without a restart. Readable and writable by
   any authenticated user (withAuth, the /settings/memory precedent — not
   RequireNotBypass).
@@ -52,7 +52,7 @@ properties:
       Finite fraction of the resolved model window W used for the tool-result
       share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5.
       S = max(1, floor(f × W)); this is a fraction of W, not the total-request
-      budget B. Settings → Models displays it as a percentage (default 50%);
+      budget B. Settings → Limits displays it as a percentage (default 50%);
       the wire carries the dimensionless fraction, so 12.5% is 0.125.
     example: 0.5
   ingest_bound_bytes:

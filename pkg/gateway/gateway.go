@@ -958,7 +958,7 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	// boot path; when the endpoint answers, reloadOnLiveWindow rebuilds those
 	// agents with the window it reported. Without this a fresh Ollama install
 	// stays refused indefinitely and the refusal points the operator at a
-	// control (Settings → Models → Model overrides) they should not have
+	// control (Settings → Limits → Model overrides) they should not have
 	// needed. Not a timer: one pass, only for agents that are already broken.
 	rc.bootBackgroundWG.Add(1)
 	go func() {

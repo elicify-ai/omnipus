@@ -103,7 +103,7 @@ export function CustomEndpointPanel({
           aria-describedby={idTaken ? idTakenId : undefined}
           value={id}
           onChange={(e) => setId(e.target.value)}
-          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </Label>
@@ -126,7 +126,7 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-api-base"
           value={apiBase}
           onChange={(e) => setApiBase(e.target.value)}
-          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </Label>
@@ -139,7 +139,7 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-protocol"
           value={protocol}
           onChange={(e) => setProtocol(e.target.value as CustomEndpointProtocol)}
-          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         >
           {CUSTOM_ENDPOINT_PROTOCOLS.map((value) => (
@@ -159,7 +159,7 @@ export function CustomEndpointPanel({
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </Label>
@@ -176,7 +176,7 @@ export function CustomEndpointPanel({
           variant="default"
           data-testid="custom-endpoint-submit"
           disabled={!complete || submitting}
-          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+          className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Add endpoint
         </Button>
@@ -186,7 +186,7 @@ export function CustomEndpointPanel({
             variant="ghost"
             data-testid="custom-endpoint-cancel"
             onClick={onCancel}
-            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
           </Button>

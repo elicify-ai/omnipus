@@ -50,6 +50,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowClockwise, CircleNotch, Plus, Prohibit, WarningCircle } from '@phosphor-icons/react'
 import { Command, CommandInput, CommandList } from '@/components/ui/command'
 import { Button } from '@/components/ui/button'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import type { CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import {
   buildPickerModel,
@@ -74,6 +75,13 @@ export const PICKER_VIEWPORT_HEIGHT = 480
 
 /** Default row height, in CSS px. */
 export const PICKER_ROW_HEIGHT = 40
+
+/**
+ * Row slot on a coarse pointer, in CSS px: the 44 px of the
+ * `--target-touch-minimum` token (FR-070, U4-5). The virtual list places rows
+ * absolutely, so the slot grows with the row or the 44 px rows would overlap.
+ */
+export const PICKER_TOUCH_ROW_HEIGHT = 44
 
 /**
  * Rows kept mounted either side of the visible window. SC-005's bound is
@@ -242,10 +250,12 @@ export function ProviderPicker({
     [entries],
   )
 
+  const coarsePointer = useMediaQuery('(pointer: coarse)')
+  const slotHeight = coarsePointer ? Math.max(rowHeight, PICKER_TOUCH_ROW_HEIGHT) : rowHeight
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowHeight,
+    estimateSize: () => slotHeight,
     overscan: PICKER_OVERSCAN,
   })
   const virtualItems = virtualizer.getVirtualItems()
@@ -401,7 +411,7 @@ export function ProviderPicker({
         role="group"
         aria-label="Popular providers"
         data-testid="picker-popular"
-        className="grid grid-cols-4 gap-[var(--space-2)]"
+        className="grid grid-cols-3 sm:grid-cols-4 gap-[var(--space-2)]"
       >
         {model.popular.map((row) => {
           const key = refKey({ kind: 'popular', key: row.company })
@@ -415,10 +425,11 @@ export function ProviderPicker({
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="h-auto min-h-[44px] min-w-0 justify-center whitespace-normal wrap-anywhere text-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
+              className="h-auto min-h-[44px] min-w-0 justify-center text-center rounded-md px-[var(--space-2)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
             >
-              {/* U3-5: a long name wraps inside its tile at 390 px. */}
-              {row.company}
+              {/* U3-5/U4-6: a name wraps at word boundaries inside its tile at 390 px;
+                  a word breaks only when it alone is wider than the tile. */}
+              <span className="min-w-0 whitespace-normal break-words">{row.company}</span>
             </Button>
           )
         })}
@@ -446,7 +457,7 @@ export function ProviderPicker({
                 aria-expanded={recentOpen}
                 aria-controls={`${testId}-recent-list`}
                 onClick={() => setRecentOpen((v) => !v)}
-                className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+                className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               >
                 Recent ({model.recent.length})
               </Button>
@@ -501,7 +512,7 @@ export function ProviderPicker({
           aria-expanded={model.expanded}
           aria-controls={listId}
           onClick={() => setExpandedByOperator((v) => !v)}
-          className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+          className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         >
           All providers ({model.allProvidersCount})
         </Button>
@@ -530,7 +541,7 @@ export function ProviderPicker({
               variant="outline"
               data-testid="picker-catalog-retry"
               onClick={() => onRetry?.()}
-              className="ml-auto h-auto min-h-[24px] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
+              className="ml-auto h-auto min-h-[24px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
             >
               <ArrowClockwise size={12} aria-hidden="true" />
               Retry
@@ -606,7 +617,7 @@ export function ProviderPicker({
                       transform: `translateY(${item.start}px)`,
                       color: 'var(--color-secondary)',
                     }}
-                    className="flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+                    className="flex pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                   >
                     {row.disabled && <Prohibit size={14} aria-hidden="true" />}
                     <span>{row.company}</span>

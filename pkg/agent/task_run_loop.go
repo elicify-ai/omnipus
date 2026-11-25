@@ -1058,7 +1058,7 @@ func taskOperatorFixText(cause operatorFixCause, agentName, provider, model stri
 			subject = "the model " + model
 		}
 		return lead + subject + " did not report a context length. " +
-			"Set it in Settings → Models → Model overrides → Context length" + rerun
+			"Set it in Settings → Limits → Model overrides → Context length" + rerun
 	case operatorFixAgentNotOnWorkspace:
 		return lead + agent + " is not on any workspace team, so it has nowhere to work. Add it to a workspace team" + rerun
 	case operatorFixWorkDirUnavailable:

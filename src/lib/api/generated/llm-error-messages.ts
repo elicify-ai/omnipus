@@ -67,7 +67,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   judge_time_limit: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again.",
   judge_conclusion_failed: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details.",
   delegated_task_limit: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed.",
-  context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
+  context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Limits → Model overrides → Context length.",
   bad_model: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings.",
   provider_request_rejected: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
   model_route_unavailable: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",

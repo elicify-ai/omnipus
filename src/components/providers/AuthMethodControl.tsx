@@ -176,7 +176,7 @@ export function AuthMethodControl({
           <SegmentedControlItem
             value="sign_in"
             data-testid={`${testId}-segment-sign_in`}
-            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             {signInLabel}
@@ -184,7 +184,7 @@ export function AuthMethodControl({
           <SegmentedControlItem
             value="api_key"
             data-testid={`${testId}-segment-api_key`}
-            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <Key size={14} aria-hidden="true" />
             API key
@@ -219,7 +219,7 @@ export function AuthMethodControl({
                       key={option.providerId}
                       htmlFor={inputId}
                       data-testid={`${testId}-signin-option-${option.providerId}`}
-                      className="flex cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
+                      className="flex pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
                       <input
@@ -263,7 +263,7 @@ export function AuthMethodControl({
             variant="outline"
             data-testid={`${testId}-signin-start`}
             onClick={() => onSignIn?.(providerId)}
-            className="h-auto min-h-[32px] gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             Sign in

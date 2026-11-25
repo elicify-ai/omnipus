@@ -52,15 +52,24 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
   targetRow?: string
 }
 
-/** True when a history entry was written by the router (it carries its index). */
-function hasRouterState(state: unknown): boolean {
-  return state !== null && typeof state === 'object' && '__TSR_index' in state
-}
+// How long Stay waits for the history's own restore (its step forward) to
+// arrive before deciding nothing moved. Only used where the browser has no
+// Navigation API to answer the question up front.
+const STAY_RESTORE_WAIT_MS = 300
 
-// Addresses of typed (state-less) history entries this page has shown. Kept
-// for the page's lifetime, so a Back to one is never taken for a new typed
-// address (U2-4).
-const shownTypedEntries = new Set<string>()
+/**
+ * After Stay, will the history's own restore bring the address back? The
+ * router's history undoes a blocked move by going one entry forward. That
+ * fits a Back onto an older entry; for an address typed or pasted into the
+ * bar (the newest entry, nothing ahead of it) it does nothing. Undefined when
+ * the browser cannot say (no Navigation API).
+ */
+function restoreWillMove(): boolean | undefined {
+  const nav: unknown = Reflect.get(window, 'navigation')
+  if (nav === null || typeof nav !== 'object' || !('canGoForward' in nav)) return undefined
+  const canGoForward: unknown = Reflect.get(nav, 'canGoForward')
+  return typeof canGoForward === 'boolean' ? canGoForward : undefined
+}
 
 export function SettingsScreen({
   section = 'providers',
@@ -158,45 +167,26 @@ export function SettingsScreen({
   )
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
-  // U1-9 (US-2 AS6): an address typed or pasted into the bar arrives as a new
-  // history entry with no router state. On Stay the router's history undoes a
-  // blocked move by going one entry forward, which only fits Back; for a typed
-  // address that is a no-op, the typed address would stay in the bar while
-  // the screen still shows this section. Stay therefore steps back off the
-  // typed entry itself (see the leave question below).
-  const typedAddressBlocked = useRef(false)
-  // True from Stay on a typed address until the step back off it lands.
-  const leavingTypedEntry = useRef(false)
-  // History length as of the last render: a typed address adds an entry, a
-  // Back to an older entry does not (that one is left to the router).
-  const historyLength = useRef(typeof window === 'undefined' ? 0 : window.history.length)
-  useEffect(() => {
-    historyLength.current = window.history.length
-  })
+  // US-2 AS6 / FR-014: Stay keeps the section, its changes and the address.
+  // The router's history undoes a blocked move by going one entry forward.
+  // That restores a Back onto an older entry, but not an address typed or
+  // pasted into the bar: that entry is the newest, so the step forward does
+  // nothing. Stay therefore lets that restore settle and steps back off the
+  // blocked entry only when the address has not moved (U1-9, U2-4, U4-1).
+  // Whether the entry was typed is never guessed up front.
   const blocker = useBlocker({
-    shouldBlockFn: () => {
-      // The router's own moves (links, Back to an entry it wrote) carry its
-      // state; an entry without it was typed or pasted into the address bar.
-      // U2-4: once the browser's history is full (about 50 entries) a typed
-      // address no longer grows the length, so a new, never-shown address
-      // without router state counts as typed too.
-      typedAddressBlocked.current =
-        !hasRouterState(window.history.state) &&
-        (window.history.length > historyLength.current || !shownTypedEntries.has(window.location.href))
-      return draftCount > 0
-    },
+    shouldBlockFn: () => draftCount > 0,
     withResolver: true,
     // useSaveBar registers the browser's own prompt while drafts exist.
     enableBeforeUnload: false,
   })
-  // A typed entry this page has really shown (no router state, not held by
-  // the leave question, not being stepped off after Stay) is one a later Back
-  // may return to; remember it so that Back is not taken for a new typed
-  // address.
+  // The address this section was last shown at, outside the leave question.
+  const settledHref = useRef<string | null>(null)
+  // True from Stay until the history is back on this section; the question
+  // stays on screen meanwhile, so the other address never flashes by.
+  const [restoring, setRestoring] = useState(false)
   useEffect(() => {
-    if (blocker.status !== 'blocked' && !leavingTypedEntry.current && !hasRouterState(window.history.state)) {
-      shownTypedEntries.add(window.location.href)
-    }
+    if (blocker.status !== 'blocked' && !restoring) settledHref.current = window.location.href
   })
 
   // ── Phone: list first (FR-008) ─────────────────────────────────────────
@@ -563,24 +553,53 @@ export function SettingsScreen({
         />
 
         <ConfirmDialog
-          open={blocker.status === 'blocked' || phoneBackAsk}
+          open={blocker.status === 'blocked' || phoneBackAsk || restoring}
           onOpenChange={(open) => {
-            if (open) return
+            if (open || restoring) return
             if (blocker.status === 'blocked') {
               // Stay: nothing moves; focus goes back to the control used.
+              const blockedHref = window.location.href
+              const homeHref = settledHref.current
+              const willMove = restoreWillMove()
               blocker.reset()
-              // The history ignores the next address change after a Stay;
-              // this step back is that change, so the section stays put.
-              if (typedAddressBlocked.current) {
-                leavingTypedEntry.current = true
-                window.addEventListener('popstate', () => { leavingTypedEntry.current = false }, { once: true })
-                setTimeout(() => window.history.back(), 0)
-              }
-              typedAddressBlocked.current = false
               navIntent.current = null
               const back = stayFocus.current
               stayFocus.current = null
-              if (back) setTimeout(() => back.focus(), 0)
+              const done = () => {
+                setRestoring(false)
+                if (back) setTimeout(() => back.focus(), 0)
+              }
+              if (homeHref === null || blockedHref === homeHref || willMove === true) {
+                // An in-app move never left the address, and a Back is put
+                // right by the history's own step forward.
+                done()
+              } else {
+                setRestoring(true)
+                // The history ignores the next address change after a Stay;
+                // when its own step forward moved nothing, this step back is
+                // that change, so the section stays put.
+                const stepBack = () => {
+                  if (window.location.href !== blockedHref) {
+                    done()
+                    return
+                  }
+                  window.addEventListener('popstate', done, { once: true })
+                  window.history.back()
+                }
+                if (willMove === false) {
+                  setTimeout(stepBack, 0)
+                } else {
+                  let settled = false
+                  const settle = () => {
+                    if (settled) return
+                    settled = true
+                    window.removeEventListener('popstate', settle)
+                    stepBack()
+                  }
+                  window.addEventListener('popstate', settle)
+                  setTimeout(settle, STAY_RESTORE_WAIT_MS)
+                }
+              }
             }
             if (phoneBackAsk) {
               setPhoneBackAsk(false)
@@ -593,7 +612,6 @@ export function SettingsScreen({
           confirmLabel="Leave"
           destructive
           onConfirm={() => {
-            typedAddressBlocked.current = false
             if (blocker.status === 'blocked') blocker.proceed()
             if (phoneBackAsk) {
               // Leave: the section's drafts are dropped and the list shows.

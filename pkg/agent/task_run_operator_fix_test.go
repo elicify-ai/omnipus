@@ -422,7 +422,8 @@ func TestTaskOperatorFixText_NamesTheFixForEveryCause(t *testing.T) {
 		case operatorFixModelUnassigned:
 			fix = "agent's settings"
 		case operatorFixContextWindowUnknown:
-			fix = "Settings → Models → Model overrides → Context length"
+			// Settings spec D-9 id 2 / US-1 AS1: Model overrides moved to Limits.
+			fix = "Settings → Limits → Model overrides → Context length"
 		case operatorFixAgentNotOnWorkspace:
 			fix = "workspace team"
 		case operatorFixWorkDirUnavailable:

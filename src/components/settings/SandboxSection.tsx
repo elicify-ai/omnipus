@@ -1013,7 +1013,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 {SANDBOX_MODES.map((m) => (
                   <Label
                     key={m.value}
-                    className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
+                    className={`flex pointer-coarse:min-h-[var(--target-touch-minimum)] items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       effectiveMode === m.value
                         ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
@@ -1060,7 +1060,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 {FILESYSTEM_MODELS.map((m) => (
                   <Label
                     key={m.value}
-                    className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
+                    className={`flex pointer-coarse:min-h-[var(--target-touch-minimum)] items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       currentFsModel === m.value
                         ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
@@ -1156,7 +1156,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   return (
                     <Label
                       key={o.value}
-                      className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
+                      className={`flex pointer-coarse:min-h-[var(--target-touch-minimum)] items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                         selected
                           ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                           : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'

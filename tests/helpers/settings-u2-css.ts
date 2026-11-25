@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { compile } from '@tailwindcss/node'
 import { parse, type AtRule, type Document, type Root, type Rule } from 'postcss'
+import { noMotionU4 } from './settings-u4-motion'
 
 const entries = new Map<string, Promise<Root>>()
 export function stylesheetU2(name = 'globals.css'): Promise<Root> {
@@ -71,10 +72,12 @@ export function pseudoTouchU2(css: Root, target: Element) {
 export async function touchContractU2(target: HTMLElement) {
   const css = await stylesheetU2()
   const classes = [...target.classList]
-  // Same explicit coarse-pointer contract as U1 and SegmentedControlItem.
+  // Rule 12: explicit coarse-pointer sizing, never an unscoped mouse-screen minimum.
+  // Preserve selector-matched shipped pseudo hit areas below (U1-C2).
   const dimension = (axis: 'h' | 'w') => classes.some((candidate) => {
-    const match = /^(?:(?:pointer-coarse:|\[@media\(pointer:coarse\)\]:))?(?:min-)?([hw])-\[(.+)\]$/.exec(candidate)
-    return match?.[1] === axis && atLeastTouchU2(match[2], css)
+    const match = /^(?:pointer-coarse:|\[@media\(pointer:coarse\)\]:)(?:min-)?([hw]|size)-(?:\[(.+)\]|\((--[\w-]+)\))$/.exec(candidate)
+    const value = match?.[2] ?? (match?.[3] ? `var(${match[3]})` : '')
+    return (match?.[1] === axis || match?.[1] === 'size') && atLeastTouchU2(value, css)
   })
   const height = dimension('h')
   const width = dimension('w') || classes.includes('w-full')
@@ -84,14 +87,7 @@ export async function touchContractU2(target: HTMLElement) {
 }
 
 export async function reducedMotionU2(target: Element) {
-  if (target.classList.contains('motion-reduce:animate-none')) return true
-  const css = await stylesheetU2()
-  let stopped = false
-  css.walkRules((rule) => {
-    if (!hasMediaU2(rule, /prefers-reduced-motion:\s*reduce/) || !target.matches(rule.selector)) return
-    for (const node of rule.nodes) {
-      if (node.type === 'decl' && ['animation', 'animation-name'].includes(node.prop) && node.value === 'none') stopped = true
-    }
-  })
-  return stopped
+  // T4-6: read matching compiled CSS, including arbitrary animation candidates
+  // and a shared reduced-motion rule. A class-name stamp alone is not proof.
+  return noMotionU4(target)
 }

@@ -317,7 +317,7 @@ const (
 	// a `locality: local` endpoint that reported no context window and no
 	// operator override exists, so the turn was refused before any provider
 	// call — never run on a guessed window. Attribution `config`: the copy
-	// names the exact field to set (Settings → Models → Model overrides →
+	// names the exact field to set (Settings → Limits → Model overrides →
 	// Context length) and must not invite a retry. Raised by runTurn's
 	// pre-turn gate (third, after needs_provider and model_unassigned) via
 	// ErrContextWindowUnknown. D8 is NOT adopted: nothing is ever learned

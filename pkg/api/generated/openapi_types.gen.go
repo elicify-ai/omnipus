@@ -16342,7 +16342,7 @@ type CatalogModel struct {
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *CatalogModelWindowSource `json:"window_source,omitempty"`
 
-	// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+	// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Limits → Model overrides. Never a Provider.status value.
 	WindowUnknown *bool `json:"window_unknown,omitempty"`
 }
 
@@ -17092,7 +17092,7 @@ type ContextModelOverride struct {
 	Provider string `json:"provider"`
 }
 
-// ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+// ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Limits. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 type ContextSettings struct {
 	// BuiltinFailureCap Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
 	BuiltinFailureCap int `json:"builtin_failure_cap"`
@@ -17112,7 +17112,7 @@ type ContextSettings struct {
 	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
 	ModelOverrides []ContextModelOverride `json:"model_overrides"`
 
-	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Limits displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
 	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 }
 
@@ -17279,7 +17279,7 @@ type DefaultModel struct {
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
-	// WindowUnknown True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+	// WindowUnknown True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Limits → Model overrides instead of a number.
 	WindowUnknown *bool `json:"window_unknown,omitempty"`
 }
 

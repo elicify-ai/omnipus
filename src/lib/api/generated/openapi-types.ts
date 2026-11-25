@@ -1102,7 +1102,7 @@ export interface paths {
         };
         /**
          * Get the global context-budget settings (ADR-066 D9)
-         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Limits; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
          */
         get: operations["getContextSettings"];
         /**
@@ -11221,7 +11221,7 @@ export interface components {
             context_window?: number;
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
-             * @description True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+             * @description True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Limits → Model overrides instead of a number.
              * @example false
              */
             window_unknown?: boolean;
@@ -11492,7 +11492,7 @@ export interface components {
             inference_profiles?: ("us" | "eu" | "apac" | "jp" | "au" | "global")[];
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
-             * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+             * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Limits → Model overrides. Never a Provider.status value.
              * @example false
              */
             window_unknown?: boolean;
@@ -11611,7 +11611,7 @@ export interface components {
         };
         /**
          * ContextSettings
-         * @description Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         * @description Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Limits. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
          */
         ContextSettings: {
             /**
@@ -11631,7 +11631,7 @@ export interface components {
             builtin_failure_cap: number;
             /**
              * Format: double
-             * @description Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+             * @description Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Limits displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
              * @example 0.5
              */
             tool_result_share_fraction: number;

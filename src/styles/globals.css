@@ -328,6 +328,15 @@ body {
     background-image: none;
     animation: none;
   }
+  /* FR-075 / US-9 (U4-3): one rule for the whole app, so no spinner rotates
+     and no placeholder pulses under reduced motion, whichever element uses
+     them, arbitrary-value animations (animate-[...]) included. Important,
+     so no utility or variant ordering can start them again. */
+  .animate-spin,
+  .animate-pulse,
+  [class*='animate-['] {
+    animation: none !important;
+  }
 }
 
 /* ------------------------------------------------------------------ */

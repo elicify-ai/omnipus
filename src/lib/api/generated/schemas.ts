@@ -16049,7 +16049,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/settings/context",
     alias: "getContextSettings",
-    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Limits; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 `,
     requestFormat: "json",
     response: ContextSettings,

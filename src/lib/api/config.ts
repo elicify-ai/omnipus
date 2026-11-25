@@ -7,7 +7,7 @@ import {
   PerformanceSettings as PerformanceSettingsSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
-  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  // ADR-066 D9 — global context-budget settings (Settings → Limits):
   ContextSettings as ContextSettingsSchema,
   // #904 tool-iteration limit — D11 lowering preview + D16 drift 409:
   MaxToolIterationsLoweringPreview as MaxToolIterationsLoweringPreviewSchema,
@@ -23,7 +23,7 @@ import type {
   // Settings redesign #1519 C-3 — the one retention write path:
   RetentionSettings,
   RetentionSettingsUpdate,
-  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  // ADR-066 D9 — global context-budget settings (Settings → Limits):
   ContextSettings,
   ContextSettingsUpdate,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
@@ -633,7 +633,7 @@ export function updateMemorySettings(body: MemorySettings): Promise<MemorySettin
 // ADR-066 D9 (FR-036) — global context-budget settings: per-surface tool-result
 // caps, the absolute mid-turn trigger, the ingest bound, the global default
 // context window and the per-(provider, model) window overrides. User-facing
-// location: Settings → Models (FR-037). PUT is a PARTIAL update
+// location: Settings → Limits (FR-037). PUT is a PARTIAL update
 // (ContextSettingsUpdate): an omitted field is unchanged, `model_overrides`
 // replaces the whole list, `default_context_window: null` clears it. Every
 // 200 write triggers a registry reload on the gateway. withAuth (the
