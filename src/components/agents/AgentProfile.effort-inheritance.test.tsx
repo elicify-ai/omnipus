@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchPerformanceSettings).mockReset().mockResolvedValue({ max_tool_iterations: 20 } as never)
   // GET /programs is an HTTP edge of the profile's Programs section (cli-credentials S1).
-  vi.mocked(fetchPrograms).mockReset().mockResolvedValue({ entries: [], web_chat_allowed: false, revision: 'programs-rev-1' })
+  vi.mocked(fetchPrograms).mockReset().mockResolvedValue({ entries: [], web_chat_allowed: false, revision: '0'.repeat(64) })
   vi.mocked(updateAgent).mockReset().mockImplementation(async (_id, body) => {
     acknowledgedAt += 1000
     acknowledgedAgent = { ...acknowledgedAgent, ...body, updated_at: new Date(acknowledgedAt).toISOString() } as Agent

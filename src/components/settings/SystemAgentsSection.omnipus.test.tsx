@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.mocked(fetchPerformanceSettings).mockResolvedValue({})
   // The shared editor's Programs section (cli-credentials S1) reads GET /programs;
   // an empty list keeps its own ErrorState and Retry out of these roster cases.
-  vi.mocked(fetchPrograms).mockResolvedValue({ entries: [], web_chat_allowed: false, revision: 'programs-rev-1' })
+  vi.mocked(fetchPrograms).mockResolvedValue({ entries: [], web_chat_allowed: false, revision: '0'.repeat(64) })
   socket = new WsConnection({ onConnected: () => {}, onDisconnected: () => {}, onError: () => {} })
   sends = vi.fn<WsConnection['send']>().mockReturnValue(true)
   vi.spyOn(socket, 'send').mockImplementation(sends)
