@@ -219,7 +219,7 @@ export function AuthMethodControl({
                       key={option.providerId}
                       htmlFor={inputId}
                       data-testid={`${testId}-signin-option-${option.providerId}`}
-                      className="flex cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
+                      className="flex pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
                       <input
