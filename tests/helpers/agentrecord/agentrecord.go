@@ -65,15 +65,15 @@ func Read(home, id string) (map[string]any, error) {
 	}
 	var record map[string]any
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return nil, fmt.Errorf("%w: %s is not a JSON object: %v", ErrShape, Path(home, id), err)
+		return nil, fmt.Errorf("%w: %s is not a JSON object: %w", ErrShape, Path(home, id), err)
 	}
 	return record, nil
 }
 
 // ReadPolicies returns tools.<carrier>.policies of the stored record. A record that
-// lacks the member at any step (no tools, no such carrier, no policies) reads as nil:
-// the agent has no overrides there. A member that is present but not a JSON object
-// is an error, never silently empty.
+// lacks the member at any step (no tools, no such carrier, no policies) reads as an
+// empty map: the agent has no overrides there. A member that is present but not a JSON
+// object is an error, never silently empty.
 func ReadPolicies(home, id string, carrier Carrier) (map[string]any, error) {
 	if carrier != Builtin && carrier != Skills {
 		return nil, fmt.Errorf("%w: %q", ErrCarrier, carrier)
@@ -86,7 +86,7 @@ func ReadPolicies(home, id string, carrier Carrier) (map[string]any, error) {
 	for _, key := range []string{"tools", string(carrier), "policies"} {
 		child, present := node[key]
 		if !present {
-			return nil, nil
+			return map[string]any{}, nil
 		}
 		next, isObject := child.(map[string]any)
 		if !isObject {

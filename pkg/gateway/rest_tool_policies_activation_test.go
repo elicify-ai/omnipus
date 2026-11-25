@@ -98,7 +98,7 @@ func TestPermissionsPatchSavedButNotActiveThenRetryRefreshesGuidance(t *testing.
 	// The ceiling as it was before the request, with the one key the request changes.
 	expectedPolicies := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		expectedPolicies[name] = string(policy)
+		expectedPolicies[name] = policy
 	}
 	expectedPolicies["set_todos"] = "deny"
 	// The retry sends the same body: a key sent with its stored value is valid (C-2).

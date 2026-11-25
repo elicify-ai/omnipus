@@ -67,5 +67,11 @@ func runSkillUpgrade(t *testing.T, home string, beforeAgentWrite func(agent stri
 	if out[0].IsNil() {
 		return nil
 	}
-	return out[0].Interface().(error)
+	upgradeErr, isError := out[0].Interface().(error)
+	if !isError {
+		// Not reachable while the signature check above holds (the one result is typed error);
+		// it stays loud, not a panic, if that check is ever loosened.
+		t.Fatalf("BLOCKED: the bound upgrade entry returned a %T, want an error — required by C-19", out[0].Interface())
+	}
+	return upgradeErr
 }

@@ -338,9 +338,11 @@ func (h *scheduledAllowanceHarness) runRealTask(t *testing.T, owner, prompt stri
 	// flag is not what these tests observe. The session status is logged, not asserted.
 	deadline := time.Now().Add(30 * time.Second)
 	var final *task.Task
-	for final == nil && time.Now().Before(deadline) {
-		got, err := store.Get(runner.ID)
-		require.NoError(t, err)
+	// final is assigned only on the line before the break, so the loop needs no test of its own
+	// on it: the deadline is the only way out without a result.
+	for time.Now().Before(deadline) {
+		got, getErr := store.Get(runner.ID)
+		require.NoError(t, getErr)
 		if task.IsTerminal(got.Status) {
 			final = got
 			break
@@ -348,8 +350,8 @@ func (h *scheduledAllowanceHarness) runRealTask(t *testing.T, owner, prompt stri
 		time.Sleep(20 * time.Millisecond)
 	}
 	if final == nil {
-		got, err := store.Get(runner.ID)
-		require.NoError(t, err)
+		got, getErr := store.Get(runner.ID)
+		require.NoError(t, getErr)
 		t.Fatalf("fixture: the task run did not reach a terminal status within 30 s: status %q, %d attempt(s), result %q",
 			got.Status, got.AttemptCount, got.Result)
 	}
