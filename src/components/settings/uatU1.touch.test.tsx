@@ -1,73 +1,22 @@
 // U1-5; oracle: settings-redesign-spec.md::US-9 AS5/FR-070 (44x44),
 // design-system rule12. jsdom cannot measure hit geometry. These are actual
 // control DOM + shipped CSS contracts, NOT claimed browser measurements.
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { compile } from '@tailwindcss/node'
 import { parse } from 'postcss'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import { pseudoTouchU2, stylesheetU2, touchContractU2 } from '../../../tests/helpers/settings-u2-css'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '@/components/screens/SettingsScreen'
 import { jsonG1, renderG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 
-// Compile the actual SPA entry (including imports), not library.css, whose
-// expander alone would not establish that the application ships it.
-async function cssShipsTouchExpander(entryName: string) {
-    const entry = resolve('src/styles', entryName)
-    const compiled = await compile(readFileSync(entry, 'utf8'), { base: dirname(entry), onDependency() {} })
-    const css = parse(compiled.build([]))
-    const tokens = new Map<string, string>()
-    css.walkDecls((d) => { if (d.prop.startsWith('--')) tokens.set(d.prop, d.value) })
-    const expand = (value: string, seen = new Set<string>()): string => value.replace(/var\((--[\w-]+)\)/g, (_, key: string) => {
-      if (seen.has(key)) return key
-      return expand(tokens.get(key) ?? key, new Set([...seen, key]))
-    })
-    const atLeast44 = (value: string) => {
-      const resolved = expand(value).trim()
-      const literal = /^(\d+(?:\.\d+)?)px$/.exec(resolved)
-      const maximum = /^max\(100%,\s*(\d+(?:\.\d+)?)px\)$/.exec(resolved)
-      return Number(literal?.[1] ?? maximum?.[1] ?? 0) >= 44
-    }
-    let present = false
-    const base = new Map<string, string>()
-    css.walkRules((rule) => {
-      if (!rule.selector.includes('[data-ds-action]') || !/::?before\b/.test(rule.selector)) return
-      let coarse = false
-      let parent: import('postcss').Root | import('postcss').Rule | import('postcss').AtRule | import('postcss').Document | undefined = rule.parent
-      while (parent) {
-        if (parent.type === 'atrule' && parent.name === 'media' && /pointer:\s*coarse/.test(parent.params)) coarse = true
-        parent = parent.parent
-      }
-      const declarations = new Map<string, string>()
-      rule.walkDecls((d) => { declarations.set(d.prop, d.value) })
-      if (!coarse) for (const [key, value] of declarations) base.set(key, value)
-      if (coarse && atLeast44(declarations.get('width') ?? '') && atLeast44(declarations.get('height') ?? '')) present = true
-    })
-    return present && ["''", '""'].includes(base.get('content') ?? '')
-      && base.get('position') === 'absolute' && base.get('pointer-events') === 'auto'
-}
-
-let sharedExpander: Promise<boolean> | undefined
-function appShipsTouchExpander() {
-  sharedExpander ??= (async () => {
-    expect(await cssShipsTouchExpander('library.css'),
-      'instrument: the same parser/compiler must recognize the actual kit touch expander').toBe(true)
-    return cssShipsTouchExpander('globals.css')
-  })()
-  return sharedExpander
-}
-
+// U1-C2: share U2-1's actual-control matcher. No U2 source is changed.
+// A Switch-only rule cannot certify an ordinary data-ds-action Button.
 async function expectTouchContract(control: HTMLElement, name: string) {
-  const classes = [...control.classList]
-  const coarse = '(?:pointer-coarse:|\\[@media\\(pointer:coarse\\)\\]:)'
-  const minimum = '\\[(?:var\\(--target-touch-minimum\\)|44px)\\]'
-  const height = classes.some((c) => new RegExp(`^${coarse}(?:min-)?h-${minimum}$`).test(c))
-  const fullRow = classes.includes('w-full') || (classes.includes('flex-1') && control.parentElement?.classList.contains('flex'))
-  const width = fullRow || classes.some((c) => new RegExp(`^${coarse}(?:min-)?w-${minimum}$`).test(c))
-  const stamped = !(height && width) && control.hasAttribute('data-ds-action') && control.classList.contains('relative') && await appShipsTouchExpander()
-  expect((height && width) || stamped,
-    `U1-5/FR-070: ${name} needs a shipped [data-ds-action] 44x44 expander or explicit coarse-pointer minimum sizing; classes=${control.className}`).toBe(true)
+  const result = await touchContractU2(control)
+  expect(result.pass,
+    `U1-5/FR-070: ${name} needs a selector-matched shipped 44x44 expander or both explicit sizing axes; classes=${control.className}; contract=${JSON.stringify(result)}`).toBe(true)
 }
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
@@ -78,6 +27,25 @@ function gateway() {
 }
 
 describe('U1-5 — real Settings controls carry a functioning touch contract', () => {
+  it('U1-C2 instrument — a Switch-only 44x44 rule rejects an ordinary stamped Button', async () => {
+    renderG1(<><Button>Ordinary action</Button><Switch aria-label="Instrument switch" /></>)
+    const css = parse(`
+      [role='switch'][data-ds-action]::before {
+        content: ''; position: absolute; pointer-events: auto;
+      }
+      @media (pointer: coarse) {
+        [role='switch'][data-ds-action]::before { width: 44px; height: 44px; }
+      }
+    `)
+    const button = await screen.findByRole('button', { name: 'Ordinary action' })
+    expect(button).toHaveAttribute('data-ds-action')
+    expect(button).toHaveClass('relative')
+    // Preserve the original compiler/parser positive control on actual kit CSS.
+    expect(pseudoTouchU2(await stylesheetU2('library.css'), button)).toBe(true)
+    // Same checker and same rule: positive witness, then wrong-target rejection.
+    expect(pseudoTouchU2(css, screen.getByRole('switch', { name: 'Instrument switch' }))).toBe(true)
+    expect(pseudoTouchU2(css, button), 'FR-070: a rule must match this actual control, not just another kit control').toBe(false)
+  })
   it('Gateway Preview server switch has a 44x44 coarse-pointer hit region', async () => {
     gateway()
     await expectTouchContract(await screen.findByRole('switch', { name: 'Preview server' }), 'Preview server switch')
