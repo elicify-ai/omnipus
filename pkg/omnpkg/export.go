@@ -116,7 +116,9 @@ type exportedAgent struct {
 // connected programs (#1960 FR-022). Export and the export review share it, so
 // the review shows exactly the package's needs_secrets.
 func (a *exportedAgent) needsSecrets(id string) []NeedsSecret {
-	secrets := make([]NeedsSecret, 0, len(a.envNames)+len(a.programs))
+	// Non-nil even when empty (the package writes needs_secrets as []);
+	// append grows it for the programs.
+	secrets := make([]NeedsSecret, 0, len(a.envNames))
 	for _, n := range a.envNames {
 		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
 	}

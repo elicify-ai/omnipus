@@ -121,7 +121,8 @@ func (m *maskingWriter) flushLocked(final bool) error {
 			}
 		}
 	}
-	out := make([]byte, 0, n-m.decided+len(FilteredMarker))
+	// Capacity is the undecided bytes; append grows it for a marker.
+	out := make([]byte, 0, n-m.decided)
 	j := m.decided
 	for ; j < n; j++ {
 		// A byte more than holdBack before the end can only be covered by a
