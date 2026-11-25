@@ -11,10 +11,12 @@
 export const NO_CONTEXT_LENGTH_COPY = 'No context length'
 
 /** The link's own text — an instruction, not a bare "click here". */
-export const MODEL_OVERRIDE_LINK_TEXT = 'Set it in Settings → Models → Model overrides'
+// D-9 id2: Models is no longer a section; model overrides live in Limits.
+export const MODEL_OVERRIDE_LINK_TEXT = 'Set it in Limits'
 
 /**
- * Settings → Models → Model overrides, pre-filled for this exact pair.
+ * Settings → Limits → Model overrides, pre-filled for this exact pair
+ * (the legacy `tab=models` address redirects there).
  *
  * `src/main.tsx` mounts the router on `createHashHistory()` (required for
  * go:embed static serving — history mode 404s on deep links). A plain

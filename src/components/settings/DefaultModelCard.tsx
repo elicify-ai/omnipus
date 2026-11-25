@@ -14,7 +14,7 @@
 //    reporting 0) renders as an em dash. Not "unknown", not a guess.
 //  • `window_unknown: true` is the specific, actionable case (a local model
 //    whose endpoint reported no context length): it renders the *No context
-//    length* copy plus a link into Settings → Models → Model overrides with
+//    length* copy plus a link into Settings → Limits → Model overrides with
 //    the pair pre-filled, so the fix is one click away (X-08).
 
 import * as React from 'react'
@@ -168,7 +168,7 @@ export function DefaultModelCard({
 
           {status === 'loading' ? (
             <div
-              className="mt-[var(--space-1)] h-4 w-40 animate-pulse rounded bg-[var(--color-surface-2)]"
+              className="mt-[var(--space-1)] h-4 w-40 animate-pulse motion-reduce:animate-none rounded bg-[var(--color-surface-2)]"
               data-testid="default-model-loading"
             />
           ) : status === 'error' ? (

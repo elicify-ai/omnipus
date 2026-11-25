@@ -52,6 +52,16 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
   targetRow?: string
 }
 
+/** True when a history entry was written by the router (it carries its index). */
+function hasRouterState(state: unknown): boolean {
+  return state !== null && typeof state === 'object' && '__TSR_index' in state
+}
+
+// Addresses of typed (state-less) history entries this page has shown. Kept
+// for the page's lifetime, so a Back to one is never taken for a new typed
+// address (U2-4).
+const shownTypedEntries = new Set<string>()
+
 export function SettingsScreen({
   section = 'providers',
   requestedTab,
@@ -155,6 +165,8 @@ export function SettingsScreen({
   // the screen still shows this section. Stay therefore steps back off the
   // typed entry itself (see the leave question below).
   const typedAddressBlocked = useRef(false)
+  // True from Stay on a typed address until the step back off it lands.
+  const leavingTypedEntry = useRef(false)
   // History length as of the last render: a typed address adds an entry, a
   // Back to an older entry does not (that one is left to the router).
   const historyLength = useRef(typeof window === 'undefined' ? 0 : window.history.length)
@@ -165,14 +177,26 @@ export function SettingsScreen({
     shouldBlockFn: () => {
       // The router's own moves (links, Back to an entry it wrote) carry its
       // state; an entry without it was typed or pasted into the address bar.
-      const state: unknown = window.history.state
+      // U2-4: once the browser's history is full (about 50 entries) a typed
+      // address no longer grows the length, so a new, never-shown address
+      // without router state counts as typed too.
       typedAddressBlocked.current =
-        !(state && typeof state === 'object' && '__TSR_index' in state) && window.history.length > historyLength.current
+        !hasRouterState(window.history.state) &&
+        (window.history.length > historyLength.current || !shownTypedEntries.has(window.location.href))
       return draftCount > 0
     },
     withResolver: true,
     // useSaveBar registers the browser's own prompt while drafts exist.
     enableBeforeUnload: false,
+  })
+  // A typed entry this page has really shown (no router state, not held by
+  // the leave question, not being stepped off after Stay) is one a later Back
+  // may return to; remember it so that Back is not taken for a new typed
+  // address.
+  useEffect(() => {
+    if (blocker.status !== 'blocked' && !leavingTypedEntry.current && !hasRouterState(window.history.state)) {
+      shownTypedEntries.add(window.location.href)
+    }
   })
 
   // ── Phone: list first (FR-008) ─────────────────────────────────────────
@@ -421,7 +445,11 @@ export function SettingsScreen({
   return (
     <SettingsShellContext.Provider value={shell}>
       <div className="absolute inset-0 flex flex-col">
-        <a tabIndex={0}
+        {/* US-9 AS4 (U2-2): the first Tab stop on a fresh Settings address,
+            pinned sidebar or not. The pinned sidebar comes earlier in the
+            page, so this link takes the shell skip link's positive index 1
+            (AppShell steps its own link aside on Settings). */}
+        <a tabIndex={1}
           href="#settings-content"
           onClick={(e) => {
             // FR-068: moves focus without changing the address.
@@ -543,7 +571,11 @@ export function SettingsScreen({
               blocker.reset()
               // The history ignores the next address change after a Stay;
               // this step back is that change, so the section stays put.
-              if (typedAddressBlocked.current) setTimeout(() => window.history.back(), 0)
+              if (typedAddressBlocked.current) {
+                leavingTypedEntry.current = true
+                window.addEventListener('popstate', () => { leavingTypedEntry.current = false }, { once: true })
+                setTimeout(() => window.history.back(), 0)
+              }
               typedAddressBlocked.current = false
               navIntent.current = null
               const back = stayFocus.current
