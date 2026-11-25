@@ -415,8 +415,9 @@ export function ProviderPicker({
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="h-auto min-h-[44px] justify-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
+              className="h-auto min-h-[44px] min-w-0 justify-center whitespace-normal wrap-anywhere text-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
             >
+              {/* U3-5: a long name wraps inside its tile at 390 px. */}
               {row.company}
             </Button>
           )
@@ -470,7 +471,7 @@ export function ProviderPicker({
                     ref={(el) => registerRow(key, el)}
                     data-testid={`picker-recent-${recent.provider.id}`}
                     onClick={() => select({ kind: 'recent', key: recent.provider.id })}
-                    className="flex min-h-[32px] cursor-pointer items-center rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
+                    className="flex min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-center rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
                     style={{ color: 'var(--color-secondary)' }}
                   >
                     {recent.label}
@@ -638,7 +639,7 @@ export function ProviderPicker({
             data-testid="picker-custom-endpoint"
             aria-selected={activeKey === `custom:${CUSTOM_ENDPOINT_ROW_ID}`}
             onClick={() => select({ kind: 'custom', key: CUSTOM_ENDPOINT_ROW_ID })}
-            className="flex min-h-[32px] cursor-pointer items-center gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
+            className="flex min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-center gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-secondary)' }}
           >
             <Plus size={14} aria-hidden="true" />
