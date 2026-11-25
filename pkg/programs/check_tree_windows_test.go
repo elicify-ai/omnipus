@@ -31,8 +31,8 @@ func TestProgramCheck_WindowsTreeRegression(t *testing.T) {
 			setProcessGroup(cmd)
 			require.NoError(t, cmd.Start())
 			t.Cleanup(func() {
-				stopProcessGroup(cmd)
-				releaseProcessGroup(cmd)
+				stopProcessGroup(cmd.Process)
+				releaseProcessGroup(cmd.Process)
 				_ = cmd.Wait()
 			})
 			require.NoError(t, startProcessGroup(cmd), "real native check-tree ownership must succeed, never silently degrade")
@@ -57,9 +57,9 @@ func TestProgramCheck_WindowsTreeRegression(t *testing.T) {
 				require.Equal(t, uint32(windows.WAIT_TIMEOUT), state, "instrument: both observed processes were alive before cleanup")
 			}
 			if action == "stop" {
-				stopProcessGroup(cmd)
+				stopProcessGroup(cmd.Process)
 			} else {
-				releaseProcessGroup(cmd)
+				releaseProcessGroup(cmd.Process)
 			}
 			for _, handle := range []windows.Handle{rootHandle, descendantHandle} {
 				state, probeErr := windows.WaitForSingleObject(handle, 5000)

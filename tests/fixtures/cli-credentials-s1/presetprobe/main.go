@@ -39,7 +39,7 @@ func probe() error {
 	}
 	defer os.RemoveAll(home)
 	bin := filepath.Join(home, "bin")
-	if err := os.Mkdir(bin, 0700); err != nil {
+	if err = os.Mkdir(bin, 0700); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
@@ -54,15 +54,15 @@ func probe() error {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	if err := os.WriteFile(filepath.Join(bin, name), body, 0700); err != nil {
+	if err = os.WriteFile(filepath.Join(bin, name), body, 0700); err != nil {
 		return err
 	}
-	if err := os.Setenv("PATH", bin); err != nil {
+	if err = os.Setenv("PATH", bin); err != nil {
 		return err
 	}
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	defer store.Close()
-	if err := store.UnlockWithKey(bytes.Repeat([]byte{0x52}, 32)); err != nil {
+	if err = store.UnlockWithKey(bytes.Repeat([]byte{0x52}, 32)); err != nil {
 		return err
 	}
 	cfg := &config.Config{}
@@ -72,9 +72,10 @@ func probe() error {
 		return err
 	}
 	svc.Wait()
-	// Test-only probe output, not a gateway wire format.
+	// Test-only probe output, not a gateway wire format. The tags repeat the
+	// field names, so the keys are the ones the untagged fields already had.
 	return json.NewEncoder(os.Stdout).Encode(struct {
-		Entries    []programs.ProgramEntry
-		Connection programs.Connection
+		Entries    []programs.ProgramEntry `json:"Entries"`
+		Connection programs.Connection     `json:"Connection"`
 	}{entries, svc.Connection("example")})
 }

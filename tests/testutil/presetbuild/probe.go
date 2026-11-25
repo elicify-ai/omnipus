@@ -28,7 +28,7 @@ func buildProbe(t testing.TB, target string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(overlay, data, 0600); err != nil {
+	if err = os.WriteFile(overlay, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, "presetprobe")
@@ -37,7 +37,7 @@ func buildProbe(t testing.TB, target string) string {
 	}
 	args := []string{"build", "-tags", "goolm,stdjson", "-overlay", overlay, "-o", bin, target}
 	var build *exec.Cmd
-	if _, err := exec.LookPath("heavy"); err == nil {
+	if _, lookErr := exec.LookPath("heavy"); lookErr == nil {
 		build = exec.Command("heavy", append([]string{"--local", "go"}, args...)...)
 	} else if os.Getenv("CI") == "true" {
 		build = exec.Command("go", args...)

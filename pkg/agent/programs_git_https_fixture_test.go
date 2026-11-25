@@ -62,8 +62,8 @@ func programsGitMountedTurn(t *testing.T, f *wu5Fixture, id, cwd, command string
 	input := programsWebInput()
 	input.SessionID, input.ChatID = sid, sid
 	input.Content = "push the fixture commit from the approved project"
-	// Name the addressed workspace explicitly. This does not widen execution
-	// scope: an approved write mount is still rejected as a confined exec cwd.
+	// Name the addressed workspace explicitly, as the trusted server carrier
+	// does. This supplies identity/context, never a fabricated mount or grant.
 	input.Metadata = map[string]string{"workspace_id": "sales"}
 	_, _, err := f.al.processMessage(context.Background(), input)
 	require.NoError(t, err)

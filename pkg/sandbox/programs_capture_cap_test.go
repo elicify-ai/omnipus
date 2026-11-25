@@ -36,7 +36,7 @@ func TestProgramsAttach_ForegroundCaptureCap(t *testing.T) {
 			stdout := sandbox.NewProgramTestCapture(row.limit)
 			stderr := sandbox.NewProgramTestCapture(row.limit)
 			cmd.Stdout, cmd.Stderr = stdout, stderr
-			programs.Attach(cmd, programs.ResolvedPrograms{Env: []string{"GH_TOKEN=" + captureSentinel}, Tokens: []string{captureSentinel}})
+			require.NoError(t, programs.Attach(cmd, programs.ResolvedPrograms{Env: []string{"GH_TOKEN=" + captureSentinel}, Tokens: []string{captureSentinel}}))
 			err := cmd.Run()
 			require.NoError(t, err, "Attach must inject GH_TOKEN and install source masking; stderr=%q", stderr.Entered())
 			for label, out := range map[string]string{"entered cap": stdout.Entered(), "captured": stdout.Captured()} {

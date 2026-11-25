@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/omnpkg"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -48,6 +49,17 @@ func TestProgramMasking_ActualOtherChildSinks(t *testing.T) {
 		require.Eventually(t, func() bool { _, err := os.Stat(count); return err == nil }, 5*time.Second, 10*time.Millisecond, "actual setup child wrote its count before release")
 		raw, err := os.ReadFile(count)
 		require.NoError(t, err)
+		// Value-free diagnostics for the observed count0 failure. Do not print
+		// tool results or tokens, change the expected22, or infer a cause from
+		// a later PASS. Preserve the real provider's observed trusted origins.
+		observedOrigins := x.provider.observedOrigins(x.dev)
+		origins := make([][]bus.Origin, 0, len(observedOrigins))
+		for _, provenance := range observedOrigins {
+			origins = append(origins, provenance.Origins())
+		}
+		t.Logf("S106 setup resolution: child_count_matches22=%t model_origins=%v unresolved_notice=%t web_off_notice=%t store_unavailable_notice=%t",
+			strings.TrimSpace(string(raw)) == "22", origins,
+			strings.Contains(started, programs.MsgWithheldUnresolved), strings.Contains(started, programs.MsgWithheldWebChat), strings.Contains(started, programs.MsgStoreUnavailable))
 		assert.Equal(t, "22", strings.TrimSpace(string(raw)), "21-byte S130 value plus printenv newline, not a configured response")
 		require.NoError(t, os.WriteFile(release, []byte("release"), 0600))
 		x.waitEnds(t, x.dev)
@@ -76,7 +88,7 @@ func TestProgramMasking_ActualOtherChildSinks(t *testing.T) {
 			assert.True(t, strings.Contains(output.Output, marker), "actual registered setup read contains masked output; content deliberately not printed")
 		}
 		pgOtherAssertSinks(t, x, "environment_setup", 2, "S106 actual setup-read response", "S106_SETUP_STDOUT\n[FILTERED]", "S106_SETUP_STDOUT")
-		t.Log("actual S106 setup: child_count=22 callback=true registered_read=true stdout_and_stderr=true seven_sinks_observed=true")
+		t.Logf("S106 setup assertions reached: child_count_matches22=%t; use the actual test verdict for callback/read/seven-sink acceptance", strings.TrimSpace(string(raw)) == "22")
 	})
 	t.Run("S106_git_version_probe_every_sink_value_free", func(t *testing.T) {
 		x := newProgramsSentinelFixture(t, false)

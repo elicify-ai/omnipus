@@ -240,7 +240,7 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	// The fake gh records every start (D-8 row 2); FR-005 resolves the check
 	// word on the gateway PATH, so the fake sits first on PATH.
 	f.ghStarts = filepath.Join(t.TempDir(), "gh-starts")
-	bin := t.TempDir()
+	bin := pgFakeProgramDir(t)
 	name := "gh"
 	script := "#!/bin/sh\necho started >> " + f.ghStarts + "\n"
 	if runtime.GOOS == "windows" {
@@ -711,7 +711,7 @@ func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI, func() 
 
 	// The start-marker fake gh (same instrument as pgNewGateway's fixture).
 	marker := filepath.Join(t.TempDir(), "gh-starts")
-	bin := t.TempDir()
+	bin := pgFakeProgramDir(t)
 	name := "gh"
 	script := "#!/bin/sh\necho started >> " + marker + "\n"
 	if runtime.GOOS == "windows" {

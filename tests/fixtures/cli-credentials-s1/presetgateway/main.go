@@ -46,13 +46,26 @@ func main() {
 }
 
 func run(resultPath string) (err error) {
+	// S-08 / FR-005: the account check does not run a program that lies in a
+	// folder agents can write to. That covers the Omnipus data folder (home) and
+	// the per-user temporary folder, which the product treats as agent-writable
+	// on every host where it is not the shared /tmp
+	// (pkg/thirdpartycli/executor_settings.go::runtimeTempRoots). S-93 needs the
+	// fake exampletool to run, so it lives in its own folder, made first, and the
+	// temporary folder of this process is then moved inside the data folder
+	// (TMPDIR, TMP, TEMP below): the tool is outside both on any host.
+	bin, err := os.MkdirTemp("", "s1-preset-bin-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(bin)
 	home, err := os.MkdirTemp("", "s1-preset-http-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(home)
-	bin := filepath.Join(home, "bin")
-	if err = os.Mkdir(bin, 0700); err != nil {
+	scratch := filepath.Join(home, "tmp")
+	if err = os.Mkdir(scratch, 0700); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
@@ -73,6 +86,7 @@ func run(resultPath string) (err error) {
 	for key, value := range map[string]string{
 		"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), config.EnvHome: home,
 		credentials.EnvMasterKey: hex.EncodeToString(bytes.Repeat([]byte{0x52}, 32)), "OMNIPUS_BEARER_TOKEN": "",
+		"TMPDIR": scratch, "TMP": scratch, "TEMP": scratch,
 	} {
 		if err = os.Setenv(key, value); err != nil {
 			return err
@@ -82,7 +96,12 @@ func run(resultPath string) (err error) {
 	if err != nil {
 		return err
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = listener.Close()
+		return fmt.Errorf("fixture listener address is %T, not a TCP address", listener.Addr())
+	}
+	port := tcpAddr.Port
 	if err = listener.Close(); err != nil {
 		return err
 	}
@@ -130,7 +149,7 @@ func run(resultPath string) (err error) {
 		select {
 		case bootErr := <-done:
 			done <- bootErr
-			return fmt.Errorf("fixture gateway boot failed: %v", bootErr)
+			return fmt.Errorf("fixture gateway boot failed: %w", bootErr)
 		default:
 		}
 		if time.Now().After(deadline) {
@@ -210,15 +229,17 @@ func run(resultPath string) (err error) {
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("Example check did not settle in the spec's 25s bound")
+			return fmt.Errorf("the Example preset check did not settle in the spec's 25s bound")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	// Test-build result, not a parallel gateway wire format: members are the
 	// actual generated response carriers read above.
+	// The json tags keep the keys exactly as the untagged struct encoded them
+	// (List, Entry); the reading test decodes by these names.
 	raw, err := json.Marshal(struct {
-		List  gen.ProgramList
-		Entry gen.ProgramEntry
+		List  gen.ProgramList  `json:"List"`
+		Entry gen.ProgramEntry `json:"Entry"`
 	}{list, entry})
 	if err != nil {
 		return err
