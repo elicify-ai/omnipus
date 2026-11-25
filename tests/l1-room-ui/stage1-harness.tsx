@@ -7,7 +7,7 @@ import { vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import type {
   AboutResponse, ActivityEventsResponse, AgentToolsResponse, AppState,
-  GlobalToolPolicies, NotificationList, PerformanceSettings, Session,
+  GlobalToolPolicies, NotificationList, PerformanceSettings, ProgramList, Session,
   SessionDetail, SessionPage, Task, ToolRegistryEntry, VersionResponse,
 } from '@/lib/api/generated/openapi-types'
 import type { ClientFrame, ServerFrame, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
@@ -121,6 +121,11 @@ export class Stage1Network extends Network {
     this.respond('GET', '/api/v1/agents/mia/tools', () => json(agentTools))
     this.respond('GET', '/api/v1/security/tool-policies', () => json(globalPolicies))
     this.respond('GET', '/api/v1/mcp-servers', () => json([]))
+    // The shell's agent profile shows the Programs section (cli-credentials S1,
+    // UI row "Agent profile -> Programs"), which reads GET /programs.
+    // Contract ConfigurationRevision: exactly 64 lower-case hex characters.
+    const programs: ProgramList = { entries: [], web_chat_allowed: false, revision: '0'.repeat(64) }
+    this.respond('GET', '/api/v1/programs', () => json(programs))
     // Deliberately supplied so a forbidden read remains a successful,
     // observable regression rather than being masked by a transport error.
     this.respond('GET', '/api/v1/secrets', () => json([]))
