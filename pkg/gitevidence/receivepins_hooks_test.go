@@ -6,6 +6,7 @@ package gitevidence
 // "no hook ran" cannot come from a broken instrument.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,7 @@ func (f pushFixture) globalHooks(t *testing.T) string {
 func hookRunsIn(t *testing.T, marker, repoDir string) []string {
 	t.Helper()
 	data, err := os.ReadFile(marker)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -133,7 +134,7 @@ func TestGitEvidence_ReceivePins_PlantedHookInThePinnedFolderIsCleared(t *testin
 	if _, err := Open(dir, WithRedactor(noOpRedactor)); err != nil {
 		t.Fatalf("re-Open: %v", err)
 	}
-	if _, err := os.Stat(planted); !os.IsNotExist(err) {
+	if _, err := os.Stat(planted); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the pinned hooks folder must be removed on Open, stat err = %v", err)
 	}
 	assertPins(t, dir, "after re-Open with a planted hook")

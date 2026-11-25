@@ -31,6 +31,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -286,7 +287,7 @@ func (f *pgGateFixture) ghStarted() int {
 	if err != nil {
 		// Only a not-yet-created marker reads as zero. Any other read error is
 		// an instrument fault, not evidence nothing started (F18).
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			require.Failf(f.t, "instrument: cannot read the gh start marker",
 				"path=%q error=%v — a zero here would hide real starts", f.ghStarts, err)
 		}
@@ -301,7 +302,7 @@ func (f *pgGateFixture) ghStarted() int {
 // as zero).
 func (f *pgGateFixture) ghMarkerReadable() {
 	f.t.Helper()
-	if _, err := os.Stat(f.ghStarts); os.IsNotExist(err) {
+	if _, err := os.Stat(f.ghStarts); errors.Is(err, os.ErrNotExist) {
 		return // no starts recorded yet — legitimate zero state
 	} else if err != nil {
 		require.Failf(f.t, "instrument: cannot stat the gh start marker",
@@ -723,7 +724,7 @@ func pgStandaloneAPI(t *testing.T, bypass bool) (http.Handler, *restAPI, func() 
 	starts := func() int {
 		b, err := os.ReadFile(marker)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return 0
 			}
 			t.Fatalf("instrument: cannot read the gh start marker %q: %v", marker, err)

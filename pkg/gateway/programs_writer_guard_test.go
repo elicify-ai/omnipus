@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"go/build"
 	"go/types"
 	"os"
@@ -23,7 +24,7 @@ func pgWriterRoot(t *testing.T) string {
 			require.True(t, strings.HasPrefix(string(data), "module "+pgWriterModule+"\n"), "source inventory must inspect the actual module")
 			return dir
 		}
-		require.True(t, os.IsNotExist(readErr), "module root read failed: %v", readErr)
+		require.True(t, errors.Is(readErr, os.ErrNotExist), "module root read failed: %v", readErr)
 		parent := filepath.Dir(dir)
 		require.NotEqual(t, dir, parent, "BLOCKED: module source root unavailable — S113")
 		dir = parent

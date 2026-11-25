@@ -5,6 +5,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,7 +65,7 @@ func (h pgSupersededBarrier) waitAfterPrint(t *testing.T) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		raw, err := os.ReadFile(h.ready)
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("instrument: after-print marker unreadable: %v", err)
 		}
 		return err == nil && strings.TrimSpace(string(raw)) == "after-print"

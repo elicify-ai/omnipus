@@ -4,6 +4,7 @@ package gateway
 // standard source importer resolves real dependency APIs and go/types checks
 // every body in each candidate production package. Errors are never partial PASS.
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -92,7 +93,7 @@ func pgWriterCandidateFiles(root string, names map[string]bool) ([]string, error
 			}
 			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
 				return filepath.SkipDir // different module, not this module's source
-			} else if !os.IsNotExist(err) {
+			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 			return nil
