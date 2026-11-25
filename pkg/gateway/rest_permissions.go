@@ -84,9 +84,8 @@ func (a *restAPI) patchPermissionSettings(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	if !a.requireReAuth(w, r, user.Username) {
-		return
-	}
+	// No step-up re-auth (spec lines 60 and 135): the same sign-in the
+	// retired tool-policy writer used; C-16 autosave sends no token.
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	req, msg := decodePermissionPatch(r)
 	if msg != "" {
