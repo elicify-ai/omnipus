@@ -117,7 +117,7 @@ jobs:
         # tests are identified and cut (founder 2026-10-29: find out why they
         # are slow). A real hang still trips it; the job limit stays 45.
         shell: bash
-        run: go test -tags goolm,stdjson -short -timeout 30m ./...
+        run: go test -tags goolm,stdjson,s1seams -short -timeout 30m ./...
 
       - name: Smoke boot + /health
         # Run the compiled binary once with --allow-empty on the local runner
