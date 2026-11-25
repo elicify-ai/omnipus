@@ -411,7 +411,7 @@ export function ProviderPicker({
         role="group"
         aria-label="Popular providers"
         data-testid="picker-popular"
-        className="grid grid-cols-4 gap-[var(--space-2)]"
+        className="grid grid-cols-3 sm:grid-cols-4 gap-[var(--space-2)]"
       >
         {model.popular.map((row) => {
           const key = refKey({ kind: 'popular', key: row.company })
@@ -425,10 +425,11 @@ export function ProviderPicker({
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="h-auto min-h-[44px] min-w-0 justify-center whitespace-normal wrap-anywhere text-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
+              className="h-auto min-h-[44px] min-w-0 justify-center text-center rounded-md px-[var(--space-2)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
             >
-              {/* U3-5: a long name wraps inside its tile at 390 px. */}
-              {row.company}
+              {/* U3-5/U4-6: a name wraps at word boundaries inside its tile at 390 px;
+                  a word breaks only when it alone is wider than the tile. */}
+              <span className="min-w-0 whitespace-normal break-words">{row.company}</span>
             </Button>
           )
         })}
