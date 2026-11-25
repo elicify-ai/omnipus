@@ -169,10 +169,10 @@ func TestProgramProvenance_RootLineage(t *testing.T) {
 			"verifier":           SessionTypeVerifier,
 		}
 		for name, kind := range kindEvidence {
-			s, err := store.NewSession(kind, "", "dev")
-			require.NoError(t, err, "instrument: the %s session exists", name)
-			meta, err := store.GetMeta(s.ID)
-			require.NoError(t, err)
+			s, newErr := store.NewSession(kind, "", "dev")
+			require.NoError(t, newErr, "instrument: the %s session exists", name)
+			meta, metaErr := store.GetMeta(s.ID)
+			require.NoError(t, metaErr)
 			require.Equal(t, kind, meta.Type, "%s: identity evidence", name)
 		}
 		legacyTask, err := store.NewSession(SessionTypeTask, "", "dev")
