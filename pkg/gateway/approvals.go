@@ -147,6 +147,13 @@ type approvalEntry struct {
 	// the member's work (FR-169) and is not cancelled by those room events.
 	RoomPreAdmission bool
 
+	// Skill is the skill a Skill-load or install_skill card is about
+	// (Skills & Tools C-9); nil on every other card. skillRecheck re-reads
+	// its facts when the card is answered (C-24); nil when nothing can
+	// change (an install binds its staged copy). Immutable after creation.
+	Skill        *generated.ToolApprovalSkill
+	skillRecheck func() string
+
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
 
@@ -163,6 +170,10 @@ type approvalExtras struct {
 	RoomRef          *generated.RoomRef
 	OriginLabel      string
 	RoomPreAdmission bool
+	// Skill and SkillRecheck: the skill the card is about and its
+	// answer-time re-check (Skills & Tools C-9, C-24).
+	Skill        *generated.ToolApprovalSkill
+	SkillRecheck func() string
 }
 
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
@@ -196,6 +207,10 @@ type ApprovalOutcome struct {
 	// every other answer. The shell file and network pre-flight cards store
 	// their narrow allowance for this long when the call is released.
 	AllowFor time.Duration
+
+	// Stale is true when a skill card's answer was refused by its re-check
+	// (C-24); Reason then holds the sentence the waiting call is given.
+	Stale bool
 
 	// ApproverUserID is the authenticated person who made an explicit
 	// decision (approve, deny, cancel through the decision route); empty for
@@ -553,6 +568,7 @@ func (r *approvalRegistryV2) requestApproval(
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
 		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+		Skill: extra.Skill, skillRecheck: extra.SkillRecheck,
 		state:    ApprovalStatePending,
 		resultCh: make(chan ApprovalOutcome, 1),
 	}
@@ -656,6 +672,9 @@ func (r *approvalRegistryV2) resolveBy(
 type timedAllowanceAnswer struct {
 	Duration string
 	EndsAt   time.Time
+	// Action is the wire answer when it is not "allow_for" (a skill
+	// card's "approve_version_allow_for", C-24).
+	Action string
 }
 
 // resolveAnswer is resolveBy with the timed allowance the answer recorded

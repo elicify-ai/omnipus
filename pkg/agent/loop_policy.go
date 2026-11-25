@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -396,7 +397,8 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string, recordGrant bool) {
-	if al.checkStandingGrant(sessionID, agentID, toolName, args) {
+	// A standing grant never settles an open trust check (C-12).
+	if !skillCardFrom(ctx).trustOpen() && al.checkStandingGrant(sessionID, agentID, toolName, args) {
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
@@ -439,7 +441,7 @@ func (al *AgentLoop) policyApprovalReq(
 	if ts := turnStateFromContext(ctx); ts != nil {
 		origin = ts.currentApprovalOrigin()
 	}
-	return PolicyApprovalReq{
+	req := PolicyApprovalReq{
 		ToolCallID:  toolCallID,
 		ToolName:    toolName,
 		Args:        cloneStringAnyMap(args),
@@ -449,6 +451,12 @@ func (al *AgentLoop) policyApprovalReq(
 		RoomRef:     origin.roomRefCopy(),
 		OriginLabel: origin.Label,
 	}
+	if c := skillCardFrom(ctx); c != nil {
+		facts := *c.facts
+		facts.OpenChecks = slices.Clone(c.facts.OpenChecks)
+		req.Skill, req.SkillRecheck = &facts, c.recheck
+	}
+	return req
 }
 
 // abortOnSessionStop ends the exact waiting execution when its approval was

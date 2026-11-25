@@ -56,6 +56,9 @@ func approvalKind(e *approvalEntry) string {
 // offers Allow for 1 hour / 3 hours / 1 day. Cancel is on every card, as
 // today.
 func offeredActions(e *approvalEntry) (actions, durations []string) {
+	if actions, durations, ok := skillCardOffers(e); ok {
+		return actions, durations
+	}
 	once := []string{
 		string(gen.ToolApprovalActionRequestActionAllowOnce),
 		string(gen.ToolApprovalActionRequestActionDeny),

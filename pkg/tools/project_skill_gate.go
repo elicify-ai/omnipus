@@ -95,11 +95,11 @@ func projectSkillGates(home, agentID, workspaceID string, mountRoots []string) [
 // mount, always unverified (ST-Q8 A), trust approval per revision.
 func projectSkillDecision(home string, settings config.PersistedSkillSettings, agentSkills *config.AgentSkillsCfg, key, folder string) (SkillDecision, error) {
 	approved := false
+	revision, err := skills.ContentRevision(folder)
+	if err != nil {
+		return SkillDecision{}, fmt.Errorf("revision of %s: %w", key, err)
+	}
 	if settings.Trust == config.SkillTrustAsk {
-		revision, err := skills.ContentRevision(folder)
-		if err != nil {
-			return SkillDecision{}, fmt.Errorf("revision of %s: %w", key, err)
-		}
 		skillsDir := filepath.Join(home, "skills")
 		if approved, err = skills.TrustApproved(skillsDir, key, revision); err != nil {
 			return SkillDecision{}, err
@@ -112,7 +112,9 @@ func projectSkillDecision(home string, settings config.PersistedSkillSettings, a
 	if agentSkills != nil {
 		in.Agent = agentSkills.Policies[key]
 	}
-	return ResolveSkillDecision(in), nil
+	d := ResolveSkillDecision(in)
+	d.Revision = revision
+	return d, nil
 }
 
 // allProjectSkillGates closes every project skill folder under the roots.

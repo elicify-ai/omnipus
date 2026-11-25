@@ -87,7 +87,10 @@ func (a *policyApproverAdapter) awaitOutcome(ctx context.Context, req agent.Poli
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		approvalExtras{RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission},
+		approvalExtras{
+			RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission,
+			Skill: req.Skill, SkillRecheck: req.SkillRecheck,
+		},
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).

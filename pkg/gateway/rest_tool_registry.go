@@ -571,6 +571,11 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusConflict, approvalNotOfferedText)
 		return
 	}
+	if entry.Skill != nil && action == ApprovalActionApprove {
+		// C-24: re-check, then trust, allowance and release in order.
+		a.answerSkillCard(w, r, entry, ans)
+		return
+	}
 
 	// MERGE NOTE 2026-09-15: integrate's per-account owner gate (Claude review
 	// C4 / D-16 parity — 403 when another account decides an approval) is
@@ -610,6 +615,9 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if !resolved {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
 		return
+	}
+	if entry.Skill != nil {
+		a.approvalReg.forget(approvalID) // C-24: a replay finds nothing
 	}
 	a.awaitRoomAdmission(entry)
 	if timed && resp.Applied != nil {

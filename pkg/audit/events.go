@@ -671,6 +671,11 @@ const (
 	// before admission. Its request record is written too, so the refusal
 	// is the terminal decision paired with it (channels security S3).
 	AskDenyReasonMissingTurnID AskDenyReason = "missing_turn_id"
+
+	// AskDenyReasonStale — a skill card was answered after its facts
+	// changed (a new revision, or the skill now set to Deny); the re-check
+	// refused the answer and the waiting call (Skills & Tools C-24).
+	AskDenyReasonStale AskDenyReason = "stale"
 )
 
 // IsValidAskDenyReason reports whether `r` is one of the known enum values
@@ -685,7 +690,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonBatchShortCircuit,
 		AskDenyReasonScheduled,
 		AskDenyReasonTaskRun,
-		AskDenyReasonMissingTurnID:
+		AskDenyReasonMissingTurnID,
+		AskDenyReasonStale:
 		return true
 	}
 	return false

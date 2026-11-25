@@ -50,6 +50,13 @@ type PolicyApprovalReq struct {
 	// as opposed to a member's own approval inside a room-request turn,
 	// which carries RoomRef and the "for group" label as well (FR-169).
 	RoomPreAdmission bool
+	// Skill names the skill a Skill-load or install_skill card is about
+	// (Skills & Tools C-9); nil on every other card. SkillRecheck, when
+	// set, reads the skill's facts again when the card is answered (C-24)
+	// and returns the refusal sentence when the answer no longer applies,
+	// "" when it still does.
+	Skill        *generated.ToolApprovalSkill
+	SkillRecheck func() string
 }
 
 // PolicyApprover is implemented by the gateway to wire the central approval

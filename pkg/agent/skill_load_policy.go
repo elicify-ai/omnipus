@@ -30,6 +30,7 @@ const skillLoadDeniedReason = "skill_load_denied"
 // is deny ("" otherwise).
 func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 	ex.skillTrustOpen = false
+	ex.skillCard = nil
 	if ex.toolName != "Skill" {
 		return ""
 	}
@@ -50,11 +51,7 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 	if !ok {
 		return "" // not granted or not found: the load refuses it with its own text
 	}
-	settings := config.PersistedSkillSettings{
-		Policies: cfg.Sandbox.SkillPolicies,
-		Trust:    cfg.Sandbox.EffectiveSkillTrust(),
-		GodMode:  cfg.Sandbox.GodMode,
-	}
+	settings := skillSettingsOf(cfg)
 	project := resolved.Shelf == skills.ShelfProject
 	key := config.NormalizeSkillKey(resolved.Slug)
 	if project {
@@ -72,10 +69,13 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 		ex.toctouPolicy = string(config.ToolPolicyDeny)
 		return tools.SkillRefusalText(resolved.Slug, d.Reason)
 	case tools.SkillOutcomeAskPending:
-		if !d.TrustOpen && tools.SkillAllowanceActive(rt.ts.agentID, key) {
-			return "" // a running timed allowance settles the permission check
+		// A running timed allowance settles the permission check.
+		permissionOpen := d.PermissionOpen && !rt.al.ApprovalGrants().IsSkillAllowed(rt.ts.agentID, config.NormalizeSkillKey(key))
+		if !d.TrustOpen && !permissionOpen {
+			return ""
 		}
 		ex.skillTrustOpen = d.TrustOpen
+		ex.skillCard = ex.skillLoadCard(resolved, key, project, d, permissionOpen)
 		ex.toctouPolicy = stricterPolicy(ex.toctouPolicy, string(config.ToolPolicyAsk))
 	}
 	return ""
