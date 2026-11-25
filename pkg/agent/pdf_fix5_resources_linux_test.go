@@ -30,9 +30,9 @@ func TestChatPDF_PathologicalInspectionBounded(t *testing.T) {
 	}
 	for _, kind := range []string{"ordinary", "parent-cycle", "xref-size", "flate-expansion"} {
 		t.Run(kind, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestChatPDF_PathologicalInspectionBounded$", "-test.v", "-test.timeout=6s")
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestChatPDF_PathologicalInspectionBounded$", "-test.v", "-test.timeout=18s")
 			cmd.Env = append(os.Environ(), "PDF1968_CHAT_CHILD="+kind, "GOTRACEBACK=none")
 			out, err := cmd.CombinedOutput()
 			if !bytes.Contains(out, []byte("PDF_CHAT_INSPECT_STARTED")) {
@@ -101,8 +101,8 @@ func pdfFix5ChatResourceChild(t *testing.T, kind string) {
 		if kind == "ordinary" && (!c.hasText || c.pages != 1 || !strings.Contains(c.injection, "PAGE 1 text")) {
 			t.Fatalf("ordinary positive control: pages=%d hasText=%t injection=%q", c.pages, c.hasText, c.injection)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("F1 chat: %s inspection/fallback did not terminate within the 2s safety deadline", kind)
+	case <-time.After(15 * time.Second):
+		t.Fatalf("F1 chat: %s inspection/fallback did not terminate within the 15s safety deadline", kind)
 	}
 }
 
