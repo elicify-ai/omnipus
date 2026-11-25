@@ -7627,6 +7627,14 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/SectionLoading.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useReturnFocus.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/AllowedPathsEditor.tsx",
       "lane": 6
     },
