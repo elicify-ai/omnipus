@@ -69,7 +69,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/childenv"
-	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
@@ -241,6 +240,14 @@ func ScrubGatewayEnvForRunner() []string {
 	return childenv.FilterForRunner()
 }
 
+// ChildAttachment adds a connected-programs set to a child before Run starts
+// it: the program variables to cmd.Env and the masking writers in front of
+// cmd.Stdout and cmd.Stderr. *programs.ResolvedPrograms implements it. An
+// error means the child must not start.
+type ChildAttachment interface {
+	AttachTo(cmd *exec.Cmd) error
+}
+
 // Limits describes resource caps and environment hints for a hardened child.
 //
 // Zero values are interpreted as "no limit" for TimeoutSeconds and
@@ -291,11 +298,14 @@ type Limits struct {
 	EgressProxyToken string
 
 	// Programs is the connected-programs set for the child Run builds
-	// (connected programs I-1): Run calls programs.Attach on it after its own
-	// environment merge and output capture are set, before the launch, so
-	// program variables reach the child and the masking writers sit in front
-	// of the capture cap. Nil = no programs.
-	Programs *programs.ResolvedPrograms
+	// (connected programs I-1; in production a *programs.ResolvedPrograms):
+	// Run calls its AttachTo after its own environment merge and output
+	// capture are set, before the launch, so program variables reach the
+	// child and the masking writers sit in front of the capture cap. Nil = no
+	// programs. It is an interface so this package does not import
+	// pkg/programs (and through it the model providers: FR-045's no-model
+	// knowledge graph path).
+	Programs ChildAttachment
 
 	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
 	// typically produced by sandbox.DeriveKernelPolicy from the turn's
@@ -557,7 +567,7 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// /dev/null without traversing the device tree.
 	cmd.Stdin = bytes.NewReader(nil)
 	if lim.Programs != nil {
-		if err := programs.Attach(cmd, *lim.Programs); err != nil {
+		if err := lim.Programs.AttachTo(cmd); err != nil {
 			return Result{}, fmt.Errorf("hardened_exec: attach program variables: %w", err)
 		}
 	}

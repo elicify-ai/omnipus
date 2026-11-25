@@ -52,6 +52,13 @@ func Attach(cmd *exec.Cmd, set ResolvedPrograms) error {
 	return nil
 }
 
+// AttachTo is Attach with this set: it lets the sandbox runner take a
+// *ResolvedPrograms through its sandbox.ChildAttachment interface without
+// importing this package.
+func (set *ResolvedPrograms) AttachTo(cmd *exec.Cmd) error {
+	return Attach(cmd, *set)
+}
+
 // sameWriter compares two writers the way os/exec does, without panicking on
 // uncomparable dynamic types.
 func sameWriter(a, b any) (same bool) {
