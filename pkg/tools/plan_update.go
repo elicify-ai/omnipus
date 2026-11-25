@@ -121,6 +121,13 @@ func (t *PlanUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if len(fields) == 0 {
 		return ErrorResult(planUpdateNoFieldText)
 	}
+	// S-111 writers: every field update_plan can change (objective,
+	// description, title, bounds, owner, DoD) is an instruction, so the
+	// executing turn's provenance is always joined into the plan. Always
+	// non-nil: an unresolved turn passes an empty set, which the store's join
+	// turns into unresolved (fail closed) instead of skipping the join.
+	writer := provenanceStrings(ToolTurnProvenance(ctx))
+	patch.Provenance = &writer
 	updated, err := t.store.Update(planID, patch)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("update_plan failed: %v", err))
