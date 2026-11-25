@@ -90,8 +90,8 @@ func loadOrSeedKnownBuiltins(path string, builtins, installedThisStart []string)
 	raw, err := os.ReadFile(path)
 	if err == nil {
 		var rec knownBuiltinsRecord
-		if err := json.Unmarshal(raw, &rec); err != nil {
-			return nil, fmt.Errorf("skillperm: parse %s: %w", knownBuiltinsName, err)
+		if parseErr := json.Unmarshal(raw, &rec); parseErr != nil {
+			return nil, fmt.Errorf("skillperm: parse %s: %w", knownBuiltinsName, parseErr)
 		}
 		return keySet(rec.Keys), nil
 	}

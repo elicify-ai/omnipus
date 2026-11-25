@@ -286,8 +286,8 @@ func RecordsFingerprint(skillsDir string) string {
 const CategorySetText = "The category is set at install and cannot be changed."
 
 // ErrCategorySet is returned by SetCategoryOnce when the stored category is
-// not uncategorised.
-var ErrCategorySet = errors.New(CategorySetText)
+// not uncategorised; callers show CategorySetText.
+var ErrCategorySet = errors.New("skills: the category is already set")
 
 // SetCategoryOnce stores the category of a skill whose stored category is
 // uncategorised (or absent), keeping the rest of its record (C-21). A skill
