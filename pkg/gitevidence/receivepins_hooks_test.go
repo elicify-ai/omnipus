@@ -64,8 +64,8 @@ func hookRunsIn(t *testing.T, marker, repoDir string) []string {
 		t.Fatalf("read hook marker: %v", err)
 	}
 	roots := []string{filepath.ToSlash(repoDir)}
-	if real, rerr := filepath.EvalSymlinks(repoDir); rerr == nil {
-		roots = append(roots, filepath.ToSlash(real))
+	if resolved, rerr := filepath.EvalSymlinks(repoDir); rerr == nil {
+		roots = append(roots, filepath.ToSlash(resolved))
 	}
 	var runs []string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
