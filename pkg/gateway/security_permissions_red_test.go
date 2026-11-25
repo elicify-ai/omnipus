@@ -345,10 +345,13 @@ func TestPermissionsPatch_SkillAndVisibilityMembers(t *testing.T) {
 		api, routes := newPermissionsAPI(t)
 		// Install a skill through the existing upload harness, then the read
 		// model must show its key with the ST-Q3 B default (C-2 self-heal).
+		// An upload is unverified and the default trust is Ask, so the install goes
+		// through the install review (C-3 ask row, C-13, ST-09 d): a direct request
+		// answers 409. The read-model assertions below are unchanged.
 		data := uat2BuildZip(t, []uat2ZipEntry{
 			{name: "SKILL.md", mode: 0o644, body: "---\nname: weather\ndescription: local weather\n---\nbody"},
 		})
-		w := uat2InstallZip(t, api, "weather", data)
+		w := uat2ReviewThenInstallZip(t, api, "weather", data)
 		require.Equal(t, http.StatusOK, w.Code, "setup: install must succeed, body: %s", w.Body.String())
 		w = getPermissions(t, api, routes)
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())

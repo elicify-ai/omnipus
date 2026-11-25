@@ -42,7 +42,13 @@ func TestRestInstall_ExpectationAndLocalConfirmationMatrix(t *testing.T) {
 			api := newTestRestAPIWithClawHub(t, true, "")
 			require.True(t, api.agentLoop.GetConfig().Tools.Skills.Marketplaces[0].Enabled,
 				"the revision/consent matrix needs an enabled marketplace, not its 409 configuration gate")
-			api.skillRegistry = &t9CanonicalInstallRegistry{fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}}
+			// A VERIFIED registry answer (checksum matched, spec C-5/C-13): the matrix is about
+			// the expected revision and the local-changes confirmation, not about trust. Under
+			// the default trust Ask an unverified skill needs the install review and a direct
+			// request answers 409 (C-3, ST-09 d); a verified one is outside that rule (C-3
+			// table: "applies to unverified skills only"), so every row keeps its request
+			// and its expected answer.
+			api.skillRegistry = &t9CanonicalInstallRegistry{fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0", Verified: true}}}
 			root := filepath.Join(api.homePath, "skills")
 			rev := ""
 			if state != "absent" {
