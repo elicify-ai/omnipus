@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/skillperm"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -447,6 +448,22 @@ func (a *restAPI) readPermissionSettings() (gen.PermissionSettings, error) {
 	}
 	for k, v := range stored.SkillVisibility {
 		out.SkillVisibility[k] = gen.ModelVisibility(v)
+	}
+	// C-19 "The notice" (ruling spec-gaps-1): the agents the upgrade has not
+	// finished for, read from the ledger on every request; absent when none.
+	unfinished, err := skillperm.UnfinishedAgents(a.homePath)
+	if err != nil {
+		return gen.PermissionSettings{}, fmt.Errorf("read the skill permissions upgrade ledger: %w", err)
+	}
+	if len(unfinished) > 0 {
+		list := make([]gen.SkillUpgradeUnfinishedAgent, 0, len(unfinished))
+		for _, u := range unfinished {
+			list = append(list, gen.SkillUpgradeUnfinishedAgent{
+				AgentId: u.AgentID,
+				Reason:  gen.SkillUpgradeUnfinishedAgentReason(u.Reason),
+			})
+		}
+		out.UpgradeUnfinished = &list
 	}
 	return out, nil
 }

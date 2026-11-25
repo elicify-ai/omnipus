@@ -789,6 +789,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
 		// read-only window fields the Advanced panel renders.
 		applyAgentContextWindow(&ag, cfg, &ac)
+		a.applyAgentFullSkillsTokens(&ag, ac.ID)
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -856,6 +857,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			applyAgentOverrides(&ag, &cfg.Agents.Defaults, &ac)
 			// ADR-066 D2/D9 — see listAgents.
 			applyAgentContextWindow(&ag, cfg, &ac)
+			a.applyAgentFullSkillsTokens(&ag, ac.ID)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))

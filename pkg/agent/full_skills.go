@@ -26,15 +26,46 @@ import (
 // fullSkillsContext renders the instructions of every Full skill whose
 // outcome for this agent is allowed, in menu order. "" when none.
 func (cb *ContextBuilder) fullSkillsContext(workspaceID string) string {
+	// An unreadable state is logged by skillMenuView and injects nothing
+	// (fail closed).
+	text, _ := cb.renderFullSkills(workspaceID, cb.effectiveProjectShelf(workspaceID))
+	return text
+}
+
+// InstalledFullSkillsTokens is what this agent's next turn would charge for
+// its Full skills among the installed ones (ruling spec-gaps-1, C-14 "Page
+// warning"): the turn's own selection and estimator with no project shelf.
+// The error reports stored skill levels that cannot be read.
+func (cb *ContextBuilder) InstalledFullSkillsTokens() (int, error) {
+	text, err := cb.renderFullSkills("", nil)
+	if err != nil {
+		return 0, err
+	}
+	return fullSkillsTokens(text), nil
+}
+
+// FullSkillBlockTokens is the estimate the turn charges for one skill's Full
+// block ("### Skill: <id>" and its body).
+func FullSkillBlockTokens(id, body string) int {
+	return fullSkillsTokens(fullSkillBlock(id, body))
+}
+
+func fullSkillBlock(id, body string) string {
+	return fmt.Sprintf("### Skill: %s\n\n%s", id, body)
+}
+
+// renderFullSkills renders the Full skills block over the installed skills
+// and the given project shelf. The error reports unreadable stored levels.
+func (cb *ContextBuilder) renderFullSkills(workspaceID string, shelf skills.ProjectShelf) (string, error) {
 	if cb.skillsLoader == nil {
-		return ""
+		return "", nil
 	}
 	view, err := cb.skillMenuView(workspaceID)
 	if err != nil {
-		return "" // logged by skillMenuView; nothing is injected (fail closed)
+		return "", err
 	}
 	all := cb.skillsLoader.ListSkills()
-	eligible, isProject := cb.skillsLoader.MenuCandidates(cb.grantedPredicate(all), cb.effectiveProjectShelf(workspaceID))
+	eligible, isProject := cb.skillsLoader.MenuCandidates(cb.grantedPredicate(all), shelf)
 	var parts []string
 	for _, s := range eligible {
 		if !view.FullInjected(s, isProject[strings.ToLower(s.ID)]) {
@@ -44,17 +75,17 @@ func (cb *ContextBuilder) fullSkillsContext(workspaceID string) string {
 		if !ok {
 			continue // LoadSkillFile logs a file it cannot serve
 		}
-		parts = append(parts, fmt.Sprintf("### Skill: %s\n\n%s", s.ID, body))
+		parts = append(parts, fullSkillBlock(s.ID, body))
 	}
 	if len(parts) == 0 {
-		return ""
+		return "", nil
 	}
 	// The same header the Skill tool's active skills use (no new agent text).
 	return fmt.Sprintf(`# Active Skills
 
 The following skills are active for this request. Follow them when relevant.
 
-%s`, strings.Join(parts, "\n\n---\n\n"))
+%s`, strings.Join(parts, "\n\n---\n\n")), nil
 }
 
 // fullSkillsTokens is the estimated cost of the Full skills block.
