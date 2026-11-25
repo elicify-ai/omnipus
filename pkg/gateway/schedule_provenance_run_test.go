@@ -25,6 +25,11 @@ func TestScheduleProvenance_RunUsesTheStoredProvenance(t *testing.T) {
 	}{
 		{"agent_created_from_telegram_runs_as_connector_telegram", []string{string(telegram)}, "", bus.NewProvenance(telegram)},
 		{"person_created_runs_as_independent", []string{string(bus.OriginIndependent)}, "alice", bus.NewProvenance(bus.OriginIndependent)},
+		// Legacy partitions (ruling "S-111 writers"): a job stored before
+		// provenance existed. A person-created one (CreatedBy set) runs as
+		// independent; one with no creator stays unresolved (fail closed).
+		{"legacy_person_created_without_provenance_runs_as_independent", nil, "alice", bus.NewProvenance(bus.OriginIndependent)},
+		{"legacy_unattributed_without_provenance_stays_unresolved", nil, "", bus.UnresolvedProvenance()},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			x := newProgramsTaskFixture(t)
