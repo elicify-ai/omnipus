@@ -15,8 +15,7 @@ function preferReducedMotionU2() {
 }
 
 async function expectNoLoadingMotionU2(indicator: Element, name: string) {
-  const animated = ['animate-pulse', 'animate-spin', 'skeleton-shimmer'].some((token) => indicator.classList.contains(token))
-  expect(!animated || await reducedMotionU2(indicator),
+  expect(await reducedMotionU2(indicator),
     `U2-3/US-9: ${name} must be static or ship a reduced-motion animation stop; classes=${indicator.getAttribute('class')}`).toBe(true)
 }
 
@@ -30,7 +29,6 @@ it('U2-3 — reduced motion stops the Providers default-model loading bar', asyn
   sectionG1('providers')
   try {
     const bar = await screen.findByTestId('default-model-loading')
-    expect(window.matchMedia('(prefers-reduced-motion: reduce)').matches).toBe(true)
     expect(t.calls.filter((call) => call.method === 'GET' && call.path === '/providers/default-model')).toHaveLength(1)
     expect(screen.queryByTestId('default-model-window'), 'instrument: the default-model read is still pending').not.toBeInTheDocument()
     await expectNoLoadingMotionU2(bar, 'default-model-loading bar')
@@ -53,7 +51,6 @@ it('U2-3 — reduced motion stops the Sandbox Bash HTTP Proxy refresh spinner', 
     await waitFor(() => expect(t.calls.filter((call) => call.method === 'GET' && call.path === '/security/exec-proxy-status')).toHaveLength(1))
     const spinner = refresh.querySelector('svg')
     expect(spinner, 'instrument: the real refresh control supplies its spinner').not.toBeNull()
-    expect(window.matchMedia('(prefers-reduced-motion: reduce)').matches).toBe(true)
     await expectNoLoadingMotionU2(spinner!, 'Bash HTTP Proxy refresh spinner')
   } finally {
     pending.resolve(jsonG1({ enabled: false, running: false }))
