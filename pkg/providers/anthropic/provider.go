@@ -696,6 +696,16 @@ func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
 	content := []anthropic.ToolResultBlockParamContentUnion{{OfText: &anthropic.TextBlockParam{Text: msg.Content}}}
 	unsupported, unsupportedFormat, malformed := 0, 0, 0
 	for _, dataURL := range msg.Media {
+		if protocoltypes.IsPDFDataURL(dataURL) {
+			// FR-18: a tool PDF travels as a document inside its tool_result,
+			// in media order; malformed data is a visible note.
+			if doc := anthropicPDFDocument(dataURL); doc != nil {
+				content = append(content, anthropic.ToolResultBlockParamContentUnion{OfDocument: doc})
+			} else {
+				content = append(content, anthropic.ToolResultBlockParamContentUnion{OfText: &anthropic.TextBlockParam{Text: protocoltypes.PDFMalformedNote}})
+			}
+			continue
+		}
 		if !strings.HasPrefix(dataURL, "data:image/") {
 			unsupported++
 			continue

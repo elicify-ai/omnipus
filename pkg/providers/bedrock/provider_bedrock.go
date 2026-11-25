@@ -316,9 +316,43 @@ type systemContentBlock struct {
 type contentBlock struct {
 	Text       *string          `json:"text,omitempty"`
 	Image      *imageBlock      `json:"image,omitempty"`
+	Document   *documentBlock   `json:"document,omitempty"`
 	ToolUse    *toolUseBlock    `json:"toolUse,omitempty"`
 	ToolResult *toolResultBlock `json:"toolResult,omitempty"`
 }
+
+// documentBlock is a Converse document content block (issue #1968,
+// FR-18): a PDF with its exact bytes and a neutral, request-unique name.
+type documentBlock struct {
+	Format string      `json:"format"`
+	Name   string      `json:"name"`
+	Source imageSource `json:"source"`
+}
+
+// documentNamer hands out the neutral names document-1, document-2, … of
+// one request. Converse rejects duplicate document names, and a name taken
+// from the file would be model-visible, user-chosen text.
+type documentNamer struct{ next int }
+
+func (n *documentNamer) name() string {
+	n.next++
+	return fmt.Sprintf("document-%d", n.next)
+}
+
+// bedrockPDFBlock is the Converse form of a PDF data URL: a document block,
+// or the visible malformed-data note (never silence).
+func bedrockPDFBlock(mediaURL string, names *documentNamer) contentBlock {
+	_, data, ok := protocoltypes.DecodePDFDataURL(mediaURL)
+	if !ok {
+		note := protocoltypes.PDFMalformedNote
+		return contentBlock{Text: &note}
+	}
+	return contentBlock{Document: &documentBlock{Format: "pdf", Name: names.name(), Source: imageSource{Bytes: data}}}
+}
+
+// attachedDocumentCaption is the neutral text a caption-less user message
+// carrying a PDF gains: Converse requires a text block beside a document.
+const attachedDocumentCaption = "Attached document."
 
 type imageBlock struct {
 	Format string      `json:"format"`
@@ -403,6 +437,7 @@ func buildConverseRequestFor(messages []Message, tools []ToolDefinition, baseMod
 func convertMessages(messages []Message) ([]bedrockMessage, []systemContentBlock) {
 	var converted []bedrockMessage
 	var system []systemContentBlock
+	names := &documentNamer{}
 	for i := 0; i < len(messages); {
 		msg := messages[i]
 		switch {
@@ -412,7 +447,7 @@ func convertMessages(messages []Message) ([]bedrockMessage, []systemContentBlock
 		case isToolResult(msg):
 			blocks := make([]contentBlock, 0, 1)
 			for i < len(messages) && isToolResult(messages[i]) {
-				blocks = append(blocks, makeToolResultBlock(messages[i]))
+				blocks = append(blocks, makeToolResultBlockNamed(messages[i], names))
 				i++
 			}
 			converted = append(converted, bedrockMessage{Role: "user", Content: blocks})
@@ -420,7 +455,7 @@ func convertMessages(messages []Message) ([]bedrockMessage, []systemContentBlock
 			converted = append(converted, bedrockMessage{Role: "assistant", Content: buildAssistantContent(msg)})
 			i++
 		case msg.Role == "user" || msg.Role == "tool":
-			converted = append(converted, bedrockMessage{Role: "user", Content: buildUserContent(msg)})
+			converted = append(converted, bedrockMessage{Role: "user", Content: buildUserContentNamed(msg, names)})
 			i++
 		default:
 			i++
@@ -454,10 +489,16 @@ func isToolResult(msg Message) bool {
 	return (msg.Role == "tool" || msg.Role == "user") && msg.ToolCallID != ""
 }
 
-func makeToolResultBlock(msg Message) contentBlock {
+func makeToolResultBlockNamed(msg Message, names *documentNamer) contentBlock {
 	content := []contentBlock{{Text: stringPointer(msg.Content)}}
 	rejected := map[string]int{}
 	for _, mediaURL := range msg.Media {
+		if protocoltypes.IsPDFDataURL(mediaURL) {
+			// FR-18: a tool PDF travels as a document inside its
+			// toolResult, in media order.
+			content = append(content, bedrockPDFBlock(mediaURL, names))
+			continue
+		}
 		if image, reason := bedrockImageBlock(mediaURL); reason == "" {
 			content = append(content, contentBlock{Image: &image})
 		} else {
@@ -518,11 +559,21 @@ func bedrockImageBlock(mediaURL string) (imageBlock, string) {
 }
 
 func buildUserContent(msg Message) []contentBlock {
-	content := make([]contentBlock, 0, 1+len(msg.Media))
+	return buildUserContentNamed(msg, &documentNamer{})
+}
+
+func buildUserContentNamed(msg Message, names *documentNamer) []contentBlock {
+	content := make([]contentBlock, 0, 2+len(msg.Media))
 	if msg.Content != "" {
 		content = append(content, contentBlock{Text: stringPointer(msg.Content)})
+	} else if hasPDFMedia(msg.Media) {
+		content = append(content, contentBlock{Text: stringPointer(attachedDocumentCaption)})
 	}
 	for _, mediaURL := range msg.Media {
+		if protocoltypes.IsPDFDataURL(mediaURL) {
+			content = append(content, bedrockPDFBlock(mediaURL, names))
+			continue
+		}
 		image, reason := bedrockImageBlock(mediaURL)
 		if reason != "" {
 			logger.WarnCF("bedrock", "skipping user image", map[string]any{"reason": reason})
@@ -534,6 +585,15 @@ func buildUserContent(msg Message) []contentBlock {
 		content = append(content, contentBlock{Text: stringPointer("")})
 	}
 	return content
+}
+
+func hasPDFMedia(media []string) bool {
+	for _, mediaURL := range media {
+		if protocoltypes.IsPDFDataURL(mediaURL) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildAssistantContent(msg Message) []contentBlock {

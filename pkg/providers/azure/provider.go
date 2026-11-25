@@ -96,6 +96,53 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("failed to build Azure request URL: %w", err)
 	}
 
+	jsonData, err := json.Marshal(buildRequestBody(messages, tools, model, options))
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
+	}
+
+	return orc.ParseResponseBody(resp.Body)
+}
+
+// SerializedRequestBytes returns the exact byte length of the Responses
+// body Chat would send for this request (issue #1968, FR-12), marshalled
+// the same way and never sent. This transport does not stream.
+func (p *Provider) SerializedRequestBytes(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	_ bool,
+) (int, error) {
+	jsonData, err := json.Marshal(buildRequestBody(messages, tools, model, options))
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	return len(jsonData), nil
+}
+
+// buildRequestBody is the Responses request Chat sends.
+func buildRequestBody(messages []Message, tools []ToolDefinition, model string, options map[string]any) responses.ResponseNewParams {
 	input, instructions := orc.TranslateMessages(messages)
 
 	requestBody := responses.ResponseNewParams{
@@ -129,33 +176,7 @@ func (p *Provider) Chat(
 	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
 		requestBody.PromptCacheKey = openai.Opt(cacheKey)
 	}
-
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
-
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
-	}
-
-	return orc.ParseResponseBody(resp.Body)
+	return requestBody
 }
 
 // GetDefaultModel returns an empty string as Azure deployments are user-configured.

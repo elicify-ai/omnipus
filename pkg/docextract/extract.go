@@ -22,12 +22,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/elicify-ai/omnipus/pkg/docextract/internal/pdf"
 )
 
 // maxExtractRunes is the maximum number of Unicode code points returned.
@@ -362,7 +360,7 @@ func extractArchive(data []byte, mime, filename string) (string, bool, string) {
 	case "zip":
 		return extractZIPManifest(data)
 	case "tar":
-		return extractTARManifest(data)
+		return extractTARManifest(data, false)
 	case "targz":
 		return extractGZIP(data, true)
 	case "gzip":
@@ -452,7 +450,12 @@ func extractZIPManifest(data []byte) (string, bool, string) {
 	return renderArchiveManifest("zip", entries, count), true, ""
 }
 
-func extractTARManifest(data []byte) (string, bool, string) {
+// extractTARManifest lists a tar archive's entries. cut says data is the
+// first part of a longer archive (a gzip stream cut at its cap): the archive
+// then normally ends inside an entry or header, and that unexpected end
+// closes the listing of the entries read so far instead of failing it; the
+// caller marks the result truncated. Any other error still fails.
+func extractTARManifest(data []byte, cut bool) (string, bool, string) {
 	tr := tar.NewReader(bytes.NewReader(data))
 	entries := make([]archiveManifestEntry, 0, min(maxArchiveEntries, 32))
 	total := 0
@@ -461,6 +464,9 @@ func extractTARManifest(data []byte) (string, bool, string) {
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			break
+		}
+		if cut && total > 0 && errors.Is(err, io.ErrUnexpectedEOF) {
 			break
 		}
 		if err != nil {
@@ -503,25 +509,32 @@ func extractGZIP(data []byte, forceTar bool) (string, bool, string) {
 		raw = raw[:maxDecompressedBytes]
 	}
 	isTar := len(raw) >= 262 && string(raw[257:262]) == "ustar"
+	var text, reason string
+	var ok bool
 	if forceTar || isTar {
-		text, ok, reason := extractTARManifest(raw)
-		if truncated {
-			if !ok {
-				return "[truncated: gzip stream exceeds 25 MiB cap]", true, ""
-			}
-			text += "\n[truncated: gzip stream exceeds 25 MiB cap]"
-		}
-		return text, ok, reason
+		text, ok, reason = extractTARManifest(raw, truncated)
+	} else {
+		text, ok, reason = extractTextBytes(raw)
 	}
+	return withGzipCap(text, ok, reason, truncated)
+}
 
-	text, ok, reason := extractTextBytes(raw)
-	if truncated {
-		if !ok {
-			return "[truncated: gzip stream exceeds 25 MiB cap]", true, ""
+// withGzipCap adds the 25 MiB cap to an extraction of a gzip stream's
+// decompressed bytes. A failed extraction stays a failure, its reason naming
+// the cap when the stream was cut: the cap notice alone must not stand in
+// for text that could not be extracted (gate-8 finding M8-2, inherited code
+// returned it as a successful, empty, truncated result).
+func withGzipCap(text string, ok bool, reason string, truncated bool) (string, bool, string) {
+	if !ok {
+		if truncated {
+			reason += "; gzip stream exceeds 25 MiB cap"
 		}
+		return "", false, reason
+	}
+	if truncated {
 		text += "\n[truncated: gzip stream exceeds 25 MiB cap]"
 	}
-	return text, ok, reason
+	return text, true, ""
 }
 
 func renderArchiveManifest(kind string, entries []archiveManifestEntry, total int) string {
@@ -578,8 +591,15 @@ func truncateName(name string) string {
 
 func extractTextBytes(raw []byte) (string, bool, string) {
 	// Cap to the rune budget's worth of bytes (a rune is at most 4 bytes).
-	if len(raw) > maxExtractRunes*4+1 {
-		raw = raw[:maxExtractRunes*4+1]
+	// The cut moves back to a character boundary, so a valid file is never
+	// judged invalid because the cut split its last character, and it is
+	// remembered: control characters are removed below, so the bytes kept
+	// can hold fewer runes than the cap while the rest of the file is gone
+	// (gate-7 finding SF7-1). Either cut marks the result truncated.
+	rawCut := false
+	if limit := maxExtractRunes*4 + 1; len(raw) > limit {
+		raw = raw[:runeBoundaryCut(raw, limit)]
+		rawCut = true
 	}
 
 	if len(raw) == 0 {
@@ -592,7 +612,7 @@ func extractTextBytes(raw []byte) (string, bool, string) {
 
 	s := filterControlCharacters(string(raw))
 	runes := []rune(s)
-	truncated := false
+	truncated := rawCut
 	if len(runes) > maxExtractRunes {
 		runes = runes[:maxExtractRunes]
 		truncated = true
@@ -604,124 +624,99 @@ func extractTextBytes(raw []byte) (string, bool, string) {
 	return result, true, ""
 }
 
-// extractPDF reads text from a PDF using ledongthuc/pdf (pure Go, no CGo).
-// It reads from r (size bytes) so the same core serves both the path-based
-// Extract and the in-memory ExtractBytes without re-opening a file.
+// runeBoundaryCut returns where to cut b, at most limit bytes long (limit <
+// len(b)), so the cut does not split a UTF-8 character: it moves back over
+// at most utf8.UTFMax-1 continuation bytes. When no character start is that
+// close, b is not valid UTF-8 there; the cut stays at limit and the bytes
+// kept are judged by the caller's validity check as they are.
+func runeBoundaryCut(b []byte, limit int) int {
+	for cut := limit; cut > limit-utf8.UTFMax && cut > 0; cut-- {
+		if utf8.RuneStart(b[cut]) {
+			return cut
+		}
+	}
+	return limit
+}
+
+// extractPDF reads text from a PDF using the bounded vendored reader in
+// internal/pdf (pure Go, no CGo). It reads from r (size bytes) so the same
+// core serves both the path-based Extract and the in-memory ExtractBytes
+// without re-opening a file. Parsing work and text are bounded inside
+// extractPDFParse; the parse runs under the package's shared PDF admission
+// and timeout boundary (runPDFParse), the same one InspectPDF uses.
 func extractPDF(r io.ReaderAt, size int64) (text string, ok bool, reason string) {
-	// A malformed page tree can make the parser loop forever (#1959), and a
-	// deferred recover cannot stop a loop. Run the parse in a goroutine and
-	// wait at most pdfExtractTimeout. A timed-out goroutine cannot be killed,
-	// so at most pdfMaxStuck of them may be spinning at once; beyond that new
-	// extractions are refused immediately instead of piling up.
-	if pdfStuck.Load() >= pdfMaxStuck {
-		return "", false, "pdf extraction unavailable: earlier extractions are still stuck"
-	}
-	timer := time.NewTimer(pdfExtractTimeout)
-	defer timer.Stop()
-	// Reserve a parse slot before starting: slots bound the goroutines in
-	// flight (running or stuck), so a burst of concurrent calls cannot start
-	// more than pdfMaxStuck parses. A caller waits for a slot at most one budget.
-	select {
-	case pdfSlots <- struct{}{}:
-	case <-timer.C:
-		return "", false, "pdf extraction busy: too many extractions are running"
-	}
 	type result struct {
 		text   string
 		ok     bool
 		reason string
 	}
-	var state atomic.Int32 // 0 running, 1 finished in time, 2 abandoned (timed out)
-	done := make(chan result, 1)
-	go func() {
+	res, err := runPDFParse(func() result {
 		t, k, rs := extractPDFParse(r, size)
-		// The slot is released only when the parse really returns.
-		defer func() {
-			select {
-			case <-pdfSlots:
-			default:
-			}
-		}()
-		if !state.CompareAndSwap(0, 1) {
-			// Abandoned earlier: the stuck parse has finally ended.
-			pdfStuck.Add(-1)
-			return
-		}
-		done <- result{t, k, rs}
-	}()
-	// Once a slot is won, the parse gets its own full budget.
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(pdfExtractTimeout)
-	select {
-	case res := <-done:
+		return result{t, k, rs}
+	})
+	switch {
+	case err == nil:
 		return res.text, res.ok, res.reason
-	case <-timer.C:
-		// Count before abandoning so the worker's decrement cannot run first.
-		pdfStuck.Add(1)
-		if state.CompareAndSwap(0, 2) {
-			return "", false, "pdf extraction timed out (the file may be malformed)"
-		}
-		pdfStuck.Add(-1)
-		res := <-done
-		return res.text, res.ok, res.reason
+	case errors.Is(err, errPDFStuckRefusal):
+		return "", false, "pdf extraction unavailable: earlier extractions are still stuck"
+	case errors.Is(err, errPDFSlotWait):
+		return "", false, "pdf extraction busy: too many extractions are running"
+	case errors.Is(err, ErrPDFTimedOut):
+		return "", false, "pdf extraction timed out (the file may be malformed)"
+	default:
+		return "", false, fmt.Sprintf("pdf extraction failed: %v", err)
 	}
 }
 
-// pdfSlots bounds the PDF parses in flight (running or stuck) at pdfMaxStuck.
-var pdfSlots = make(chan struct{}, pdfMaxStuck)
-
-// pdfExtractTimeout bounds one PDF parse; a variable so tests can shorten it.
-var pdfExtractTimeout = 15 * time.Second
-
-// pdfMaxStuck is how many timed-out parses may still be running before
-// further PDF extractions are refused.
-const pdfMaxStuck = 2
-
-// pdfStuck counts timed-out parses whose goroutines have not yet returned.
-var pdfStuck atomic.Int32
-
 // extractPDFParse does the actual parsing; see extractPDF for the guards.
+// Work is bounded by pdfWorkBudget and text by the rune cap below.
 func extractPDFParse(r io.ReaderAt, size int64) (text string, ok bool, reason string) {
 	// The PDF parser indexes into attacker-controlled bytes and can panic on a
 	// malformed file (for example a long run of trailing newlines, #1959). A
 	// parser panic is an extraction failure, never a crash of the caller.
 	defer func() {
 		if p := recover(); p != nil {
-			text, ok, reason = "", false, fmt.Sprintf("pdf parsing failed: %v", p)
+			text, ok = "", false
+			if e, isErr := p.(error); isErr && (isPDFBudgetStop(e) || errors.Is(e, pdf.ErrStructureLimit)) {
+				reason = fmt.Sprintf("pdf exceeds the parser's safety limits: %v", e)
+				return
+			}
+			reason = fmt.Sprintf("pdf parse failed: %v", p)
 		}
 	}()
-	pr, err := pdf.NewReader(r, size)
+	pr, err := pdf.NewReader(r, size, pdf.Limits{Work: pdfWorkBudget, Text: int64(maxExtractRunes*4 + 1)})
 	if err != nil {
 		return "", false, fmt.Sprintf("pdf open failed: %v", err)
 	}
 
+	// A text-budget stop keeps the text gathered so far, and the stop
+	// itself marks the result truncated: the kept prefix can be far below
+	// the rune cap (security finding SEC2-3), so the rune count alone
+	// cannot tell a complete text from a cut one.
 	plainReader, err := pr.GetPlainText()
-	if err != nil {
+	budgetStop := errors.Is(err, pdf.ErrTextLimit)
+	if err != nil && !budgetStop {
 		return "", false, fmt.Sprintf("pdf text extraction failed: %v", err)
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(plainReader, int64(maxExtractRunes*4+1)))
-	if err != nil {
-		return "", false, fmt.Sprintf("pdf read failed: %v", err)
-	}
-
-	if len(raw) == 0 {
-		return "", false, "pdf contains no extractable text"
+	raw, readErr := io.ReadAll(io.LimitReader(plainReader, int64(maxExtractRunes*4+1)))
+	if readErr != nil {
+		return "", false, fmt.Sprintf("pdf read failed: %v", readErr)
 	}
 
 	s := filterControlCharacters(string(raw))
-	// A PDF with pages but no text (scanned images, an empty page) yields only
-	// whitespace; that is "no extractable text", not an empty success.
 	if strings.TrimSpace(s) == "" {
+		if budgetStop {
+			// The budget ran out before any text: whether the document
+			// has text is unknown, so it is not reported as text-less.
+			return "", false, "pdf exceeds the parser's safety limits before any text"
+		}
+		// Text operators that drew only line breaks or control characters
+		// leave nothing to show: not a success with empty text.
 		return "", false, "pdf contains no extractable text"
 	}
 	runes := []rune(s)
-	truncated := false
+	truncated := budgetStop
 	if len(runes) > maxExtractRunes {
 		runes = runes[:maxExtractRunes]
 		truncated = true
@@ -925,6 +920,7 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	var sb strings.Builder
 	runeCount := 0
 	slideCount := 0
+	var failed entryFailures
 
 	for _, f := range zr.File {
 		// Slide files are at ppt/slides/slide<N>.xml
@@ -941,11 +937,15 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 		}
 		rc, err := f.Open()
 		if err != nil {
+			failed.add(f.Name, err)
 			continue
 		}
-		text, parseErr := parsePptxSlide(budget.reader(rc), maxExtractRunes-runeCount)
+		text, stopped, parseErr := parsePptxSlide(budget.reader(rc), maxExtractRunes-runeCount)
 		rc.Close()
 		if parseErr != nil {
+			if !budget.exceeded {
+				failed.add(f.Name, parseErr)
+			}
 			continue
 		}
 		if text != "" {
@@ -953,9 +953,14 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 			sb.WriteByte('\n')
 			runeCount += len([]rune(text)) + 1
 		}
-		if runeCount >= maxExtractRunes {
+		// Only text actually left out marks the result. Text that exactly
+		// fills the cap is complete; a later slide is still read with no
+		// room (parsePptxSlide clamps the negative allowance to zero) and
+		// reports stopped on its first character, so the marker appears
+		// only when there was more to read (gate-7 Minor, exact fit).
+		if stopped {
 			sb.WriteString("…[truncated]")
-			return sb.String(), true, ""
+			return sb.String() + failed.notice("slide"), true, ""
 		}
 	}
 
@@ -964,7 +969,10 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	}
 	if sb.Len() == 0 {
 		if budget.exceeded {
-			return "", false, "pptx: archive exceeds 25 MiB decompression budget before any slide text could be read"
+			return "", false, "pptx: archive exceeds 25 MiB decompression budget before any slide text could be read" + failed.reason("slide")
+		}
+		if failed.count > 0 {
+			return "", false, "pptx: no slide could be read" + failed.reason("slide")
 		}
 		return "", false, "pptx: no text content found"
 	}
@@ -972,14 +980,19 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	if budget.exceeded {
 		result += "\n[truncated: archive exceeds 25 MiB decompression budget]"
 	}
-	return result, true, ""
+	return result + failed.notice("slide"), true, ""
 }
 
-// parsePptxSlide extracts <a:t> text runs from a single slide XML.
-func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
+// parsePptxSlide extracts <a:t> text runs from a single slide XML. Every
+// rune it writes, paragraph breaks included, is admitted against runeLimit,
+// so 0 <= runeCount <= runeLimit holds throughout. stopped reports that text
+// was left out because the limit was reached; the caller marks the result
+// truncated.
+func parsePptxSlide(r io.Reader, runeLimit int) (text string, stopped bool, err error) {
 	dec := xml.NewDecoder(r)
 	var sb strings.Builder
 	runeCount := 0
+	runeLimit = max(runeLimit, 0)
 
 	for {
 		tok, err := dec.Token()
@@ -987,15 +1000,15 @@ func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
 			break
 		}
 		if err != nil {
-			return sb.String(), err
+			return sb.String(), false, err
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "p" { // a:p — paragraph boundary
-				if runeCount > 0 {
-					sb.WriteByte('\n')
-					runeCount++
-				}
+			// a:p — paragraph boundary. A break with no room left is
+			// dropped; text that follows it then finds no room and stops.
+			if t.Name.Local == "p" && runeCount > 0 && runeCount < runeLimit {
+				sb.WriteByte('\n')
+				runeCount++
 			}
 		case xml.CharData:
 			s := filterControlCharacters(string(t))
@@ -1003,16 +1016,15 @@ func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
 				continue
 			}
 			runes := []rune(s)
-			if runeCount+len(runes) > runeLimit {
-				runes = runes[:runeLimit-runeCount]
-				sb.WriteString(string(runes))
-				return sb.String(), nil
+			if room := runeLimit - runeCount; len(runes) > room {
+				sb.WriteString(string(runes[:room]))
+				return sb.String(), true, nil
 			}
 			sb.WriteString(s)
 			runeCount += len(runes)
 		}
 	}
-	return sb.String(), nil
+	return sb.String(), false, nil
 }
 
 // extractXlsx extracts cell values from an .xlsx file.
@@ -1034,6 +1046,7 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	var sb strings.Builder
 	runeCount := 0
 	sheetCount := 0
+	var failed entryFailures
 
 	for _, f := range zr.File {
 		if !strings.HasPrefix(f.Name, "xl/worksheets/sheet") || !strings.HasSuffix(f.Name, ".xml") {
@@ -1048,11 +1061,15 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 		}
 		rc, err := f.Open()
 		if err != nil {
+			failed.add(f.Name, err)
 			continue
 		}
-		text, parseErr := parseXlsxSheet(budget.reader(rc), sharedStrings, maxExtractRunes-runeCount)
+		text, stopped, parseErr := parseXlsxSheet(budget.reader(rc), sharedStrings, maxExtractRunes-runeCount)
 		rc.Close()
 		if parseErr != nil {
+			if !budget.exceeded {
+				failed.add(f.Name, parseErr)
+			}
 			continue
 		}
 		if text != "" {
@@ -1060,9 +1077,12 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 			sb.WriteByte('\n')
 			runeCount += len([]rune(text)) + 1
 		}
-		if runeCount >= maxExtractRunes {
+		// As in extractPptx: only cell text actually left out marks the
+		// result; a later sheet read with no room reports stopped on its
+		// first cell.
+		if stopped {
 			sb.WriteString("…[truncated]")
-			return sb.String(), true, ""
+			return sb.String() + failed.notice("sheet"), true, ""
 		}
 	}
 
@@ -1071,7 +1091,10 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	}
 	if sb.Len() == 0 {
 		if budget.exceeded {
-			return "", false, "xlsx: archive exceeds 25 MiB decompression budget before any sheet text could be read"
+			return "", false, "xlsx: archive exceeds 25 MiB decompression budget before any sheet text could be read" + failed.reason("sheet")
+		}
+		if failed.count > 0 {
+			return "", false, "xlsx: no sheet could be read" + failed.reason("sheet")
 		}
 		return "", false, "xlsx: no text content found"
 	}
@@ -1079,7 +1102,55 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 	if budget.exceeded {
 		result += "\n[truncated: archive exceeds 25 MiB decompression budget]"
 	}
-	return result, true, ""
+	return result + failed.notice("sheet"), true, ""
+}
+
+// maxFailureDetail bounds the entry name and error text an entry failure
+// carries into a result, so a hostile name or decoder message stays short.
+const maxFailureDetail = 200
+
+// entryFailures records the slides or sheets that could not be opened or
+// parsed (not those cut off by the decompression budget, which has its own
+// notice). The healthy entries are still returned, but the result says
+// that some are missing instead of looking complete (gate-6 finding SF6-3).
+type entryFailures struct {
+	count int
+	first string // "<entry>: <error>" of the first failure, bounded
+}
+
+func (e *entryFailures) add(entry string, err error) {
+	e.count++
+	if e.count == 1 {
+		e.first = clipFailureDetail(entry) + ": " + clipFailureDetail(err.Error())
+	}
+}
+
+// notice is appended to a successful result when entries are missing.
+func (e *entryFailures) notice(kind string) string {
+	if e.count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n[incomplete: %d %s(s) could not be read and are missing; first: %s]", e.count, kind, e.first)
+}
+
+// reason extends a failure reason with the entries that could not be read.
+func (e *entryFailures) reason(kind string) string {
+	if e.count == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%d %s(s) could not be read; first: %s)", e.count, kind, e.first)
+}
+
+func clipFailureDetail(s string) string {
+	s = filterControlCharacters(s)
+	if len(s) <= maxFailureDetail {
+		return s
+	}
+	cut := maxFailureDetail
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // loadXlsxSharedStrings reads the xl/sharedStrings.xml string table from the zip.
@@ -1141,15 +1212,40 @@ func parseSharedStrings(r io.Reader) ([]string, error) {
 	return result, nil
 }
 
-// parseXlsxSheet reads one worksheet XML and returns its cell values as tab-separated rows.
-func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string, error) {
+// sharedStringIndex reads a shared-string cell's index: its decimal digits,
+// ignoring any other character as before. The digits are read only while
+// the value is still a valid index, so a long digit run cannot wrap the
+// integer negative and pass the range check (security finding SEC5-X).
+func sharedStringIndex(cell string, count int) (int, bool) {
+	idx := 0
+	for _, ch := range cell {
+		if ch < '0' || ch > '9' {
+			continue
+		}
+		if idx >= count {
+			return 0, false // more digits only make it larger
+		}
+		idx = idx*10 + int(ch-'0')
+	}
+	return idx, idx < count
+}
+
+// parseXlsxSheet reads one worksheet XML and returns its cell values as
+// tab-separated rows. Every rune it writes, row breaks and tabs included, is
+// admitted against runeLimit, so 0 <= runeCount <= runeLimit holds
+// throughout. stopped reports that cell text was left out because the limit
+// was reached; the caller marks the result truncated.
+func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (text string, stopped bool, err error) {
 	dec := xml.NewDecoder(r)
 	var sb strings.Builder
 	runeCount := 0
+	runeLimit = max(runeLimit, 0)
 	inRow := false
 	inCell := false
 	cellType := ""
-	cellValue := ""
+	// One cell's text can arrive in many character-data chunks; a builder
+	// keeps the joining linear (concatenation copied the prefix each time).
+	var cellValue strings.Builder
 	firstCellInRow := true
 
 	for {
@@ -1158,7 +1254,7 @@ func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string,
 			break
 		}
 		if err != nil {
-			return sb.String(), err
+			return sb.String(), false, err
 		}
 
 		switch t := tok.(type) {
@@ -1171,7 +1267,7 @@ func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string,
 				if inRow {
 					inCell = true
 					cellType = ""
-					cellValue = ""
+					cellValue.Reset()
 					for _, attr := range t.Attr {
 						if attr.Name.Local == "t" {
 							cellType = attr.Value
@@ -1184,35 +1280,37 @@ func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string,
 			switch t.Name.Local {
 			case "row":
 				if inRow {
-					sb.WriteByte('\n')
-					runeCount++
+					// A break with no room left is dropped; a cell that
+					// follows it then finds no room and stops.
+					if runeCount < runeLimit {
+						sb.WriteByte('\n')
+						runeCount++
+					}
 					inRow = false
 				}
 			case "c":
 				if inCell {
 					// Resolve shared string if type is "s"
-					displayVal := cellValue
+					displayVal := cellValue.String()
 					if cellType == "s" && sharedStrings != nil {
-						var idx int
-						for _, ch := range cellValue {
-							if ch >= '0' && ch <= '9' {
-								idx = idx*10 + int(ch-'0')
-							}
-						}
-						if idx < len(sharedStrings) {
+						if idx, ok := sharedStringIndex(displayVal, len(sharedStrings)); ok {
 							displayVal = sharedStrings[idx]
 						}
 					}
 					if displayVal != "" {
 						if !firstCellInRow {
+							// The tab is admitted with the cell it
+							// precedes: no room, no tab and no cell.
+							if runeCount >= runeLimit {
+								return sb.String(), true, nil
+							}
 							sb.WriteByte('\t')
 							runeCount++
 						}
 						runes := []rune(displayVal)
-						if runeCount+len(runes) > runeLimit {
-							runes = runes[:runeLimit-runeCount]
-							sb.WriteString(string(runes))
-							return sb.String(), nil
+						if room := runeLimit - runeCount; len(runes) > room {
+							sb.WriteString(string(runes[:room]))
+							return sb.String(), true, nil
 						}
 						sb.WriteString(displayVal)
 						runeCount += len(runes)
@@ -1224,9 +1322,9 @@ func parseXlsxSheet(r io.Reader, sharedStrings []string, runeLimit int) (string,
 			}
 		case xml.CharData:
 			if inCell {
-				cellValue += filterControlCharacters(string(t))
+				cellValue.WriteString(filterControlCharacters(string(t)))
 			}
 		}
 	}
-	return sb.String(), nil
+	return sb.String(), false, nil
 }

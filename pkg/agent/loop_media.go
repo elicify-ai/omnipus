@@ -57,6 +57,25 @@ func resolveMediaRefsWithOffload(
 	rc workspaceRefcounter,
 	callerWorkspace string,
 ) []providers.Message {
+	return resolveMediaRefsForTurn(messages, store, maxSize, provider, model, sink, cat, rc, callerWorkspace, nil)
+}
+
+// resolveMediaRefsForTurn is resolveMediaRefsWithOffload with the turn's
+// chat PDF registry (issue #1968 FR-15): a PDF within max_media_size becomes
+// a data URL whose file name pdfs records for the per-attempt presenter,
+// which alone decides native or text. A nil registry names such PDFs with
+// the fallback name.
+func resolveMediaRefsForTurn(
+	messages []providers.Message,
+	store media.MediaStore,
+	maxSize int,
+	provider, model string,
+	sink *offloadSink,
+	cat *catalog.Catalog,
+	rc workspaceRefcounter,
+	callerWorkspace string,
+	pdfs *chatPDFRegistry,
+) []providers.Message {
 	if store == nil {
 		return messages
 	}
@@ -183,35 +202,18 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: route to native document blocks for capable models, else
-			// extract text. When the capability catalog says the model lacks
-			// the pdf modality (step-1 gate), skip native send and route to
-			// step-5 offload with document-class guidance, falling back to
-			// step-6 text extraction (FR-022) and step-7 honest marker.
+			// PDF (issue #1968 FR-15): resolution no longer decides native
+			// versus text. A PDF within max_media_size is encoded for the
+			// per-attempt presenter (pdf_present.go), which decides per
+			// provider attempt from the catalogue row; a larger one is shown
+			// as text with L1.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(cat, provider, model) && pdfCapableModel(model) {
-					dataURL := encodePDFToDataURL(localPath, info, maxSize)
-					if dataURL != "" {
-						resolved = append(resolved, dataURL)
-					} else {
-						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-						contentInjections = append(contentInjections, inj)
-					}
-				} else if !modelSupportsPDF(cat, provider, model) {
-					// Step-1 gate: text-only model + PDF → offload with
-					// document-class guidance + text extraction (step 5 + 6).
-					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj+textInj)
-					} else {
-						contentInjections = append(contentInjections, textInj)
-					}
-				} else {
-					// Model not in the PDF-capable allow-list but capability
-					// gate passed (or catalog is nil/text-only model wasn't
-					// recognized) — extract text (step 6).
-					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					contentInjections = append(contentInjections, inj)
+				dataURL, injection := encodeChatPDF(localPath, mime, meta.Filename, info.Size(), maxSize, pdfs)
+				if dataURL != "" {
+					resolved = append(resolved, dataURL)
+				}
+				if injection != "" {
+					contentInjections = append(contentInjections, injection)
 				}
 				continue
 			}
@@ -331,70 +333,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 	return "\n\n[user uploaded: " + workPath + "]"
 }
 
-// pdfCapableModel returns true for models known to support native PDF document
-// blocks (base64 application/pdf content). Any model that returns false gets the
-// text-extraction fallback, which works for every model.
-//
-// The allow-list is deliberately CONSERVATIVE. The failure modes are asymmetric:
-// a false negative merely sends extracted text (slightly less rich, but always
-// works), whereas a false positive sends a native PDF block to a model whose
-// upstream provider rejects it with a hard HTTP 400 — which aborts the whole
-// turn with an empty reply. When in doubt, prefer text.
-//
-// Known exclusions (matched first, before the allow-list):
-//
-//   - Claude *Haiku* — OpenRouter routes Haiku via Amazon Bedrock, which returns
-//     "'claude-3-5-haiku-...' does not support PDF input." (verified 2026-06-01).
-//     Only Claude Sonnet/Opus (3.5+) and Claude 4 reliably accept PDF.
-//
-// Allow-list substrings (case-insensitive, matched against the full model id):
-//
-//	Anthropic: claude-3.5-sonnet / claude-3-7-sonnet / sonnet-4 / opus-4 / claude-4
-//	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
-//	Google:    gemini-1.5, gemini-2
-func pdfCapableModel(model string) bool {
-	lower := strings.ToLower(model)
-
-	// Exclusions take precedence: these match an allow-list substring but their
-	// upstream provider rejects PDF input, so they MUST fall back to text.
-	for _, deny := range []string{"haiku"} {
-		if strings.Contains(lower, deny) {
-			return false
-		}
-	}
-
-	capableSubstrings := []string{
-		// Anthropic — only Sonnet/Opus 3.5+ and Claude 4 accept PDF. Bare
-		// "claude-3" is intentionally NOT listed (it matched Haiku and the
-		// original Claude 3 models that lack PDF support).
-		"claude-3.5-sonnet", "claude-3-5-sonnet",
-		"claude-3.7-sonnet", "claude-3-7-sonnet",
-		"claude-sonnet-4", "claude-opus-4", "claude-4",
-		"sonnet-4", "opus-4",
-		// OpenAI GPT-4o and 4.1 family
-		"gpt-4o",
-		"gpt-4.1",
-		"openai/gpt-4o",
-		"openai/gpt-4.1",
-		// OpenAI o1/o3 reasoning models
-		"o1-",
-		"o3-",
-		"openai/o1",
-		"openai/o3",
-		// Google Gemini 1.5+
-		"gemini-1.5",
-		"gemini-2",
-		"google/gemini-1.5",
-		"google/gemini-2",
-	}
-	for _, sub := range capableSubstrings {
-		if strings.Contains(lower, sub) {
-			return true
-		}
-	}
-	return false
-}
-
 // downgradePDFMediaToText converts any native PDF data URL in each message's
 // Media array back into extracted text injected into Content. It is the recovery
 // path for providers that reject native PDF blocks at request time: text input
@@ -462,48 +400,6 @@ func isPDF(mime, filename string) bool {
 		return true
 	}
 	return strings.HasSuffix(strings.ToLower(filename), ".pdf")
-}
-
-// encodePDFToDataURL base64-encodes a PDF file as a data:application/pdf;base64,…
-// data URL for native document blocks. Returns empty string if the file exceeds
-// maxSize or cannot be read.
-func encodePDFToDataURL(localPath string, info os.FileInfo, maxSize int) string {
-	if info.Size() > int64(maxSize) {
-		logger.WarnCF("agent", "PDF file too large for native block, falling back to text extraction", map[string]any{
-			"path":     localPath,
-			"size":     info.Size(),
-			"max_size": maxSize,
-		})
-		return ""
-	}
-
-	f, err := os.Open(localPath)
-	if err != nil {
-		logger.WarnCF("agent", "Failed to open PDF file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
-		})
-		return ""
-	}
-	defer f.Close()
-
-	prefix := "data:application/pdf;base64,"
-	encodedLen := base64.StdEncoding.EncodedLen(int(info.Size()))
-	var buf bytes.Buffer
-	buf.Grow(len(prefix) + encodedLen)
-	buf.WriteString(prefix)
-
-	encoder := base64.NewEncoder(base64.StdEncoding, &buf)
-	if _, err := io.Copy(encoder, f); err != nil {
-		logger.WarnCF("agent", "Failed to encode PDF file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
-		})
-		return ""
-	}
-	encoder.Close()
-
-	return buf.String()
 }
 
 // buildDocumentInjection extracts text from a document file and returns a

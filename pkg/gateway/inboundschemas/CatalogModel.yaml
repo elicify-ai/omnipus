@@ -108,6 +108,10 @@ properties:
       SPA renders "No context length" with a link to Settings → Models →
       Model overrides. Never a Provider.status value.
     example: false
+  # Optional model-row PDF limits (issue #1968); fields it states override the
+  # provider row and the catalogue default row.
+  document_limits:
+    $ref: './CatalogDocumentLimits.yaml'
   reasoning:
     $ref: './CatalogModelReasoning.yaml'
     description: >

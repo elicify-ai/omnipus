@@ -114,7 +114,11 @@ type Document struct {
 	UpdatedAt           time.Time
 	Source              string
 	DefaultResizeLimits ResizeLimits
-	Providers           []Provider
+	// DefaultDocumentLimits is the catalogue's default row of PDF limits
+	// (default_document_limits, issue #1968); the zero value when the
+	// document carries none.
+	DefaultDocumentLimits DocumentLimits
+	Providers             []Provider
 	// SkippedProviders records provider rows ParseDocument left out of an
 	// otherwise-successfully-parsed document because they named a protocol
 	// outside this build's closed vocabulary (parseProtocol) — forward
@@ -204,7 +208,10 @@ type Provider struct {
 	// such picker.
 	Regions      []ProviderRegion
 	ResizeLimits ResizeLimits
-	Models       []Model
+	// DocumentLimits is the provider row's own document_limits as
+	// published (issue #1968); the zero value when the row carries none.
+	DocumentLimits DocumentLimits
+	Models         []Model
 }
 
 // Model is one model row under a provider.
@@ -238,6 +245,9 @@ type Model struct {
 	// model reasons but publishes no control Omnipus can send (for example
 	// a budget-only row); budget metadata itself is never kept.
 	Reasoning *ModelReasoning
+	// DocumentLimits is the model row's own document_limits as published
+	// (issue #1968); the zero value when the row carries none.
+	DocumentLimits DocumentLimits
 }
 
 // ModelReasoning is a model's published reasoning controls: the effort

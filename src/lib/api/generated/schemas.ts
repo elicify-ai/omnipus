@@ -2102,6 +2102,7 @@ type ProvidersCatalog = {
   updated_at: string;
   source: string;
   default_resize_limits: CatalogResizeLimits;
+  default_document_limits?: CatalogDocumentLimits | undefined;
   providers: Array<CatalogProvider>;
   served_from: "embedded" | "pulled";
   stale: boolean;
@@ -2111,6 +2112,16 @@ type CatalogResizeLimits = {
   max_bytes: number;
   max_patches?: number | undefined;
 };
+type CatalogDocumentLimits = Partial<{
+  inline_pdf: boolean;
+  max_file_bytes: number;
+  max_total_file_bytes: number;
+  max_request_bytes: number;
+  max_pages_per_file: number;
+  max_pages_per_request: number;
+  max_documents_per_message: number;
+  max_documents_per_request: number;
+}>;
 type CatalogProvider = {
   id: string;
   name: string;
@@ -2132,6 +2143,7 @@ type CatalogProvider = {
   aliases: Array<string>;
   locality: "local" | "cloud";
   resize_limits?: CatalogResizeLimits | undefined;
+  document_limits?: CatalogDocumentLimits | undefined;
   models: Array<CatalogModel>;
 };
 type CatalogProtocol = {
@@ -2157,6 +2169,7 @@ type CatalogModel = {
     | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
+  document_limits?: CatalogDocumentLimits | undefined;
   reasoning?: CatalogModelReasoning | undefined;
 };
 type CatalogModelReasoning = {
@@ -5984,6 +5997,18 @@ export const CatalogResizeLimits: z.ZodType<CatalogResizeLimits> = z.object({
   max_bytes: z.number().int().gte(1),
   max_patches: z.number().int().gte(1).optional(),
 });
+export const CatalogDocumentLimits: z.ZodType<CatalogDocumentLimits> = z
+  .object({
+    inline_pdf: z.boolean(),
+    max_file_bytes: z.number().int().gte(0),
+    max_total_file_bytes: z.number().int().gte(0),
+    max_request_bytes: z.number().int().gte(0),
+    max_pages_per_file: z.number().int().gte(0),
+    max_pages_per_request: z.number().int().gte(0),
+    max_documents_per_message: z.number().int().gte(0),
+    max_documents_per_request: z.number().int().gte(0),
+  })
+  .partial();
 export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
   protocol: z.enum([
     "openai-compatible",
@@ -6020,6 +6045,7 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
     .optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
+  document_limits: CatalogDocumentLimits.optional(),
   reasoning: CatalogModelReasoning.optional(),
 });
 export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
@@ -6043,6 +6069,7 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   aliases: z.array(z.string()),
   locality: z.enum(["local", "cloud"]),
   resize_limits: CatalogResizeLimits.optional(),
+  document_limits: CatalogDocumentLimits.optional(),
   models: z.array(CatalogModel),
 });
 export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
@@ -6051,6 +6078,7 @@ export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
   updated_at: z.string().datetime({ offset: true }),
   source: z.string().min(1),
   default_resize_limits: CatalogResizeLimits,
+  default_document_limits: CatalogDocumentLimits.optional(),
   providers: z.array(CatalogProvider).min(1),
   served_from: z.enum(["embedded", "pulled"]),
   stale: z.boolean(),
@@ -19684,7 +19712,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "model_list_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -19701,7 +19729,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "model_list_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),

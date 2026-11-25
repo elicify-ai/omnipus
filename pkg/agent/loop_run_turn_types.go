@@ -59,12 +59,33 @@ type agentLoopRunTurn struct {
 	// methods.
 	providerCallStreamedBytes atomic.Int64
 	// providerCallAttachCache scopes ONE provider round (one callProviderOnce):
-	// candidate key → the messages with this candidate's inspection media
-	// attached. §7.4's in-place retries re-invoke the run closure for the SAME
-	// candidate — the retry must re-send the same request, so the attach (and
-	// its per-call Reauthorize) runs once per candidate, not once per call.
+	// candidate key → the messages with this candidate's inspection IMAGES
+	// attached and fitted. §7.4's in-place retries re-invoke the run closure
+	// for the SAME candidate — the retry must re-send the same request, so
+	// the image attach (and its per-call Reauthorize) runs once per
+	// candidate, not once per call. PDFs are deliberately NOT cached: their
+	// presentation, including each tool PDF's access recheck, runs on every
+	// call (issue #1968 FR-10/FR-13, security finding F2).
 	// Reset on every callProviderOnce entry: a new round attaches fresh.
 	providerCallAttachCache map[string][]providers.Message
+	// inspectionPDFs holds the turn-private PDF items read_file and
+	// library_read returned, keyed by tool call id (issue #1968 FR-7/FR-14).
+	// The bytes never leave this map except in an attempt's request copy.
+	inspectionPDFs map[string][]tools.InspectionPDF
+	// chatPDFs names the chat PDFs this turn's media resolution encoded, for
+	// the per-attempt presenter (FR-15). Created on first resolution.
+	chatPDFs *chatPDFRegistry
+	// pdfAttempts records every provider attempt of the current round with
+	// whether it sent a native PDF and how it ended (FR-16). Reset at the
+	// start of each callProviderOnce.
+	pdfAttempts []pdfAttemptRecord
+}
+
+// attemptPresentation is one candidate's prepared request copy within a
+// provider round.
+type attemptPresentation struct {
+	messages []providers.Message
+	sentPDF  bool
 }
 
 // agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.

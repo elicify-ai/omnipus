@@ -4028,6 +4028,12 @@ components:
             no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
           neutral_variants:
             no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+        model_list_unavailable:
+          # Issue #1968 FR-3: no catalogue document is loaded and the request holds a
+          # PDF, so the turn ends before any provider call (message C1).
+          message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
+          attribution: product
+          provider_message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -4080,6 +4086,7 @@ components:
             - goal_state_unavailable
             - external_cli_not_found
             - external_cli_invalid_config
+            - model_list_unavailable
             - unknown
         message:
           type: string
@@ -4396,6 +4403,12 @@ components:
             no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
           neutral_variants:
             no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+        model_list_unavailable:
+          # Issue #1968 FR-3: no catalogue document is loaded and the request holds a
+          # PDF, so the turn ends before any provider call (message C1).
+          message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
+          attribution: product
+          provider_message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -4448,6 +4461,7 @@ components:
             - goal_state_unavailable
             - external_cli_not_found
             - external_cli_invalid_config
+            - model_list_unavailable
             - unknown
         message:
           type: string

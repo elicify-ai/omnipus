@@ -15,6 +15,9 @@ type Handle struct {
 	p        *Provider // nil when the provider id is unknown
 	m        *Model    // nil on a miss
 	budget   ResizeLimits
+	// defLimits points at the served document's default_document_limits
+	// (issue #1968); nil when no document is loaded.
+	defLimits *DocumentLimits
 }
 
 // Found reports whether the exact (provider, model) pair exists.

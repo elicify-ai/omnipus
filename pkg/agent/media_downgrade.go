@@ -150,9 +150,11 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 // via imageRetryDone, each exactly once per turn. Returns the
 // MediaClass that was stripped (MediaClassPDF or MediaClassImage) or
 // MediaClassNone when both guards are already set or no strippable
-// block was found.
+// block was found. In a loop turn (ts.pdfRecoveryByAttempt) the PDF
+// branch is skipped: PDF recovery there is attributed per provider
+// attempt by tryPDFTextFallback (issue #1968 FR-16).
 func (ts *turnState) applyMediaDowngrade(callMessages []providers.Message) (MediaDowngradeResult, MediaClass) {
-	if !ts.mediaRetryDone.Load() {
+	if !ts.mediaRetryDone.Load() && !ts.pdfRecoveryByAttempt.Load() {
 		if downgradePDFMediaToText(callMessages) {
 			ts.mediaRetryDone.Store(true)
 			slog.Debug("media_downgrade: downgraded PDF block to extracted text (per-turn retry)",

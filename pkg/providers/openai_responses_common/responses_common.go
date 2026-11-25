@@ -88,8 +88,17 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 			if len(msg.Media) > 0 {
 				items := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: msg.Content}}}
 				for _, mediaURL := range msg.Media {
-					if strings.HasPrefix(mediaURL, "data:image/") {
+					switch {
+					case strings.HasPrefix(mediaURL, "data:image/"):
 						items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.Opt(mediaURL), Detail: responses.ResponseInputImageContentDetailAuto}})
+					case protocoltypes.IsPDFDataURL(mediaURL):
+						// FR-18: a tool PDF travels as an input_file inside
+						// its function_call_output; malformed data is a note.
+						if _, _, ok := protocoltypes.DecodePDFDataURL(mediaURL); ok {
+							items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{FileData: openai.Opt(mediaURL), Filename: openai.Opt(pdfFilename)}})
+						} else {
+							items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: protocoltypes.PDFMalformedNote}})
+						}
 					}
 				}
 				output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: items}
@@ -105,6 +114,10 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 
 	return input, instructions
 }
+
+// pdfFilename names a native PDF input_file part; the Responses API
+// requires a filename beside file_data.
+const pdfFilename = "attachment.pdf"
 
 // BuildMultipartContent constructs a ResponseInputMessageContentListParam from
 // text content and media URLs (data:image/... and data:audio/... URIs).
@@ -127,6 +140,21 @@ func BuildMultipartContent(text string, media []string) responses.ResponseInputM
 					Detail:   responses.ResponseInputImageDetailAuto,
 				},
 			})
+		} else if protocoltypes.IsPDFDataURL(mediaURL) {
+			// FR-18: a user PDF travels as an input_file with the full data
+			// URL in file_data; malformed data is a visible note.
+			if _, _, ok := protocoltypes.DecodePDFDataURL(mediaURL); ok {
+				parts = append(parts, responses.ResponseInputContentUnionParam{
+					OfInputFile: &responses.ResponseInputFileParam{
+						FileData: openai.Opt(mediaURL),
+						Filename: openai.Opt(pdfFilename),
+					},
+				})
+			} else {
+				parts = append(parts, responses.ResponseInputContentUnionParam{
+					OfInputText: &responses.ResponseInputTextParam{Text: protocoltypes.PDFMalformedNote},
+				})
+			}
 		} else if strings.HasPrefix(mediaURL, "data:audio/") {
 			if format, data, ok := ParseDataAudioURL(mediaURL); ok {
 				parts = append(parts, responses.ResponseInputContentUnionParam{

@@ -6,7 +6,8 @@
 //   - Bijection (C-3/C-4): the codes carrying a provider_message variant
 //     are exactly the spec §6 templated set — provider_auth_failed,
 //     rate_limited, quota_billing, model_retired plus #1340's bad_model,
-//     provider_request_rejected and model_route_unavailable — both directions.
+//     provider_request_rejected and model_route_unavailable, plus #1968's
+//     model_list_unavailable (notice C1) — both directions.
 //   - Closed-slot token check: every template's slots come from the explicit
 //     contract vocabulary, including {model} for the failing attempt.
 //
@@ -23,10 +24,16 @@ import (
 
 // pmTemplatedCodes is the spec §6 templated set — the codes whose
 // x-user-messages catalogue entry carries a provider_message variant.
-var pmTemplatedCodes = []string{"provider_auth_failed", "rate_limited", "quota_billing", "model_retired", "bad_model", "provider_request_rejected", "model_route_unavailable"}
+var pmTemplatedCodes = []string{"provider_auth_failed", "rate_limited", "quota_billing", "model_retired", "bad_model", "provider_request_rejected", "model_route_unavailable", "model_list_unavailable"}
 
 // pmClosedSlots is OBS-002's closed slot vocabulary.
 var pmClosedSlots = map[string]bool{"provider": true, "model": true, "attempt": true, "max": true, "countdown": true, "answered_model": true, "unavailable_model": true}
+
+// pmModelListUnavailable is notice C1 of docs/specs/read-file-native-pdf.md
+// section 5.6 with the contract's {model} slot in place of the spec's <model>.
+// This file is on the explicit spec-wording allowlist of
+// TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue.
+const pmModelListUnavailable = "PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log."
 
 // pmSlotRe extracts {slot} tokens from a template string.
 var pmSlotRe = regexp.MustCompile(`\{([a-z_]+)\}`)
@@ -54,6 +61,11 @@ func TestProviderMessageCatalogue_BijectionAndClosedSlots(t *testing.T) {
 		if !found {
 			t.Errorf("catalogue carries %q — not a spec 6 templated code (C-3/C-4)", code)
 		}
+	}
+
+	// (a2) #1968: the eighth variant is exactly the spec's C1 notice.
+	if got := LLMErrorProviderMessages["model_list_unavailable"]; got != pmModelListUnavailable {
+		t.Errorf("model_list_unavailable provider message:\n got %q\nwant %q (spec C1)", got, pmModelListUnavailable)
 	}
 
 	// (b) Closed-slot token check (OBS-002).

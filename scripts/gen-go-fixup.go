@@ -321,6 +321,8 @@ var namedTypeRules = []namedTypeRule{
 	{name: "catalog_protocol", field: "Protocols", jsonTag: "protocols", named: "CatalogProtocol"},
 	{name: "catalog_resize_limits", field: "ResizeLimits", jsonTag: "resize_limits", named: "CatalogResizeLimits"},
 	{name: "catalog_default_resize_limits", field: "DefaultResizeLimits", jsonTag: "default_resize_limits", named: "CatalogResizeLimits"},
+	{name: "catalog_document_limits", field: "DocumentLimits", jsonTag: "document_limits", named: "CatalogDocumentLimits", mustContain: "MaxFileBytes"},
+	{name: "catalog_default_document_limits", field: "DefaultDocumentLimits", jsonTag: "default_document_limits", named: "CatalogDocumentLimits", mustContain: "MaxFileBytes"},
 	{name: "catalog_provider", field: "Providers", jsonTag: "providers", named: "CatalogProvider", mustContain: "AuthMethods"},
 	{name: "entitlement_model", field: "Models", jsonTag: "models", named: "EntitlementModel", mustContain: "Entitled bool"},
 	{name: "provider_dependent", field: "Dependents", jsonTag: "dependents", named: "ProviderDependent"},

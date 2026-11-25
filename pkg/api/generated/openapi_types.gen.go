@@ -16274,6 +16274,33 @@ type BrowserInspectResponse struct {
 	Text *string `json:"text,omitempty"`
 }
 
+// CatalogDocumentLimits Inline-route PDF limits of a catalogue row (issue #1968). Every field is optional and resolved per field: the model row's document_limits, then the provider row's, then the catalogue's default_document_limits; a field that no level states means no client-side limit. Integer fields are inclusive (a value equal to the limit is allowed); 0 states "no limit" explicitly and stops the cascade. Byte values are bytes (1 MB = 1,000,000; 1 MiB = 1,048,576, as each provider states). Limits are catalogue data only; the engine holds no limit value of its own.
+type CatalogDocumentLimits struct {
+	// InlinePDF False when the provider has no inline PDF route, so PDFs are sent as extracted text. Absent at every level means true.
+	InlinePDF *bool `json:"inline_pdf,omitempty"`
+
+	// MaxDocumentsPerMessage Maximum number of PDFs in one wire message.
+	MaxDocumentsPerMessage *int `json:"max_documents_per_message,omitempty"`
+
+	// MaxDocumentsPerRequest Maximum number of PDFs in one request.
+	MaxDocumentsPerRequest *int `json:"max_documents_per_request,omitempty"`
+
+	// MaxFileBytes Maximum decoded size of one PDF in bytes.
+	MaxFileBytes *int `json:"max_file_bytes,omitempty"`
+
+	// MaxPagesPerFile Maximum page count of one PDF.
+	MaxPagesPerFile *int `json:"max_pages_per_file,omitempty"`
+
+	// MaxPagesPerRequest Maximum page count of all PDFs of one request.
+	MaxPagesPerRequest *int `json:"max_pages_per_request,omitempty"`
+
+	// MaxRequestBytes Maximum size of the whole serialized request body in bytes (content, encoded media, tool definitions and JSON).
+	MaxRequestBytes *int `json:"max_request_bytes,omitempty"`
+
+	// MaxTotalFileBytes Maximum decoded size of all PDFs of one request in bytes.
+	MaxTotalFileBytes *int `json:"max_total_file_bytes,omitempty"`
+}
+
 // CatalogModel One model of a catalog provider (ADR-067 schema 2.0.0). Looked up by the exact (provider id, model id) pair — never by model id alone and never with prefix stripping. Limits are authored upstream; a 0 means unknown and is reported as such to consumers (ADR-066's ladder decides what to do). window_source and window_unknown are ADR-066-owned projection fields added by the gateway when it serves the document (X-08); they are never part of the published asset.
 type CatalogModel struct {
 	// ContextWindow Context window in tokens; 0 = unknown.
@@ -16281,6 +16308,9 @@ type CatalogModel struct {
 
 	// Disputed True when the two upstream registries disagreed on a numeric field beyond the tolerance and the last-known-good value was published (ADR-067 US-2.AC2). Informational.
 	Disputed *bool `json:"disputed,omitempty"`
+
+	// DocumentLimits Inline-route PDF limits of a catalogue row (issue #1968). Every field is optional and resolved per field: the model row's document_limits, then the provider row's, then the catalogue's default_document_limits; a field that no level states means no client-side limit. Integer fields are inclusive (a value equal to the limit is allowed); 0 states "no limit" explicitly and stops the cascade. Byte values are bytes (1 MB = 1,000,000; 1 MiB = 1,048,576, as each provider states). Limits are catalogue data only; the engine holds no limit value of its own.
+	DocumentLimits *CatalogDocumentLimits `json:"document_limits,omitempty"`
 
 	// Id Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
 	Id string `json:"id"`
@@ -16366,6 +16396,9 @@ type CatalogProvider struct {
 
 	// Company Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
 	Company string `json:"company"`
+
+	// DocumentLimits Inline-route PDF limits of a catalogue row (issue #1968). Every field is optional and resolved per field: the model row's document_limits, then the provider row's, then the catalogue's default_document_limits; a field that no level states means no client-side limit. Integer fields are inclusive (a value equal to the limit is allowed); 0 states "no limit" explicitly and stops the cascade. Byte values are bytes (1 MB = 1,000,000; 1 MiB = 1,048,576, as each provider states). Limits are catalogue data only; the engine holds no limit value of its own.
+	DocumentLimits *CatalogDocumentLimits `json:"document_limits,omitempty"`
 
 	// Env Opaque environment-variable hint for picker help text only; never consumed by the factory (F-20).
 	Env *[]string `json:"env,omitempty"`
@@ -24680,6 +24713,9 @@ type ProviderValidation struct {
 
 // ProvidersCatalog The full registry-fed providers catalog (ADR-067 schema 2.0.0) as served by GET /api/v1/providers/catalog — providers with nested models, tier, protocol(s), unsupported reason and resize limits — plus the gateway's serving envelope: served_from (embedded snapshot or pulled release) and stale (updated_at older than 14 days). The same document feeds the media pipeline, the agent loop's window rung and the validation probe; the SPA consumes only this generated type and re-validates with If-None-Match (strong quoted ETag = SHA-256 of the served bytes) on Settings open and every 15 minutes. The handler's catalog is read-only for windows — any per-model override lives in ContextSettings.model_overrides, never here.
 type ProvidersCatalog struct {
+	// DefaultDocumentLimits Inline-route PDF limits of a catalogue row (issue #1968). Every field is optional and resolved per field: the model row's document_limits, then the provider row's, then the catalogue's default_document_limits; a field that no level states means no client-side limit. Integer fields are inclusive (a value equal to the limit is allowed); 0 states "no limit" explicitly and stops the cascade. Byte values are bytes (1 MB = 1,000,000; 1 MiB = 1,048,576, as each provider states). Limits are catalogue data only; the engine holds no limit value of its own.
+	DefaultDocumentLimits *CatalogDocumentLimits `json:"default_document_limits,omitempty"`
+
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
 	Providers           []CatalogProvider   `json:"providers"`

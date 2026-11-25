@@ -46,6 +46,22 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 		filepath.Join("src", "lib", "api", "generated", "llm-error-messages.ts"): true,
 	}
 
+	// Files that deliberately carry the SPEC wording of ONE message (C1) as an oracle
+	// independent of the generated output (#1968 notice C1, spec
+	// docs/specs/read-file-native-pdf.md section 5.6). Exact repo-relative
+	// paths only, one reason each: no directory, glob or suffix match, so any
+	// other file holding the sentence still fails this test.
+	specWordingOracles := map[string]string{
+		filepath.Join("pkg", "api", "generated", "provider_messages_catalogue_test.go"): "spec C1 wording oracle, independent of generated output",
+		filepath.Join("src", "lib", "llm-error.test.ts"):                                "spec C1 wording oracle, independent of generated output",
+		filepath.Join("src", "store", "chat.llm-error.test.ts"):                         "spec C1 wording oracle, independent of generated output",
+		filepath.Join("src", "store", "chat.pdf-fix5-error.test.ts"):                    "spec C1 wording oracle, independent of generated output",
+	}
+
+	// The one message those files may carry. Any other catalogue sentence in
+	// them still fails.
+	const specWordingOracleCode = "model_list_unavailable"
+
 	// A short prefix is enough to identify a hand-copy and keeps the scan cheap.
 	// Full sentences would also match, but a truncated paste would slip through.
 	needles := make(map[string]string, len(gen.LLMErrorUserMessages))
@@ -79,6 +95,7 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 			if allowed[rel] {
 				return nil
 			}
+			_, isOracleFile := specWordingOracles[rel]
 			// This test file names none of the messages itself, but skip it
 			// anyway so a future edit that quotes one cannot self-trigger.
 			if strings.HasSuffix(rel, "llm_error_no_hardcopy_test.go") {
@@ -90,6 +107,11 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 			}
 			text := string(body)
 			for code, needle := range needles {
+				// An oracle file may carry the C1 sentence and nothing else:
+				// every other catalogue message is still scanned there.
+				if isOracleFile && code == specWordingOracleCode {
+					continue
+				}
 				if strings.Contains(text, needle) {
 					t.Errorf("%s hand-copies the %q message (%q…).\n"+
 						"Read it from the catalogue instead — agent.UserMessageForCode(agent.Code…) in Go, "+

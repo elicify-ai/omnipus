@@ -222,6 +222,7 @@ func (c *Catalog) Resolve(provider, model string) Handle {
 		return h
 	}
 	h.budget = s.doc.DefaultResizeLimits
+	h.defLimits = &s.doc.DefaultDocumentLimits
 	p, ok := s.byProvider[provider]
 	if !ok {
 		return h

@@ -82,7 +82,7 @@ func (p *CodexProvider) Chat(
 ) (*LLMResponse, error) {
 	var opts []option.RequestOption
 	accountID := p.accountID
-	resolvedModel, fallbackReason := resolveCodexModel(model)
+	params, resolvedModel, fallbackReason := p.codexRequestParams(messages, tools, model, options)
 	if fallbackReason != "" {
 		logger.WarnCF(
 			"provider.codex",
@@ -117,10 +117,6 @@ func (p *CodexProvider) Chat(
 		)
 	}
 
-	// Respect tools.web.prefer_native: only inject native search when the agent
-	// loop passes options["native_search"]=true, so prefer_native=false means no injection.
-	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
-	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
 	// ChatGPT derives cache affinity from session-id, not just the body key:
 	// https://github.com/openai/codex/commit/bc5957eac9e89e66f990ed490d11e625a4a3b02c
 	// Reuse the conversation key, never credentials or message content. Keep it
