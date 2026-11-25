@@ -472,30 +472,17 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 		case strings.HasPrefix(a, "--git-dir="):
 			gitDirOverride = a[len("--git-dir="):]
 			i++
-		case a == "--work-tree" || a == "-c" || a == "--namespace" ||
-			a == "--exec-path" || a == "--config-env":
+		case gitGlobalTakesNext(a):
 			// Option that consumes the next token; skip both.
 			i += 2
-		case strings.HasPrefix(a, "--work-tree=") ||
-			strings.HasPrefix(a, "--namespace=") ||
-			strings.HasPrefix(a, "--exec-path=") ||
-			strings.HasPrefix(a, "--config-env="):
-			i++
-		case strings.HasPrefix(a, "-c") && strings.Contains(a, "="):
-			// git's -c accepts the glued short form too: "-c<name>=<value>"
-			// (one token, no space) is a single-token config override per
-			// git(1), as is "-c=<name>=<value>". The bare "-c" (no "=")
-			// consumes the NEXT token and is handled by the case above.
-			i++
-		case a == "-p" || a == "--paginate" || a == "--no-pager" ||
-			a == "--bare" || a == "--no-replace-objects" ||
-			a == "--literal-pathspecs" || a == "--glob-pathspecs" ||
-			a == "--noglob-pathspecs" || a == "--icase-pathspecs" ||
-			a == "--no-optional-locks" || a == "--html-path" ||
-			a == "--version" || a == "--help":
-			i++
 		case strings.HasPrefix(a, "-"):
-			// Unknown global option; skip it (conservative — do not treat as verb).
+			// A one-token global option, skipped: the glued forms
+			// --work-tree=, --namespace=, --exec-path=, --config-env=,
+			// "-c<name>=<value>" and "-c=<name>=<value>" (git(1)'s glued short
+			// form of -c), the flags -p, --paginate, --no-pager, --bare,
+			// --no-replace-objects, the *-pathspecs flags, --no-optional-locks,
+			// --html-path, --version, --help, and any unknown option
+			// (conservative: never treated as the verb).
 			i++
 		default:
 			verb = a
@@ -512,6 +499,16 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 	}
 	// No verb found (e.g. `git --version`) → nothing to gate.
 	return allowExec()
+}
+
+// gitGlobalTakesNext reports a git global option whose value is the next
+// token: --work-tree, the bare -c, --namespace, --exec-path, --config-env.
+func gitGlobalTakesNext(a string) bool {
+	switch a {
+	case "--work-tree", "-c", "--namespace", "--exec-path", "--config-env":
+		return true
+	}
+	return false
 }
 
 // decideGit applies D17 given a resolved verb, its args, the effective cwd, and
