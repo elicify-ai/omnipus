@@ -1,5 +1,3 @@
-//go:build !windows
-
 package gitevidence
 
 // H55 v2 (#1960 S1), finding F6 of the second security review
@@ -14,8 +12,9 @@ package gitevidence
 // Oracles: the review's F6 paragraph and its reproduction (global core.hooksPath,
 // a post-receive hook, a push of HEAD to refs/heads/x); FR-152 (the evidence
 // repository stays as the engine left it). The row does not ask for any particular
-// pin value, only for the behaviour; it needs hooks to run, which is POSIX sh, hence
-// the build constraint (no Go test leg of this package runs on Windows). A control
+// pin value, only for the behaviour. The hooks are POSIX sh scripts that git runs
+// through its own shell, so the row carries no build constraint (the backend's own
+// receivepins_hooks_test.go dropped its Windows skip the same way, round 11). A control
 // pushes the same commit into an ordinary clone under the same global config and the
 // hooks must run there, so "no hook ran" cannot come from broken hooks, a global
 // setting git ignores or a push that never reached a repository.

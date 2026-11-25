@@ -86,7 +86,13 @@ while [ ! -f %q ]; do sleep 0.01; done
 		assert.Equal(t, "connected", final["state"], "S139: late A must not stop B or leave generation2 checking")
 		assert.Equal(t, float64(2), final["generation"])
 		assert.Equal(t, "account-b", final["account_label"])
-		pgAssertOneSupersededAudit(t, f)
+		// A (generation 1) never ran and reports no result; B (generation 2) is the one
+		// finished check (ruling H50, ruling-check-delta item 5).
+		pgAssertSupersededAudit(t, f, pgSupersededWant{
+			results:    []pgResultWant{{generation: 2, revision: f.api.programService().Connection("github").CheckRevision, outcome: "connected", reason: "account_named"}},
+			superseded: []int64{1},
+			unreported: []int64{1},
+		})
 		t.Logf("actual A reserved/paused; actual B started; both launches joined; late_executable_opens=%d final_generation=%v final_state=%v", lateOpens, final["generation"], final["state"])
 	})
 }

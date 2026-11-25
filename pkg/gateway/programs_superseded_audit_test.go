@@ -37,7 +37,14 @@ func TestProgramCheck_ActualSupersededAudit(t *testing.T) {
 		persisted, err := os.ReadFile(filepath.Join(f.api.homePath, "programs", "connections.json"))
 		require.NoError(t, err)
 		require.NotContains(t, string(persisted), "account-a", "S90: A is never stored")
-		pgAssertOneSupersededAudit(t, f)
+		// A (generation 1) is superseded once and reports no result; B (generation 2)
+		// is the one finished check, and its row says connected with the class
+		// account_named (ruling H50, ruling-check-delta item 5).
+		pgAssertSupersededAudit(t, f, pgSupersededWant{
+			results:    []pgResultWant{{generation: 2, revision: f.api.programService().Connection("github").CheckRevision, outcome: "connected", reason: "account_named"}},
+			superseded: []int64{1},
+			unreported: []int64{1},
+		})
 	})
 
 	t.Run("S114_same_generation_reverse_checks_audited_superseded", func(t *testing.T) {
@@ -49,6 +56,7 @@ func TestProgramCheck_ActualSupersededAudit(t *testing.T) {
 		initial := pgConnection(t, pgPollEntryState(t, f, "github", "connected", 5*time.Second))
 		require.Equal(t, float64(1), initial["generation"])
 		require.Equal(t, "octocat", initial["account_label"])
+		initialRevision := f.api.programService().Connection("github").CheckRevision
 		require.NoError(t, os.WriteFile(h.hold, []byte("hold"), 0o600))
 		a := pgProgramsSessionCall(t, f, http.MethodPost, "/api/v1/programs/github/check", `{}`)
 		require.Equal(t, http.StatusAccepted, a.Code)
@@ -69,6 +77,16 @@ func TestProgramCheck_ActualSupersededAudit(t *testing.T) {
 		require.NoError(t, os.WriteFile(h.release, []byte("release"), 0o600))
 		require.Equal(t, 3, f.ghStarted(), "instrument: initial, A and B are actual separate checks")
 		require.Equal(t, final, pgConnection(t, pgProgramEntryByID(t, f, "github")), "S114: stopped A cannot publish over B")
-		pgAssertOneSupersededAudit(t, f)
+		// All three checks are generation 1 here (a re-check never makes a new
+		// generation), so the rows are told apart by outcome: the first check connected,
+		// B was rejected, and the superseded A has no result row. One program.check_superseded
+		// row names A's generation.
+		pgAssertSupersededAudit(t, f, pgSupersededWant{
+			results: []pgResultWant{
+				{generation: 1, revision: initialRevision, outcome: "connected", reason: "account_named"},
+				{generation: 1, revision: f.api.programService().Connection("github").CheckRevision, outcome: "failed", reason: "exit_status"},
+			},
+			superseded: []int64{1},
+		})
 	})
 }
