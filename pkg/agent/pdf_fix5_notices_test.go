@@ -28,7 +28,7 @@ func TestPDFLimitNotice_ReadablePagesPerFile(t *testing.T) {
 			p, err := providers.NewHTTPProviderWithTimeouts("test-placeholder", peer.server.URL, "", "max_tokens", 10, 10, nil)
 			require.NoError(t, err)
 			f := pdfFix5Flow(t, p, "fx/readable", "fx/pdf", nil)
-			f.al.SetCapabilityCatalog(pdf1968Catalog(t, map[string]any{"max_pages_per_file": 100}, []pdf1968ProviderRow{pdf1968CapableRow("fx/readable", "fx/pdf", nil)}))
+			pdf1968SetLimits(t, f.al, map[string]any{"max_pages_per_file": 100}, nil)
 			data := pdf1968TextPDF(t, pages, true)
 			messages := []providers.Message{{Role: "user", Content: "inspect pages", Media: []string{"data:application/pdf;base64," + base64.StdEncoding.EncodeToString(data)}}}
 			_, err = f.rt.callProviderOnce(messages, nil)
@@ -68,7 +68,7 @@ func TestChatPDF_UnsupportedVersionPresentation(t *testing.T) {
 			if !capable {
 				row = pdf1968TextOnlyRow("fx/version", "fx/pdf", nil)
 			}
-			f.al.SetCapabilityCatalog(pdf1968Catalog(t, nil, []pdf1968ProviderRow{row}))
+			f.al.SetCapabilityCatalog(pdf1968Catalog(t, []pdf1968ProviderRow{row}))
 			url := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(data)
 			f.rt.chatPDFs = &chatPDFRegistry{}
 			f.rt.chatPDFs.register(url, "future.pdf")

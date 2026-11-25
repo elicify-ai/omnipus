@@ -300,8 +300,9 @@ func pdf1968AnthropicToolResultMessages(t *testing.T, body string) []int {
 func pdf1968ToolHarness(t *testing.T, peer *pdf1968Peer, row pdf1968ProviderRow, tool *pdf1968StubTool,
 ) (*AgentLoop, map[string]*AgentInstance, *session.UnifiedStore, media.MediaStore, string) {
 	t.Helper()
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{row})
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{row})
 	al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, func(c *config.Config) {
+		c.PDFLimits = pdf1968LimitTable(t, nil, []pdf1968ProviderRow{row})
 		c.Agents.Defaults.MaxMediaSize = 100000000
 	}, pdf1968Pair{provider: row.id, model: row.models[0].id})
 	al.RegisterTool(tool)
@@ -783,7 +784,7 @@ func TestToolPDF_NotRetained(t *testing.T) {
 			pdf1968Step{toolCalls: calls},
 			pdf1968Step{content: "summarised"},
 			pdf1968Step{content: "again"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		home := filepath.Join(t.TempDir(), "home")
@@ -1061,7 +1062,7 @@ func TestToolPDF_NoCatalogDocument_Refused(t *testing.T) {
 			peer := newPdf1968Peer(t,
 				pdf1968Step{toolCalls: []map[string]any{pdf1968StubCallMap("p1")}},
 				pdf1968Step{content: "must never be reached"})
-			procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+			procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 				pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 			})
 			home := filepath.Join(t.TempDir(), "home")

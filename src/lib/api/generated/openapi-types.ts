@@ -11263,7 +11263,6 @@ export interface components {
              */
             source: string;
             default_resize_limits: components["schemas"]["CatalogResizeLimits"];
-            default_document_limits?: components["schemas"]["CatalogDocumentLimits"];
             providers: components["schemas"]["CatalogProvider"][];
             /**
              * @description Gateway envelope (FR-017): "embedded" when serving the committed build-time snapshot, "pulled" when serving a release fetched at startup or by the 24 h refresh.
@@ -11383,7 +11382,6 @@ export interface components {
              */
             locality: "local" | "cloud";
             resize_limits?: components["schemas"]["CatalogResizeLimits"];
-            document_limits?: components["schemas"]["CatalogDocumentLimits"];
             /** @description The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live). */
             models: components["schemas"]["CatalogModel"][];
         };
@@ -11455,7 +11453,6 @@ export interface components {
              * @example false
              */
             window_unknown?: boolean;
-            document_limits?: components["schemas"]["CatalogDocumentLimits"];
             /** @description Effort levels spec (FR-035). Optional served reasoning capability, filtered by the gateway's encoder table (FR-049). Absent when the model does not reason. */
             reasoning?: components["schemas"]["CatalogModelReasoning"];
         };
@@ -11532,52 +11529,6 @@ export interface components {
              * @example 30000
              */
             max_patches?: number;
-        };
-        /**
-         * CatalogDocumentLimits
-         * @description Inline-route PDF limits of a catalogue row (issue #1968). Every field is optional and resolved per field: the model row's document_limits, then the provider row's, then the catalogue's default_document_limits; a field that no level states means no client-side limit. Integer fields are inclusive (a value equal to the limit is allowed); 0 states "no limit" explicitly and stops the cascade. Byte values are bytes (1 MB = 1,000,000; 1 MiB = 1,048,576, as each provider states). Limits are catalogue data only; the engine holds no limit value of its own.
-         */
-        CatalogDocumentLimits: {
-            /**
-             * @description False when the provider has no inline PDF route, so PDFs are sent as extracted text. Absent at every level means true.
-             * @example true
-             */
-            inline_pdf?: boolean;
-            /**
-             * @description Maximum decoded size of one PDF in bytes.
-             * @example 50000000
-             */
-            max_file_bytes?: number;
-            /**
-             * @description Maximum decoded size of all PDFs of one request in bytes.
-             * @example 50000000
-             */
-            max_total_file_bytes?: number;
-            /**
-             * @description Maximum size of the whole serialized request body in bytes (content, encoded media, tool definitions and JSON).
-             * @example 20000000
-             */
-            max_request_bytes?: number;
-            /**
-             * @description Maximum page count of one PDF.
-             * @example 100
-             */
-            max_pages_per_file?: number;
-            /**
-             * @description Maximum page count of all PDFs of one request.
-             * @example 100
-             */
-            max_pages_per_request?: number;
-            /**
-             * @description Maximum number of PDFs in one wire message.
-             * @example 5
-             */
-            max_documents_per_message?: number;
-            /**
-             * @description Maximum number of PDFs in one request.
-             * @example 5
-             */
-            max_documents_per_request?: number;
         };
         /**
          * ContextWindowNotice
@@ -30280,7 +30231,6 @@ export type CatalogModelReasoning = components["schemas"]["CatalogModelReasoning
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
 export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
-export type CatalogDocumentLimits = components["schemas"]["CatalogDocumentLimits"];
 export type ContextWindowNotice = components["schemas"]["ContextWindowNotice"];
 export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
 export type ContextModelOverride = components["schemas"]["ContextModelOverride"];

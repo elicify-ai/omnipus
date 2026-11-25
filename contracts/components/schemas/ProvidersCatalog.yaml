@@ -45,11 +45,6 @@ properties:
     example: "models.dev@a1b2c3d, litellm@e4f5a6b"
   default_resize_limits:
     $ref: './CatalogResizeLimits.yaml'
-  # The catalogue default row of PDF limits (issue #1968). Optional: a
-  # document published before the field existed has none, and then a field no
-  # provider or model row states has no client-side limit.
-  default_document_limits:
-    $ref: './CatalogDocumentLimits.yaml'
   providers:
     type: array
     minItems: 1

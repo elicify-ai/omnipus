@@ -97,7 +97,7 @@ func runRouting1340SubjectTurn(t *testing.T, firstErr error, media string) (*rou
 // native-attempt prerequisite rather than weakening their recovery oracles.
 func routing1340InstallPDFCatalogue(t *testing.T, f *routing1340ReviewFixture) {
 	t.Helper()
-	f.al.SetCapabilityCatalog(pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	f.al.SetCapabilityCatalog(pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968CapableRow("openrouter", "m", nil),
 	}))
 }

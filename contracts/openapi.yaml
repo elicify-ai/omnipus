@@ -1599,8 +1599,6 @@ components:
       $ref: ./components/schemas/CatalogProviderRegion.yaml
     CatalogResizeLimits:
       $ref: ./components/schemas/CatalogResizeLimits.yaml
-    CatalogDocumentLimits:
-      $ref: ./components/schemas/CatalogDocumentLimits.yaml
     ContextWindowNotice:
       $ref: ./components/schemas/ContextWindowNotice.yaml
     ContextWindowSource:

@@ -1,24 +1,13 @@
 package catalog
 
-// Document-limits parse guards for spec #1968 (read-file native PDF, FR-4).
-//
-// T5c — TestParse_OldParserIgnoresDocumentLimits (label G: passes on base and
-// must stay green after the implementation lands). The catalogue feed gains
-// `document_limits` on provider/model rows and `default_document_limits` on
-// the document (spec §4). This build's parser must accept a feed that
-// already carries those members today — the publisher ships the new feed
-// before every client build understands it, and an unknown member is
-// ignored, never a parse rejection. The oracle is spec §4.5 (feeding order)
-// read together with the parser contract of FR-001: structural defects
-// reject; unknown members do not.
-//
-// These are parse-level guards only: they assert the OLD parser tolerates
-// the NEW feed shape. What the new fields MEAN is T4/T4b/T5d's business
-// (document_limits_buildfail_test.go).
+// #1968 config-ownership revision R1/R5: catalogue PDF limits are unknown
+// members. Old and new feeds load identically; only the pdf modality matters.
+// Retain the original compatibility fixture and its known-structure control.
 
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -124,5 +113,80 @@ func TestParse_RejectsBrokenStructure_UnderNewMembers(t *testing.T) {
 		t.Fatal("a structurally broken feed under the new members must still be rejected")
 	} else if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a structural rejection must carry ErrInvalid, got: %v", err)
+	}
+}
+
+// R1: even a stale field's wrong type/negative/unknown member is ignored.
+// Compare the entire real parsed document AND served projection with a clean
+// feed, not just successful decoding (which would miss retained limit data).
+func TestParse_LegacyPDFLimitsIgnored(t *testing.T) {
+	for _, value := range []string{`{"max_file_bytes":1,"inline_pdf":false}`, `{"max_file_bytes":-1,"typo":2}`, `"not an object"`, `[]`, `null`} {
+		t.Run(value, func(t *testing.T) {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(limitsFeedFixture), &raw); err != nil {
+				t.Fatal(err)
+			}
+			var providers []map[string]json.RawMessage
+			if err := json.Unmarshal(raw["providers"], &providers); err != nil {
+				t.Fatal(err)
+			}
+			var models []map[string]json.RawMessage
+			if err := json.Unmarshal(providers[0]["models"], &models); err != nil {
+				t.Fatal(err)
+			}
+			build := func(withLimits bool) []byte {
+				if withLimits {
+					raw["default_document_limits"] = json.RawMessage(value)
+					providers[0]["document_limits"] = json.RawMessage(value)
+					models[0]["document_limits"] = json.RawMessage(value)
+				} else {
+					delete(raw, "default_document_limits")
+					delete(providers[0], "document_limits")
+					delete(models[0], "document_limits")
+				}
+				var err error
+				providers[0]["models"], err = json.Marshal(models)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw["providers"], err = json.Marshal(providers)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data, err := json.Marshal(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return data
+			}
+			stale, err := NewCatalog(build(true))
+			if err != nil {
+				t.Fatalf("unknown PDF limits must be ignored: %v", err)
+			}
+			clean, err := NewCatalog(build(false))
+			if err != nil {
+				t.Fatalf("clean control must load: %v", err)
+			}
+			if !reflect.DeepEqual(clean.Document(), stale.Document()) {
+				t.Fatal("unknown limits survived catalogue parsing")
+			}
+			got, ok := stale.Served()
+			if !ok {
+				t.Fatal("loaded feed has no served projection")
+			}
+			want, ok := clean.Served()
+			if !ok {
+				t.Fatal("control has no served projection")
+			}
+			if string(got.Body) != string(want.Body) || got.ETag != want.ETag {
+				t.Fatal("ignored limits changed served catalogue bytes/ETag")
+			}
+			if !stale.Resolve("fx/limits-provider", "fx/limits-model").Supports(ModalityPDF) {
+				t.Fatal("pdf modality was lost")
+			}
+			if stale.Resolve("fx/limits-provider", "missing").Supports(ModalityPDF) {
+				t.Fatal("catalogue miss must not support PDF")
+			}
+		})
 	}
 }

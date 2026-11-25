@@ -136,12 +136,9 @@ type envelopeJSON struct {
 	UpdatedAt           time.Time        `json:"updated_at"`
 	Source              string           `json:"source"`
 	DefaultResizeLimits resizeLimitsJSON `json:"default_resize_limits"`
-	// DefaultDocumentLimits is the raw published default row (issue
-	// #1968); absent when the document carries none.
-	DefaultDocumentLimits *documentLimitsJSON `json:"default_document_limits,omitempty"`
-	Providers             []providerJSON      `json:"providers"`
-	ServedFrom            ServedFrom          `json:"served_from"`
-	Stale                 bool                `json:"stale"`
+	Providers           []providerJSON   `json:"providers"`
+	ServedFrom          ServedFrom       `json:"served_from"`
+	Stale               bool             `json:"stale"`
 }
 
 type resizeLimitsJSON struct {
@@ -177,7 +174,6 @@ type providerJSON struct {
 	Aliases           []string             `json:"aliases"`
 	Locality          Locality             `json:"locality"`
 	ResizeLimits      resizeLimitsJSON     `json:"resize_limits"`
-	DocumentLimits    *documentLimitsJSON  `json:"document_limits,omitempty"`
 	Models            []modelJSON          `json:"models"`
 }
 
@@ -201,8 +197,6 @@ type modelJSON struct {
 	Status            Status     `json:"status"`
 	Disputed          bool       `json:"disputed,omitempty"`
 	InferenceProfiles []string   `json:"inference_profiles,omitempty"`
-	// DocumentLimits is the raw published model-row object (issue #1968).
-	DocumentLimits *documentLimitsJSON `json:"document_limits,omitempty"`
 	// Reasoning is the served reasoning capability (CatalogModelReasoning):
 	// the levels and switch the route can encode (FR-049). Absent when the
 	// model does not reason.
@@ -244,15 +238,14 @@ func (h Handle) ServedReasoning() (levels []string, sw bool, ok bool) {
 // auth_methods (WithSignInGate); the ETag covers the filtered body.
 func buildServed(doc *Document, from ServedFrom, now time.Time, gate SignInGate) (servedPair, error) {
 	env := envelopeJSON{
-		SchemaVersion:         doc.SchemaVersion,
-		Version:               doc.Version.String(),
-		UpdatedAt:             doc.UpdatedAt,
-		Source:                doc.Source,
-		DefaultResizeLimits:   resizeLimitsJSON(doc.DefaultResizeLimits),
-		DefaultDocumentLimits: doc.DefaultDocumentLimits.toDTO(),
-		Providers:             make([]providerJSON, 0, len(doc.Providers)),
-		ServedFrom:            from,
-		Stale:                 now.Sub(doc.UpdatedAt) > StaleAfter,
+		SchemaVersion:       doc.SchemaVersion,
+		Version:             doc.Version.String(),
+		UpdatedAt:           doc.UpdatedAt,
+		Source:              doc.Source,
+		DefaultResizeLimits: resizeLimitsJSON(doc.DefaultResizeLimits),
+		Providers:           make([]providerJSON, 0, len(doc.Providers)),
+		ServedFrom:          from,
+		Stale:               now.Sub(doc.UpdatedAt) > StaleAfter,
 	}
 	for i := range doc.Providers {
 		env.Providers = append(env.Providers, providerToJSON(&doc.Providers[i], gate))
@@ -287,7 +280,6 @@ func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 		Aliases:           p.Aliases,
 		Locality:          p.Locality,
 		ResizeLimits:      resizeLimitsJSON(p.ResizeLimits),
-		DocumentLimits:    p.DocumentLimits.toDTO(),
 		Models:            make([]modelJSON, 0, len(p.Models)),
 	}
 	// Required arrays serialise as [], never null.
@@ -311,7 +303,6 @@ func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 			Disputed:          m.Disputed,
 			InferenceProfiles: m.InferenceProfiles,
 			Reasoning:         servedReasoning(p, m),
-			DocumentLimits:    m.DocumentLimits.toDTO(),
 		})
 	}
 	if len(p.Protocols) > 0 {

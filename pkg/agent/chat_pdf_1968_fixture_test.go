@@ -9,9 +9,8 @@ package agent
 // (protocol openai-compatible), and every assertion reads the raw request
 // bodies the peer saw. Nothing here is committed to disk (§6.1): the PDF
 // fixtures are assembled in memory from numbered objects with a
-// byte-accurate xref table, and the catalogue builders extend ADR-067
-// 2.0.0 documents with `document_limits` rows, which today's parser ignores
-// (guarded by document_limits_parse_guard_test.go).
+// byte-accurate xref table. Catalogue fixtures carry capabilities only;
+// limit fixtures populate config.PDFLimitsConfig, never catalogue members.
 
 import (
 	"bytes"
@@ -369,17 +368,17 @@ func clipText(s string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Catalogue fixtures with document_limits rows.
+// Catalogue capabilities and engine-configured PDF limit fixtures.
 // ---------------------------------------------------------------------------
 
-// pdf1968ModelRow is one model entry; limits nil omits document_limits.
+// pdf1968ModelRow carries capability metadata and optional CONFIG limits.
 type pdf1968ModelRow struct {
 	id         string
 	modalities []string
 	limits     map[string]any
 }
 
-// pdf1968ProviderRow is one provider entry; limits nil omits document_limits.
+// pdf1968ProviderRow carries provider metadata and optional CONFIG limits.
 // protocol/region/regions feed the loop-level Bedrock and Anthropic recipes
 // (T11/T15/F9): protocol selects the client the fixture provider id builds,
 // region names the Bedrock region, regions seeds the region group list.
@@ -392,10 +391,8 @@ type pdf1968ProviderRow struct {
 	regions  []map[string]any
 }
 
-// pdf1968DocJSON builds an ADR-067 2.0.0 catalogue document. defaultLimits
-// nil omits the catalogue-level default row (`default_document_limits`,
-// §4.2 — the default row's key differs from the per-row `document_limits`).
-func pdf1968DocJSON(t *testing.T, defaultLimits map[string]any, provs []pdf1968ProviderRow) []byte {
+// pdf1968DocJSON builds an ADR-067 catalogue with capabilities, never limits.
+func pdf1968DocJSON(t *testing.T, provs []pdf1968ProviderRow) []byte {
 	t.Helper()
 	doc := map[string]any{
 		"schema_version":        "2.0.0",
@@ -403,9 +400,6 @@ func pdf1968DocJSON(t *testing.T, defaultLimits map[string]any, provs []pdf1968P
 		"updated_at":            "2026-07-23T00:00:00Z",
 		"source":                "test",
 		"default_resize_limits": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
-	}
-	if defaultLimits != nil {
-		doc["default_document_limits"] = defaultLimits
 	}
 	providerList := make([]map[string]any, 0, len(provs))
 	for _, p := range provs {
@@ -428,9 +422,6 @@ func pdf1968DocJSON(t *testing.T, defaultLimits map[string]any, provs []pdf1968P
 		if p.regions != nil {
 			pj["regions"] = p.regions
 		}
-		if p.limits != nil {
-			pj["document_limits"] = p.limits
-		}
 		models := make([]map[string]any, 0, len(p.models))
 		for _, m := range p.models {
 			mj := map[string]any{
@@ -440,9 +431,6 @@ func pdf1968DocJSON(t *testing.T, defaultLimits map[string]any, provs []pdf1968P
 				"input_modalities": m.modalities,
 				"tool_call":        true,
 				"status":           "active",
-			}
-			if m.limits != nil {
-				mj["document_limits"] = m.limits
 			}
 			models = append(models, mj)
 		}
@@ -455,11 +443,59 @@ func pdf1968DocJSON(t *testing.T, defaultLimits map[string]any, provs []pdf1968P
 	return data
 }
 
-func pdf1968Catalog(t *testing.T, defaultLimits map[string]any, provs []pdf1968ProviderRow) *catalog.Catalog {
+func pdf1968Catalog(t *testing.T, provs []pdf1968ProviderRow) *catalog.Catalog {
 	t.Helper()
-	c, err := catalog.NewCatalog(pdf1968DocJSON(t, defaultLimits, provs))
+	c, err := catalog.NewCatalog(pdf1968DocJSON(t, provs))
 	require.NoError(t, err)
 	return c
+}
+
+// pdf1968LimitTable translates fixture rows into the real config decoder.
+// Tests of otherwise-unlimited routes explicitly neutralize shipped defaults;
+// this preserves their single-limit premises without relying on old feeds.
+func pdf1968LimitTable(t *testing.T, defaults map[string]any, provs []pdf1968ProviderRow) *config.PDFLimitsConfig {
+	t.Helper()
+	base := map[string]any{
+		"max_file_bytes": 0, "max_total_file_bytes": 0, "max_request_bytes": 0,
+		"max_pages_per_file": 0, "max_pages_per_request": 0,
+		"max_documents_per_message": 0, "max_documents_per_request": 0,
+	}
+	for name, value := range defaults {
+		base[name] = value
+	}
+	var overrides []map[string]any
+	for _, p := range provs {
+		if p.limits != nil {
+			row := map[string]any{"provider": p.id}
+			for name, value := range p.limits {
+				row[name] = value
+			}
+			overrides = append(overrides, row)
+		}
+		for _, m := range p.models {
+			if m.limits == nil {
+				continue
+			}
+			row := map[string]any{"provider": p.id, "model": m.id}
+			for name, value := range m.limits {
+				row[name] = value
+			}
+			overrides = append(overrides, row)
+		}
+	}
+	data, err := json.Marshal(map[string]any{"default": base, "overrides": overrides})
+	require.NoError(t, err)
+	var table config.PDFLimitsConfig
+	require.NoError(t, json.Unmarshal(data, &table))
+	return &table
+}
+
+func pdf1968SetLimits(t *testing.T, al *AgentLoop, defaults map[string]any, provs []pdf1968ProviderRow) {
+	t.Helper()
+	require.NoError(t, al.MutateConfig(func(c *config.Config) error {
+		c.PDFLimits = pdf1968LimitTable(t, defaults, provs)
+		return nil
+	}))
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +737,7 @@ func pdf1968NewPeerHarnessAt(t *testing.T, peer *pdf1968Peer, procCat, loopDoc *
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
 	cfg := &config.Config{
+		PDFLimits: pdf1968LimitTable(t, nil, nil),
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
@@ -801,7 +838,7 @@ func pdf1968NewPeerHarness(t *testing.T, peer *pdf1968Peer, procCat, loopDoc *ca
 // Responses marshaller and decoder, rather than a fake Chat implementation.
 func TestPDF1968ResponsesHarness(t *testing.T) {
 	peer := newPdf1968Peer(t, pdf1968Step{shape: "responses", content: "responses adapter reached"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968TextOnlyRow("fx/responses", "fx/text-model", nil)})
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{pdf1968TextOnlyRow("fx/responses", "fx/text-model", nil)})
 	al, agents, store, _ := pdf1968NewPeerHarness(t, peer, cat, cat, nil, pdf1968Pair{provider: "fx/responses", model: "fx/text-model"})
 	sid := pdf1968NewSession(t, store, "pdf1968-agent")
 	answer, err := pdf1968RunTurn(t, al, agents["pdf1968-agent"], store, sid)
@@ -830,7 +867,7 @@ func TestPDF1968SteeringHarness(t *testing.T) {
 			t.Errorf("enqueue steering: %q %v", id, err)
 		}
 	}}, pdf1968Step{content: "finished"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968TextOnlyRow("fx/steer", "fx/plain", nil)})
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{pdf1968TextOnlyRow("fx/steer", "fx/plain", nil)})
 	al, agents, store, _ := pdf1968NewPeerHarness(t, peer, cat, cat, nil, pdf1968Pair{provider: "fx/steer", model: "fx/plain"})
 	sid := pdf1968NewSession(t, store, "pdf1968-agent")
 	alRef, sidRef = al, sid

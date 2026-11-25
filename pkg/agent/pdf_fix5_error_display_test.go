@@ -18,7 +18,7 @@ import (
 func TestPDFCatalogError_ModelIdentityReachesDisplayContract(t *testing.T) {
 	const model = "fx/specific-pdf-reader"
 	peer := newPdf1968Peer(t, pdf1968Step{content: "must not be called"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968CapableRow("fx/catalog", model, nil)})
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{pdf1968CapableRow("fx/catalog", model, nil)})
 	home := filepath.Join(t.TempDir(), "home")
 	al, agents, store, mediaStore := pdf1968NewPeerHarnessAt(t, peer, cat, nil, home, nil, pdf1968Pair{provider: "fx/catalog", model: model})
 	events := pdf1968Capture(al)

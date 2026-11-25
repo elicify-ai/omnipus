@@ -33,10 +33,7 @@ type documentDTO struct {
 	UpdatedAt           string           `json:"updated_at"`
 	Source              string           `json:"source"`
 	DefaultResizeLimits *resizeLimitsDTO `json:"default_resize_limits"`
-	// DefaultDocumentLimits is the optional default row of PDF limits
-	// (issue #1968); absent on documents published before the field.
-	DefaultDocumentLimits *documentLimitsDTO `json:"default_document_limits"`
-	Providers             []providerDTO      `json:"providers"`
+	Providers           []providerDTO    `json:"providers"`
 }
 
 type resizeLimitsDTO struct {
@@ -69,7 +66,6 @@ type providerDTO struct {
 	AuthMethods       []string            `json:"auth_methods"`
 	Aliases           []string            `json:"aliases"`
 	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
-	DocumentLimits    *documentLimitsDTO  `json:"document_limits"`
 	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
 }
@@ -96,8 +92,6 @@ type modelDTO struct {
 	// Reasoning is the upstream reasoning object; unknown members (such as
 	// budget metadata) are ignored.
 	Reasoning *reasoningDTO `json:"reasoning,omitempty"`
-	// DocumentLimits is the optional model-row PDF limits (issue #1968).
-	DocumentLimits *documentLimitsDTO `json:"document_limits,omitempty"`
 }
 
 type reasoningDTO struct {
@@ -163,22 +157,17 @@ func ParseDocument(data []byte) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	docLimits, err := parseDocumentLimits("default_document_limits", dto.DefaultDocumentLimits)
-	if err != nil {
-		return nil, err
-	}
 	if len(dto.Providers) == 0 {
 		return nil, invalid("providers", "must contain at least one provider")
 	}
 
 	doc := &Document{
-		SchemaVersion:         dto.SchemaVersion,
-		Version:               version,
-		UpdatedAt:             updatedAt,
-		Source:                dto.Source,
-		DefaultResizeLimits:   defaults,
-		DefaultDocumentLimits: docLimits,
-		Providers:             make([]Provider, 0, len(dto.Providers)),
+		SchemaVersion:       dto.SchemaVersion,
+		Version:             version,
+		UpdatedAt:           updatedAt,
+		Source:              dto.Source,
+		DefaultResizeLimits: defaults,
+		Providers:           make([]Provider, 0, len(dto.Providers)),
 	}
 	seenProviders := make(map[string]struct{}, len(dto.Providers))
 	for i := range dto.Providers {
@@ -425,11 +414,6 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		return Provider{}, err
 	}
 
-	docLimits, err := parseDocumentLimits(path+".document_limits", dto.DocumentLimits)
-	if err != nil {
-		return Provider{}, err
-	}
-
 	company := dto.Company
 	if company == "" {
 		company = dto.Name // X-10 default
@@ -452,7 +436,6 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		Locality:          locality,
 		Regions:           regions,
 		ResizeLimits:      limits,
-		DocumentLimits:    docLimits,
 		Models:            make([]Model, 0, len(dto.Models)),
 	}
 
@@ -521,12 +504,7 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 			return Model{}, err
 		}
 	}
-	docLimits, err := parseDocumentLimits(path+".document_limits", dto.DocumentLimits)
-	if err != nil {
-		return Model{}, err
-	}
 	return Model{
-		DocumentLimits:    docLimits,
 		ID:                dto.ID,
 		Name:              dto.Name,
 		ReleaseDate:       dto.ReleaseDate,

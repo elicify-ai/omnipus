@@ -34,7 +34,7 @@ func TestChatPDF_TimeoutRebuildRetainsPresentation(t *testing.T) {
 			data := pdf1968TextPDF(t, 1, true)
 			ref := pdf1968StorePDF(t, store, "retained.pdf", data)
 			h.agent.Model = "fx/pdf"
-			cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968CapableRow("fx/timeout", "fx/pdf", nil)})
+			cat := pdf1968Catalog(t, []pdf1968ProviderRow{pdf1968CapableRow("fx/timeout", "fx/pdf", nil)})
 			h.al.SetCapabilityCatalog(cat)
 			h.append(t, providers.Message{Role: "user", Content: "retained current user", Media: []string{ref}})
 			ts := h.turn("")

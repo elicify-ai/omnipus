@@ -5,7 +5,7 @@ package agent
 // provider attempt: chat PDFs (data URLs chat resolution encoded) and tool
 // PDFs (the turn-private InspectionPDFs of read_file/library_read) are
 // presented natively or as text, decided per attempt from the attempt's own
-// catalogue row. Canonical messages are never mutated; tool PDF bytes exist
+// catalogue capability and engine-configured limits. Canonical messages are never mutated; tool PDF bytes exist
 // only in the returned request copy.
 
 import (
@@ -16,9 +16,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -127,8 +127,10 @@ func (rt *agentLoopRunTurn) presentAttemptPDFs(
 		return nil, false, &pdfModelListUnavailableError{Provider: in.name, Model: in.model}
 	}
 	handle := cat.Resolve(in.name, in.model)
-	limits := handle.DocumentLimits()
-	if err := rt.decidePDFEligibility(ctx, cands, pdfNativeSupported(handle)); err != nil {
+	rt.al.mu.RLock()
+	limits := rt.al.cfg.ResolvePDFLimits(in.name, in.model)
+	rt.al.mu.RUnlock()
+	if err := rt.decidePDFEligibility(ctx, cands, pdfNativeSupported(handle, limits)); err != nil {
 		return nil, false, err
 	}
 	owner := in.name + "/" + in.model
@@ -176,7 +178,7 @@ func (rt *agentLoopRunTurn) decidePDFEligibility(ctx context.Context, cands []*p
 // pdfWireGroups maps each message index to its wire message (FR-11). It is
 // consulted only when the row states max_documents_per_message; a transport
 // without WireMessageGroups sends one internal message as one wire message.
-func pdfWireGroups(p providers.LLMProvider, messages []providers.Message, limits catalog.DocumentLimits) func(int) int {
+func pdfWireGroups(p providers.LLMProvider, messages []providers.Message, limits config.PDFLimits) func(int) int {
 	identity := func(i int) int { return i }
 	if limit, set := limits.MaxDocumentsPerMessage(); !set || limit == 0 {
 		return identity
@@ -204,7 +206,7 @@ func pdfWireGroups(p providers.LLMProvider, messages []providers.Message, limits
 // first), a PDF is admitted only if every limit stated in data still holds.
 // A limit is inclusive; 0 states no limit; an unknown page count adds no
 // pages but counts its bytes and as a document.
-func admitPDFsNewestFirst(cands []*pdfCandidate, limits catalog.DocumentLimits, owner string, groupOf func(int) int) {
+func admitPDFsNewestFirst(cands []*pdfCandidate, limits config.PDFLimits, owner string, groupOf func(int) int) {
 	if limits.Empty() {
 		return
 	}
@@ -251,7 +253,7 @@ func admitPDFsNewestFirst(cands []*pdfCandidate, limits catalog.DocumentLimits, 
 
 // pagesLimited reports whether any page limit is stated (only then is a
 // chat PDF's page count needed).
-func pagesLimited(limits catalog.DocumentLimits) bool {
+func pagesLimited(limits config.PDFLimits) bool {
 	perFile, fileSet := limits.MaxPagesPerFile()
 	perRequest, requestSet := limits.MaxPagesPerRequest()
 	return (fileSet && perFile > 0) || (requestSet && perRequest > 0)
@@ -265,7 +267,7 @@ func pagesLimited(limits catalog.DocumentLimits) bool {
 // unmeasured send.
 func fitPDFRequestBytes(
 	in pdfAttemptInput, out, messages []providers.Message, cands []*pdfCandidate,
-	limits catalog.DocumentLimits, owner string,
+	limits config.PDFLimits, owner string,
 ) ([]providers.Message, error) {
 	maxBytes, set := limits.MaxRequestBytes()
 	if !set || maxBytes == 0 {

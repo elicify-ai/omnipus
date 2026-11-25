@@ -6,8 +6,7 @@ package agent
 // attaches a chat PDF natively only when the model id matches the hard-coded
 // pdfCapableModel allow-list (loop_media.go::resolveMediaRefsWithOffload),
 // so for the fixture pairs the PDF never reaches the wire, and the
-// catalogue's document_limits rows are parsed but ignored (guarded by
-// document_limits_parse_guard_test.go).
+// PDF limits come only from config; the catalogue supplies the pdf modality.
 //
 // T9/T15 also cover the FR-005/FR-007 fallback chain (F8): one agent whose
 // primary is flagged and whose AgentConfig.FallbackModels candidate is
@@ -58,7 +57,7 @@ func pdf1968FixedResponses() []pdf1968Step {
 // the common shape of every recovery-matrix arm (F8/F10 edit round).
 func pdf1968FlaggedHarness(t *testing.T, peer *pdf1968Peer) (*AgentLoop, map[string]*AgentInstance, *session.UnifiedStore, media.MediaStore) {
 	t.Helper()
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 	})
 	return pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -75,7 +74,7 @@ func pdf1968ChainHarness(t *testing.T, peer *pdf1968Peer, primaryRow, fallbackRo
 	primary, fallback pdf1968Pair,
 ) (*AgentLoop, map[string]*AgentInstance, *session.UnifiedStore, media.MediaStore) {
 	t.Helper()
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{primaryRow, fallbackRow})
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{primaryRow, fallbackRow})
 	tune := func(c *config.Config) {
 		c.Agents.List[0].FallbackModels = config.FallbackModelSlice{
 			{Model: fallback.model, Provider: fallback.provider},
@@ -98,7 +97,7 @@ func pdf1968ChainHarness(t *testing.T, peer *pdf1968Peer, primaryRow, fallbackRo
 func TestChatPDF_FlaggedRowSendsNativeBytes(t *testing.T) {
 	data := pdf1968TextPDF(t, 1, true)
 	peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 	})
 	al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -128,7 +127,7 @@ func TestChatPDF_FlaggedRowSendsNativeBytes(t *testing.T) {
 func TestChatPDF_UnflaggedRowShowsText(t *testing.T) {
 	data := pdf1968TextPDF(t, 1, true)
 	peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 	})
 	al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -162,7 +161,7 @@ func TestPDF_NoCatalogDocument_TurnRefused(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "must never be reached"})
 		// procCat resolves the pair for construction; the loop boots with NO
 		// catalogue document.
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		// A caller-chosen home so the persisted entry can be re-read through
@@ -222,7 +221,7 @@ func TestPDF_NoCatalogDocument_TurnRefused(t *testing.T) {
 
 	t.Run("catalog.New() (a catalogue object serving no document) refuses the PDF turn", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "must never be reached"})
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		empty := catalog.New()
@@ -255,10 +254,10 @@ func TestPDF_NoCatalogDocument_TurnRefused(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
 		// procCat carries the pair (construction resolves); the loop document
 		// is a valid catalogue that does NOT list this pair.
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
-		loopDoc := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		loopDoc := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/other-gateway", "fx/other-model", nil),
 		})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, procCat, loopDoc, nil,
@@ -289,7 +288,7 @@ func TestPDF_NoCatalogDocument_TurnRefused(t *testing.T) {
 	// seam with the real Boot).
 	t.Run("boot with an invalid embedded snapshot and no persisted copy refuses the PDF turn", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "must never be reached"})
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		booted := catalog.Boot(t.Context(), []byte("{ this is not a catalogue"),
@@ -349,7 +348,7 @@ func TestPDF_CatalogPresent_NoTurnRefusal(t *testing.T) {
 
 	t.Run("flagged pair with a chat pdf produces no refusal", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -367,7 +366,7 @@ func TestPDF_CatalogPresent_NoTurnRefusal(t *testing.T) {
 
 	t.Run("a no-PDF request is unaffected by the catalogue gate", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		al, agents, store, _ := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -385,10 +384,10 @@ func TestPDF_CatalogPresent_NoTurnRefusal(t *testing.T) {
 	// same way production wires it.
 	t.Run("a booted valid embedded snapshot offline serves the pair", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
-		embedded := pdf1968DocJSON(t, nil, []pdf1968ProviderRow{
+		embedded := pdf1968DocJSON(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		booted := catalog.Boot(t.Context(), embedded, nil, pdf1968BootStore{readErr: fs.ErrNotExist}, nil)
@@ -408,10 +407,10 @@ func TestPDF_CatalogPresent_NoTurnRefusal(t *testing.T) {
 
 	t.Run("a failed refresh keeps serving the booted document", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
-		embedded := pdf1968DocJSON(t, nil, []pdf1968ProviderRow{
+		embedded := pdf1968DocJSON(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		booted := catalog.Boot(t.Context(), embedded,
@@ -433,7 +432,7 @@ func TestPDF_CatalogPresent_NoTurnRefusal(t *testing.T) {
 
 	t.Run("a no-PDF request on a document-less catalogue sends normally", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		procCat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		procCat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		empty := catalog.New()
@@ -462,7 +461,7 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 
 	t.Run("same model id native on flagged provider, text on unflagged one", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968FixedResponses()...)
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/shared-model", nil),
 			pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 		})
@@ -490,7 +489,7 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 
 	t.Run("reverse wiring: flagged attempt is the second agent", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968FixedResponses()...)
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 			pdf1968CapableRow("fx/doc-reader-9", "fx/shared-model", nil),
 		})
@@ -518,7 +517,7 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 
 	t.Run("inline_pdf false row forces text despite the pdf modality", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			{
 				id: "fx/doc-reader-9",
 				models: []pdf1968ModelRow{{
@@ -528,8 +527,9 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 				}},
 			},
 		})
-		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
-			pdf1968Pair{provider: "fx/doc-reader-9", model: "fx/pdf-flagged-off"})
+		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, func(c *config.Config) {
+			c.PDFLimits = pdf1968LimitTable(t, nil, []pdf1968ProviderRow{pdf1968CapableRow("fx/doc-reader-9", "fx/pdf-flagged-off", map[string]any{"inline_pdf": false})})
+		}, pdf1968Pair{provider: "fx/doc-reader-9", model: "fx/pdf-flagged-off"})
 		sid := pdf1968NewSession(t, store, "pdf1968-agent")
 		ref := pdf1968StorePDF(t, mediaStore, "report.pdf", data)
 
@@ -608,7 +608,7 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// T10 (A) — catalogue document_limits enforcement: file bytes, total file
+// T10 (A) — engine-configured PDF limit enforcement: file bytes, total file
 // bytes, pages per file (101-page fixture), pages per request, unknown-page
 // accounting, documents per request (newest-first), and the operator
 // max_media_size interplay. FR-13 + §4.2. Today every "native" arm is red
@@ -616,8 +616,8 @@ func TestAttachPDF_PerAttemptDecision(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAttachPDF_Limits(t *testing.T) {
-	// Fixture data (§6.1): the numbers below are catalogue row values inside
-	// the test's own catalogue documents, never engine constants.
+	// Fixture data (§6.1): the numbers below are config fixture row values, never
+	// production Go constants or catalogue members.
 	const (
 		fileCap    = 200000
 		totalCap   = 300000
@@ -637,14 +637,16 @@ func TestAttachPDF_Limits(t *testing.T) {
 	) (pdfs [][]byte, body string) {
 		t.Helper()
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, defaultLimits, []pdf1968ProviderRow{
+		rows := []pdf1968ProviderRow{
 			{
 				id:     "fx/limits-gate",
 				limits: providerLimits,
 				models: []pdf1968ModelRow{{id: "fx/limits-model", modalities: []string{"text", "pdf"}, limits: modelLimits}},
 			},
-		})
+		}
+		cat := pdf1968Catalog(t, rows)
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, func(c *config.Config) {
+			c.PDFLimits = pdf1968LimitTable(t, defaultLimits, rows)
 			if maxMediaSize > 0 {
 				c.Agents.Defaults.MaxMediaSize = maxMediaSize
 			}
@@ -785,7 +787,7 @@ func TestAttachPDF_Limits(t *testing.T) {
 	})
 
 	t.Run("operator max_media_size raised and lowered", func(t *testing.T) {
-		// No catalogue limits at all — only the operator media size setting
+		// No effective PDF limits — only the operator media size setting
 		// governs.
 		raised := pdf1968PDFOfSize(t, 30000000)
 		pdfs, _ := runOne(t, nil, nil, nil, mediaRaise, raised)
@@ -801,8 +803,8 @@ func TestAttachPDF_Limits(t *testing.T) {
 // ---------------------------------------------------------------------------
 // T10a (A) — the §4.3 seed rows behave as researched: the default row's
 // values, each lower own row, and the azure model row overriding the
-// provider row. Seed values are fixture data only (publisher overrides,
-// never engine code).
+// provider row. Seed values are config fixture data; shipped-file parity is checked
+// independently in pkg/config.
 // ---------------------------------------------------------------------------
 
 func TestAttachPDF_DefaultRowAndOwnRows(t *testing.T) {
@@ -854,11 +856,12 @@ func TestAttachPDF_DefaultRowAndOwnRows(t *testing.T) {
 	runSeed := func(t *testing.T, pair pdf1968Pair, datas ...[]byte) (pdfs [][]byte, body string) {
 		t.Helper()
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, seedDefault, seedProvs)
+		cat := pdf1968Catalog(t, seedProvs)
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, func(c *config.Config) {
+			c.PDFLimits = pdf1968LimitTable(t, seedDefault, seedProvs)
 			// F5: the seed rows admit 50 MB files; the operator media
 			// setting must sit ABOVE the largest fixture so the
-			// catalogue-level assertions are not masked by it.
+			// PDF-limit assertions are not masked by it.
 			c.Agents.Defaults.MaxMediaSize = 100000000
 		}, pair)
 		sid := pdf1968NewSession(t, store, "pdf1968-agent")
@@ -1023,8 +1026,8 @@ func TestAttachPDF_NoRowRejectFallsBackToText(t *testing.T) {
 	run := func(t *testing.T, steps []pdf1968Step) []string {
 		t.Helper()
 		peer := newPdf1968Peer(t, steps...)
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
-			// Flagged, but no document_limits anywhere: no default row, no
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
+			// Flagged, with every shipped PDF default explicitly neutralized: no
 			// provider row, no model row.
 			pdf1968CapableRow("fx/free-row", "fx/free-model", nil),
 		})
@@ -1067,7 +1070,7 @@ func TestAttachPDF_NoRowRejectFallsBackToText(t *testing.T) {
 				}
 			}},
 			pdf1968Step{content: "finished"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968CapableRow("fx/free-row", "fx/free-model", nil)})
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{pdf1968CapableRow("fx/free-row", "fx/free-model", nil)})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, func(c *config.Config) { c.Agents.Defaults.MaxMediaSize = 100000000 }, pdf1968Pair{provider: "fx/free-row", model: "fx/free-model"})
 		sid := pdf1968NewSession(t, store, "pdf1968-agent")
 		alRef, sidRef = al, sid
@@ -1167,8 +1170,9 @@ func TestAttachPDF_RequestBytes(t *testing.T) {
 			row.region = "us-east-1"
 			row.regions = []map[string]any{{"id": "us-east-1", "group": "us"}}
 		}
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{row})
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{row})
 		al, agents, store, mediaStore := pdf1968NewPeerHarnessAt(t, peer, cat, cat, home, func(c *config.Config) {
+			c.PDFLimits = pdf1968LimitTable(t, nil, []pdf1968ProviderRow{row})
 			// Large ASCII filler must not hit an unrelated context-window cap.
 			window := 100000000
 			c.Agents.List[0].ContextWindowOverride = &window
@@ -1381,7 +1385,7 @@ func TestAttachPDF_ScannedPDF(t *testing.T) {
 
 	t.Run("scanned pdf goes native on a flagged pair", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968CapableRow("fx/doc-reader-9", "fx/tiny-haiku-pdf", nil),
 		})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -1399,7 +1403,7 @@ func TestAttachPDF_ScannedPDF(t *testing.T) {
 
 	t.Run("scanned pdf on an unflagged pair shows N1 and N2", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{content: "ok"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 		})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -1528,7 +1532,7 @@ func TestPDFRecovery_AttributionMatrix(t *testing.T) {
 
 	t.Run("text-only request + 413 does not demote anything", func(t *testing.T) {
 		peer := newPdf1968Peer(t, pdf1968Step{status: 413, errBody: "request entity too large"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 		})
 		al, agents, store, _ := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -1547,7 +1551,7 @@ func TestPDFRecovery_AttributionMatrix(t *testing.T) {
 		peer := newPdf1968Peer(t,
 			pdf1968Step{status: 400, errBody: imageRejectBody},
 			pdf1968Step{content: "seen"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968VisionRow("fx/vision-gate", "fx/vision-model"),
 		})
 		al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -1628,7 +1632,7 @@ func TestPDFRecovery_AttributionMatrix(t *testing.T) {
 		// FR-16/FR-17: no native PDF means no PDF retry; existing compaction
 		// cannot shorten a session consisting of only the current user message.
 		peer := newPdf1968Peer(t, pdf1968Step{status: 400, errBody: "context window exceeded"})
-		cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+		cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 			pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 		})
 		al, agents, store, _ := pdf1968NewPeerHarness(t, peer, cat, cat, nil,
@@ -1725,7 +1729,7 @@ func pdf1968AssertNoPDFCompaction(t *testing.T) {
 		pdf1968Step{content: "newest answer"},
 		pdf1968Step{status: 400, errBody: "context window exceeded"},
 		pdf1968Step{content: "ok"})
-	cat2 := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	cat2 := pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968TextOnlyRow("fx/plain-gateway", "fx/shared-model", nil),
 	})
 	al2, agents2, store2, _ := pdf1968NewPeerHarness(t, peer2, cat2, cat2, nil,
@@ -1796,7 +1800,7 @@ func TestChatPDF_RejectRetry_Unchanged(t *testing.T) {
 	peer := newPdf1968Peer(t,
 		pdf1968Step{status: 400, errBody: pdfRejectBody},
 		pdf1968Step{content: "recovered"})
-	cat := pdf1968Catalog(t, nil, []pdf1968ProviderRow{
+	cat := pdf1968Catalog(t, []pdf1968ProviderRow{
 		pdf1968CapableRow("fx/doc-reader-9", "claude-sonnet-4", nil),
 	})
 	al, agents, store, mediaStore := pdf1968NewPeerHarness(t, peer, cat, cat, nil,

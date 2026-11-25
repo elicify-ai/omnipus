@@ -152,10 +152,6 @@ properties:
     example: "cloud"
   resize_limits:
     $ref: './CatalogResizeLimits.yaml'
-  # Optional provider-row PDF limits (issue #1968); fields it states override
-  # the catalogue default row for every model of the provider.
-  document_limits:
-    $ref: './CatalogDocumentLimits.yaml'
   models:
     type: array
     items:

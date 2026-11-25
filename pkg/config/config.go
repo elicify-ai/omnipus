@@ -102,6 +102,9 @@ type Config struct {
 	// from a boot snapshot. See context_settings.go.
 	Context ContextSettings `json:"context" yaml:"-"`
 
+	// PDFLimits overlays the embedded inline PDF table; nil uses shipped data.
+	PDFLimits *PDFLimitsConfig `json:"pdf_limits,omitempty" yaml:"-"`
+
 	// Judge holds ADR-084's verifier-turn budget and timeout controls: the
 	// judge turn timeout (FR-049/FR-050), the per-adjudication tool-call and
 	// byte caps (FR-051/FR-052), and the per-adjudication token/cost ceiling

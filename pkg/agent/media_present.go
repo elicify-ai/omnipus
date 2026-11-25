@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
@@ -104,14 +105,14 @@ func modelSupportsImage(cat *catalog.Catalog, provider, model string) bool {
 
 // pdfNativeSupported is the only PDF capability check in pkg/agent (issue
 // #1968 FR-1, spec §2.3): the exact (provider, model) catalogue row lists
-// the pdf modality AND its effective inline_pdf (model row, then provider
-// row, then the catalogue default row) is not false. A catalogue miss is
+// the pdf modality AND engine configuration permits the inline PDF route.
+// The catalogue supplies no PDF limits. A catalogue miss is
 // not capable: the handle carries no row. Evaluated per provider attempt.
-func pdfNativeSupported(h catalog.Handle) bool {
+func pdfNativeSupported(h catalog.Handle, limits config.PDFLimits) bool {
 	if !h.Found() || !h.Supports(catalog.ModalityPDF) {
 		return false
 	}
-	inline, stated := h.DocumentLimits().InlinePDF()
+	inline, stated := limits.InlinePDF()
 	return !stated || inline
 }
 

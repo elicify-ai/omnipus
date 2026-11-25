@@ -33,7 +33,9 @@ func pdfFix5Flow(t *testing.T, p providers.LLMProvider, provider, model string, 
 	a := &AgentInstance{ID: "pdf-fix5", Model: model, Candidates: []providers.FallbackCandidate{{Provider: provider, Model: model}}}
 	a.StoreProviderPool(map[string]providers.LLMProvider{provider: p})
 	f := newRouting1340ReviewFixture(t, nil, a)
-	f.al.SetCapabilityCatalog(pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968CapableRow(provider, model, limits)}))
+	rows := []pdf1968ProviderRow{pdf1968CapableRow(provider, model, limits)}
+	f.al.SetCapabilityCatalog(pdf1968Catalog(t, rows))
+	pdf1968SetLimits(t, f.al, nil, rows)
 	f.al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker()).WithRetryWait(func(context.Context, time.Duration) error { return nil })
 	f.selectProvider(t)
 	return f

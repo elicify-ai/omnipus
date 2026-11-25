@@ -105,7 +105,7 @@ func TestPDF_CodexFactoryWholeRequestLimit(t *testing.T) {
 		if limit > 0 {
 			limits = map[string]any{"max_request_bytes": limit}
 		}
-		f.al.SetCapabilityCatalog(pdf1968Catalog(t, nil, []pdf1968ProviderRow{pdf1968CapableRow("openai-chatgpt", "gpt-5.4", limits)}))
+		pdf1968SetLimits(t, f.al, nil, []pdf1968ProviderRow{pdf1968CapableRow("openai-chatgpt", "gpt-5.4", limits)})
 		prepared, prepErr := f.rt.prepareAttemptRequest(context.Background(), p, "openai-chatgpt", "gpt-5.4", messages, defs, opts, false)
 		require.NoError(t, prepErr)
 		mu.Lock()
