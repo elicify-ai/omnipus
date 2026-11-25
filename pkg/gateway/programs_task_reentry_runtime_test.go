@@ -30,7 +30,17 @@ import (
 // returns the counted GH_TOKEN length, the executed command's result and the
 // origins of the two model requests this re-entry made (the command request and
 // the consumption of its real result).
-func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string) (string, string, []bus.Provenance) {
+//
+// maxRefused is how many sends may be refused before one is accepted. The only
+// refusal the production path documents is the millisecond window in which a
+// task is terminal but its run has not yet released the session's admission
+// (steer_execution_admission.go, ErrStaleGeneration); the 2 s observation
+// window below is orders of magnitude longer, so at most ONE send can fall in
+// it. A second refusal is therefore a persistent refusal, not the transient,
+// and fails. A re-entry with no prior run to release (the root twin) passes 0.
+// The test side has no signal for the gate's reservation (it lives in unexported
+// pkg/agent state), so the refusals are counted instead of waited out.
+func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string, maxRefused int) (string, string, []bus.Provenance) {
 	t.Helper()
 	before := len(x.provider.observedOrigins(sid))
 	path := filepath.Join(x.work, call+"-count")
@@ -46,7 +56,9 @@ func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string)
 	// Send again until the provider sees the turn. An accepted message starts
 	// its turn within milliseconds, so only a refused one reaches the next try.
 	started := false
+	refused := 0
 	for attempt := 0; attempt < 8 && !started; attempt++ {
+		require.LessOrEqual(t, refused, maxRefused, "a refusal beyond the one transient admission-release window is a persistent refusal of the first web message")
 		require.NoError(t, x.bus.PublishInbound(context.Background(), input))
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) && !started {
@@ -55,15 +67,20 @@ func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string)
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
+		if !started {
+			refused++
+		}
 	}
 	require.True(t, started, "instrument: a web message into the task session started a turn")
+	require.LessOrEqual(t, refused, maxRefused, "refused sends before the accepted one")
+	t.Logf("S143 re-entry %s: %d send(s) refused before the accepted one", call, refused)
 	x.waitEnds(t, sid)
 	result := x.provider.result(sid, call)
 	require.Contains(t, result, "PROGRAM_TASK_CHILD_RAN", "instrument: the re-entry's real bash ran; a refused or missed turn cannot establish zero")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	origins := x.provider.observedOrigins(sid)
-	require.GreaterOrEqual(t, len(origins), before+2, "instrument: the re-entry requested the command and consumed its real result")
+	require.Equal(t, before+2, len(origins), "exactly one accepted turn: the command request and the consumption of its real result, no duplicate turn from a resent message")
 	return strings.TrimSpace(string(raw)), result, origins[before : before+2]
 }
 
@@ -97,7 +114,7 @@ func TestProgramProvenance_ActualTaskSessionReentry(t *testing.T) {
 		// Then a web message goes into T's task session: still withheld, and the
 		// turn is {connector:telegram, web}, never web alone.
 		both := []bus.Origin{bus.OriginWeb, bus.ConnectorOrigin("telegram")}
-		count, result, origins := programsTaskReentry(t, x, sid, "s143-web-reentry")
+		count, result, origins := programsTaskReentry(t, x, sid, "s143-web-reentry", 1)
 		assert.Equal(t, "0", count, "S143: the web re-entry turn prints 0")
 		assert.Contains(t, result, programsPeerTelegramNotice, "S143: the web re-entry is withheld for the Telegram origin it inherits")
 		for _, actual := range origins {
@@ -108,7 +125,7 @@ func TestProgramProvenance_ActualTaskSessionReentry(t *testing.T) {
 		// Then the gateway restarts and the session is revived by a web message.
 		programsRestartTaskRuntime(t, x)
 		assertRecord("after the gateway-domain restart")
-		count, result, origins = programsTaskReentry(t, x, sid, "s143-restart-reentry")
+		count, result, origins = programsTaskReentry(t, x, sid, "s143-restart-reentry", 1)
 		assert.Equal(t, "0", count, "S143: the revived session's web turn prints 0")
 		assert.Contains(t, result, programsPeerTelegramNotice, "S143: the revived turn is still withheld for Telegram")
 		for _, actual := range origins {
@@ -129,7 +146,7 @@ func TestProgramProvenance_ActualTaskSessionReentry(t *testing.T) {
 			WorkspaceID: "sales", AgentID: "ops", Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: taskID},
 			ProvenanceMode: session.ProvenanceModeRoot,
 		}))
-		count, result, _ := programsTaskReentry(t, x, meta.ID, "s143-root-twin")
+		count, result, _ := programsTaskReentry(t, x, meta.ID, "s143-root-twin", 0)
 		assert.Equal(t, "16", count, "S143 instrument: a parentless task record the classifier called root lets the web re-entry reach the token, so the scenario above fails on that regression")
 		assert.NotContains(t, result, "Connected programs were not used for this command:")
 	})
