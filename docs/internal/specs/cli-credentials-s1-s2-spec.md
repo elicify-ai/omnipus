@@ -187,7 +187,7 @@ Hosted and local editions use the same code.
 | `pkg/thirdpartycli/path.go::CheckProgramPath` | reuse | Validates gateway-run program paths. |
 | `pkg/gateway/rest_sign_in.go::deviceCodeSession`; `src/components/providers/SignInDialog.tsx` | model [S2] | 15-minute cap; dialog phases. |
 | `src/components/chat/SecretRequestCard.tsx` | reuse | Card value rules and promise text. |
-| `scripts/check-no-cli-model-providers.sh` | constraint | Bans `cli_login`, `CliLogin`, `cli_kind`, `sign-in/import`, … |
+| `scripts/check-no-cli-model-providers.sh` | constraint | Bans the retired subprocess-backed model-provider names and routes (see the guard script for the list) |
 
 ### Impact Assessment
 
