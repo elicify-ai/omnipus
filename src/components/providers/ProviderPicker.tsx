@@ -446,7 +446,7 @@ export function ProviderPicker({
                 aria-expanded={recentOpen}
                 aria-controls={`${testId}-recent-list`}
                 onClick={() => setRecentOpen((v) => !v)}
-                className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+                className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               >
                 Recent ({model.recent.length})
               </Button>
@@ -501,7 +501,7 @@ export function ProviderPicker({
           aria-expanded={model.expanded}
           aria-controls={listId}
           onClick={() => setExpandedByOperator((v) => !v)}
-          className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+          className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         >
           All providers ({model.allProvidersCount})
         </Button>
@@ -530,7 +530,7 @@ export function ProviderPicker({
               variant="outline"
               data-testid="picker-catalog-retry"
               onClick={() => onRetry?.()}
-              className="ml-auto h-auto min-h-[24px] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
+              className="ml-auto h-auto min-h-[24px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
             >
               <ArrowClockwise size={12} aria-hidden="true" />
               Retry

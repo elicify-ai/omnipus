@@ -344,7 +344,7 @@ export function ProviderDetailPanel({
                 key={value || 'standard'}
                 value={value}
                 data-testid={`${testId}-plan-${value || 'standard'}`}
-                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+                className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {planLabel(value)}
               </SegmentedControlItem>
@@ -376,7 +376,7 @@ export function ProviderDetailPanel({
                 key={value}
                 value={value}
                 data-testid={`${testId}-region-${value}`}
-                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+                className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {regionLabel(value)}
               </SegmentedControlItem>
@@ -399,7 +399,7 @@ export function ProviderDetailPanel({
             data-testid={`${testId}-aws-region`}
             value={awsRegion}
             onChange={(event) => setAwsRegion(event.target.value)}
-            className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)] normal-case"
+            className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)] normal-case"
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
           >
             {awsRegionOptions.map((r) => (
@@ -444,7 +444,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-api-key-input`}
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+                className="min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                 style={{ borderColor: 'var(--color-border)' }}
               />
             </Label>
@@ -458,7 +458,7 @@ export function ProviderDetailPanel({
           variant="default"
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
-          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+          className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Continue
         </Button>
@@ -468,7 +468,7 @@ export function ProviderDetailPanel({
             variant="ghost"
             data-testid={`${testId}-cancel`}
             onClick={onCancel}
-            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
           </Button>
