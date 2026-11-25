@@ -7,7 +7,10 @@ import { useLoadingVisibility } from '@/design-system/use-loading-visibility'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  'relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+  // FR-070 / design-system rule 12: under a coarse pointer every button and
+  // icon button is itself at least 44 x 44 (the SegmentedControlItem pattern),
+  // so adjacent narrow controls never share an overlapping hit region.
+  'relative inline-flex pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
   {
     variants: {
       variant: {
