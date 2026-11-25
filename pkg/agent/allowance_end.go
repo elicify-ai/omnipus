@@ -70,6 +70,36 @@ func (al *AgentLoop) EndAgentAllowances(agentID string) {
 	}
 }
 
+// allowanceSweepInterval is how often RunAllowanceExpirySweep looks for
+// ended timed network allowances.
+const allowanceSweepInterval = time.Second
+
+// SweepEndedAllowances revokes the live egress tokens of every agent whose
+// timed network allowance has ended (C-26, Dataset D17 row 9): a running
+// command's next new connection is refused, and the command keeps running.
+// The tokens stay registered, so the agent's next command re-pushes the
+// addresses still allowed.
+func (al *AgentLoop) SweepEndedAllowances() {
+	for _, tok := range al.approvalGrants.SweepEndedNetwork() {
+		al.sandboxEgressProxy.RevokeRunToken(tok)
+	}
+}
+
+// RunAllowanceExpirySweep calls SweepEndedAllowances every
+// allowanceSweepInterval until ctx ends.
+func (al *AgentLoop) RunAllowanceExpirySweep(ctx context.Context) {
+	ticker := time.NewTicker(allowanceSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			al.SweepEndedAllowances()
+		}
+	}
+}
+
 // revokeAgentEgress revokes every live egress token of agentID. The tokens
 // stay registered in the store, so the agent's next command re-pushes the
 // addresses still allowed onto its token.

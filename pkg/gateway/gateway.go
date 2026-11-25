@@ -1758,6 +1758,9 @@ func (rc *runContextWithOptions) startBackgroundServices() {
 		}()
 		rc.agentLoop.Run(rc.agentLoopCtx)
 	}()
+	// C-26, Dataset D17 row 9: a timed address allowance that ends during a
+	// running command revokes the command's egress token.
+	go rc.agentLoop.RunAllowanceExpirySweep(rc.agentLoopCtx)
 
 	// Launch the nightly retention sweep goroutine. Uses ctx (not agentLoopCtx)
 	// so it shuts down on gateway stop regardless of agent-loop liveness.
