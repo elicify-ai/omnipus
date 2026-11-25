@@ -6,8 +6,10 @@ package skillperm
 
 // Skills & Tools C-2 self-heal of the two skill maps, the skills twin of
 // ReconcileToolPolicyCeiling. It runs on every config load once the
-// one-time upgrade (Run, C-19) is done, and again at every start after the
-// built-in sync. It is additive and never overwrites: a skill key with no
+// one-time upgrade (Run, C-19) is done, again at every start after the
+// built-in sync, and at a turn start that finds a project skill with no
+// stored key (C-19: the key is created when Omnipus first reads the
+// workspace's project shelf). It is additive and never overwrites: a skill key with no
 // stored permission gets ask (ST-Q3 B), except a built-in skill shipped by
 // a newer release, which gets allow, its shipped default (ST-Q10 A); a key
 // with no stored level gets name_and_description.
@@ -41,14 +43,15 @@ type knownBuiltinsRecord struct {
 }
 
 func init() {
-	config.RegisterSkillMapHeal(healOnLoad)
+	config.RegisterSkillMapHeal(HealIfUpgraded)
 }
 
-// healOnLoad is the config-load entry of the heal. The config.json at
+// HealIfUpgraded is the heal run by every config load and by the turn
+// start that first reads a project shelf (C-19). The config.json at
 // configPath lives in the home it heals. Before the C-19 upgrade is done
 // it does nothing: the upgrade runs first and gives the existing skills
 // their keys.
-func healOnLoad(configPath string) (policies, visibility map[string]string, written []byte, err error) {
+func HealIfUpgraded(configPath string) (policies, visibility map[string]string, written []byte, err error) {
 	raw, err := readJSONMap(configPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("skillperm: self-heal: %w", err)

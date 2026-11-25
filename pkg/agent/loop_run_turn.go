@@ -635,6 +635,9 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 		history = RecoverOrphanedToolCalls(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rp.rc.rx.rr.rq.ri.rf.rt.al.auditLogger)
 	}
 
+	// C-19: the first read of the workspace's project shelf stores the
+	// keys of its new skills (Ask) before anything decides on them.
+	rp.rc.rx.rr.rq.ri.rf.rt.al.storeNewProjectSkillKeys(rp.rc.rx.rr.rq.ri.rf.rt.ts)
 	// C-11 E4: the skills the person's /name forced go through their own
 	// decision (Deny, an open trust check) before the first model call.
 	rp.rc.rx.rr.rq.ri.rf.rt.al.settleSlashSkills(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.rf.rt.ts)
