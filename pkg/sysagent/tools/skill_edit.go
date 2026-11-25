@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -32,6 +33,12 @@ var editSkillActionParams = map[string]string{
 	// set_category (Skills & Tools C-21): choose the category of an
 	// uncategorised skill, once.
 	"set_category": "category",
+}
+
+// editSkillOptionalParams names the optional parameter an action accepts
+// (FR-056: copy may choose the new skill's category).
+var editSkillOptionalParams = map[string]string{
+	"copy": "category",
 }
 
 // SkillEditTool is §5.4's edit_skill.
@@ -72,7 +79,7 @@ func (t *SkillEditTool) Parameters() map[string]any {
 			"version": map[string]any{"type": "string", "description": "restore only: a version id from get_skill versions."},
 			"category": map[string]any{
 				"type": "string", "enum": settableSkillCategories(),
-				"description": "set_category only: the category to show the skill under.",
+				"description": "set_category, or optionally copy: the category to show the skill under.",
 			},
 		},
 		"required": []string{"action", "skill"},
@@ -95,7 +102,7 @@ func parseEditSkillArgs(args map[string]any) (editSkillRequest, error) {
 		switch key {
 		case "action", "skill":
 		case "to", "path", "version", "category":
-			if key != allowed {
+			if key != allowed && key != editSkillOptionalParams[action] {
 				return req, fmt.Errorf("parameter %q does not apply to action %s", key, action)
 			}
 		default:
@@ -136,6 +143,15 @@ func parseEditSkillArgs(args map[string]any) (editSkillRequest, error) {
 			req.category = v
 		}
 	}
+	if optional := editSkillOptionalParams[action]; optional != "" {
+		if _, given := args[optional]; given {
+			v, err := str(optional)
+			if err != nil {
+				return req, err
+			}
+			req.category = v
+		}
+	}
 	return req, nil
 }
 
@@ -152,6 +168,10 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	}
 	if req.action == "set_category" {
 		return setSkillCategoryOnce(root, req)
+	}
+	if req.action == "copy" && req.category != "" && !skills.IsSkillCategory(req.category) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", skills.UnknownCategoryError(req.category).Error()+". Nothing was copied.",
+			"choose one of the listed categories"))
 	}
 	session := tools.ToolTranscriptSessionID(ctx)
 	change := skills.ChangeRequest{
@@ -209,8 +229,21 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 		"activation_status":  string(out.ActivationStatus),
 		"changed_fields":     out.ChangedFields,
 	}
-	if out.Warning != "" {
-		fields["warning"] = out.Warning
+	warning := out.Warning
+	if req.action == "copy" && req.category != "" && req.category != skills.CategoryUncategorised {
+		// FR-056: the category is stored in Omnipus's own records, never in
+		// the skill files. The copy is already committed, so a failed write
+		// is reported with it rather than undoing the copy.
+		if err := skills.SetCategoryOnce(root, req.to, req.category); err != nil {
+			logger.ErrorCF("sysagent", "edit_skill: skill copied but its category was not saved",
+				map[string]any{"skill": req.to, "category": req.category, "error": err.Error()})
+			warning = strings.TrimSpace(warning + " The category was not saved: " + err.Error())
+		} else {
+			fields["category"] = req.category
+		}
+	}
+	if warning != "" {
+		fields["warning"] = warning
 	}
 	return changeSuccess(fields, working("the change pipeline committed the change and recorded its version"))
 }
