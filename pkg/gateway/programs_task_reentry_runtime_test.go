@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -39,7 +40,23 @@ func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string)
 		wu5StopGW("task re-entry count completed"),
 	})
 	input := bus.InboundMessage{Channel: "webchat", SessionID: sid, ChatID: sid, Content: "web follow-up into the task session", Provenance: bus.NewProvenance(bus.OriginWeb)}
-	require.NoError(t, x.bus.PublishInbound(context.Background(), input))
+	// A task is terminal a moment before its run releases the session's
+	// admission, and a message sent in that window is refused as a stale
+	// generation (steer_execution_admission.go) and dropped: no turn starts.
+	// Send again until the provider sees the turn. An accepted message starts
+	// its turn within milliseconds, so only a refused one reaches the next try.
+	started := false
+	for attempt := 0; attempt < 8 && !started; attempt++ {
+		require.NoError(t, x.bus.PublishInbound(context.Background(), input))
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) && !started {
+			started = len(x.provider.observedOrigins(sid)) > before
+			if !started {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+	require.True(t, started, "instrument: a web message into the task session started a turn")
 	x.waitEnds(t, sid)
 	result := x.provider.result(sid, call)
 	require.Contains(t, result, "PROGRAM_TASK_CHILD_RAN", "instrument: the re-entry's real bash ran; a refused or missed turn cannot establish zero")
