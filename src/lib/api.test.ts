@@ -18,7 +18,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type {
-  SkillTrustLevel,
   PromptInjectionLevel,
 } from './api'
 import {
@@ -401,45 +400,13 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── fetchSkillTrust / updateSkillTrust ────────────────────────────────────
-
-  describe('fetchSkillTrust', () => {
-    it('GET /api/v1/security/skill-trust — returns level', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ level: 'warn_unverified' as SkillTrustLevel }))
-
-      const { fetchSkillTrust } = await import('./api')
-      const result = await fetchSkillTrust()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/skill-trust')
-      expect(result.level).toBe('warn_unverified')
-    })
-  })
-
-  describe('updateSkillTrust', () => {
-    it('PUT /api/v1/security/skill-trust — sends CSRF and correct body', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        makeOkResponse({ saved: true, requires_restart: true, applied_level: 'block_unverified' }),
-      )
-
-      const { updateSkillTrust } = await import('./api')
-      await updateSkillTrust('block_unverified')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/security/skill-trust')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ level: 'block_unverified' })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('invalid level'))
-
-      const { updateSkillTrust } = await import('./api')
-      await expect(updateSkillTrust('allow_all')).rejects.toThrow('400')
-    })
-  })
+  // The fetchSkillTrust / updateSkillTrust helper cases are retired with their
+  // endpoints (Skills & Tools spec C-22 row 6; S-101). Where each one went: the
+  // read of the stored level is the page's trust read (SkillsToolsPage.trust.test
+  // "C-3 read-model control"); the write's method and body are the PATCH asserts
+  // there (S-32, "T-Q3 B"); the 400 is S-07 for the trust block. The CSRF header
+  // is not endpoint-specific: the describe 'api request: X-CSRF-Token header uses
+  // decoded cookie value' of this file keeps it.
 
   // ── fetchPromptGuardLevel / updatePromptGuardLevel ────────────────────────
 
