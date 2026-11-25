@@ -1,0 +1,248 @@
+id: delegation-and-stop
+title: An agent hands work to a helper, and how Stop reaches both
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'Delegating is fire-and-forget for the parent. The delegate tool writes a durable record for a new helper session, asks the launcher to start it (or queue it if too many agents run), and returns
+  at once with the helper''s session id. The helper''s turn then runs on its own goroutine, outside the message bus and outside the parent''s turn, so cancelling the parent''s turn does not reach it on
+  its own. When the helper finishes, its answer is appended to the parent''s durable inbox and the parent is woken: injected into the parent''s live turn if one is running, otherwise as a new "system" message
+  on the bus that starts a new parent turn. Stop is one shared function (StopSession) with two scopes. Plain Stop affects the session only: it stamps a durable stop marker, asks that session''s running
+  turn to stop, and requests a hard abort 3 seconds later; it leaves its helpers and its background shell processes running. Stop all (the Tree option) does the same for the session and every helper under
+  it, found through the lifecycle store, and also kills the background shells of the whole tree. Redirect is Stop followed by a new instruction.
+
+  '
+participants:
+- id: person
+  label: Web app (person)
+  kind: person
+  ref: src/components/chat/composer/OmnipusComposer.tsx
+- id: parent
+  label: Parent agent turn
+  kind: server
+  ref: pkg/agent/loop_run_turn_tools.go
+- id: delegate
+  label: delegate tool
+  kind: server
+  ref: pkg/tools/delegate.go, delegate_run.go
+- id: launcher
+  label: Session launcher + admission
+  kind: server
+  ref: pkg/agent/steer_launcher.go
+- id: lifecycle
+  label: Lifecycle store + inbox
+  kind: store
+  ref: pkg/session/lifecycle.go, message_inbox.go
+- id: child
+  label: Helper turn (own goroutine)
+  kind: worker
+  ref: pkg/agent/steer_launcher.go::runDispatchedSteeredTurn
+- id: bus
+  label: Message bus
+  kind: server
+  ref: pkg/bus/bus.go
+- id: stop
+  label: One Stop
+  kind: server
+  ref: pkg/agent/stop_session.go, cancel.go
+steps:
+- phase: 1 · Launch
+- from: parent
+  to: delegate
+  label: tool call delegate(action=run, agent_id, task, goal?)
+  kind: call
+  ref: pkg/tools/delegate.go::execute -> delegate_run.go::executeRun
+  verified: true
+- over: delegate
+  note: Validates the request and checks the workspace delegation edge (deny by default) and depth cap
+  ref: pkg/tools/delegate_run.go::validateRequest, authorizeDelegation
+  verified: true
+- from: delegate
+  to: launcher
+  label: Launch(target agent, task, origin=delegate, call id)
+  kind: call
+  ref: pkg/tools/delegate_run.go::launchAndDispatch -> pkg/agent/steer_launcher.go::Launch
+  verified: true
+- from: launcher
+  to: lifecycle
+  label: write helper session + lifecycle record with steered-by edge; copy parent permissions
+  kind: store
+  ref: pkg/agent/steer_launcher.go::launchSteered, writeChildMetaAndHistory, inheritDelegatePermissions
+  verified: true
+- from: delegate
+  to: launcher
+  label: Dispatch(session, generation)
+  kind: call
+  ref: pkg/agent/steer_launcher.go::Dispatch -> dispatchSteeredSessionWithReservation
+  verified: true
+- alt: concurrency limit reached
+- from: launcher
+  to: lifecycle
+  label: state queued + queue position
+  kind: store
+  ref: pkg/agent/steer_launcher.go::dispatchSteeredSessionWithReservation (commitSteeredExecutionState LifecycleQueued)
+  verified: true
+- else: slot free
+- from: launcher
+  to: lifecycle
+  label: state running
+  kind: store
+  ref: pkg/agent/steer_launcher.go::dispatchSteeredSessionWithReservation (LifecycleRunning)
+  verified: true
+- from: launcher
+  to: child
+  label: start helper turn on a new goroutine with context.Background()
+  kind: async
+  ref: pkg/agent/steer_launcher.go::goSteeredTurn -> runDispatchedSteeredTurn
+  verified: true
+- end: true
+- from: delegate
+  to: parent
+  label: '{session_id, state running|queued} - returns at once'
+  kind: return
+  ref: pkg/tools/delegate_run.go::launchAndDispatch (DelegateSessionResponse)
+  verified: true
+- over: parent
+  note: Parent turn keeps going and may finish; it can poll with delegate(status/peek/result)
+  ref: pkg/tools/delegate.go::execute (status, peek, result)
+  verified: true
+- phase: 2 · Helper works
+- alt: native helper
+- over: child
+  note: Runs the same turn engine as any chat turn (model, tools, approvals); an ask that is still unresolved after the Auto, rule and saved-grant checks is refused because no person is there to answer (no human wait)
+  ref: pkg/agent/steer_launcher.go::runDispatchedSteeredTurn (runSteeredTurnBody); launchSteered(..., tools.ToolAutoDenyAsk(ctx), ...)
+  verified: true
+- else: 'third-party agent (external CLI: claude-code, codex, opencode)'
+- over: child
+  note: Drives the external CLI in the helper agent's real workspace; its permission requests are auto-approved; its own sandbox is the only kernel boundary; events are copied into the helper transcript
+  ref: pkg/agent/external_dispatch.go header + runExternalCLISubTurn, drainExternalRun
+  verified: true
+- end: true
+- from: child
+  to: lifecycle
+  label: progress frames (subagent_state, subagent_message) for the parent chat
+  kind: store
+  ref: pkg/agent/steer_frames.go::deliverSubagentState
+  verified: true
+- phase: 3 · Result goes back
+- from: child
+  to: lifecycle
+  label: commit terminal state + append final answer to parent's inbox
+  kind: store
+  ref: pkg/agent/steer_completion.go::completeSteeredTurnForExecution -> steer_completion_commit.go::publishCommittedFinal -> steer_audience.go::SteerUpwardDeliverer.Deliver (inbox.AppendSystemFinal)
+  verified: true
+- alt: parent turn is still running
+- from: child
+  to: parent
+  label: inject answer into the parent's steering queue; read at its next step
+  kind: async
+  ref: pkg/agent/wake_session.go::WakeSession (EnqueueSteeringWake)
+  verified: true
+- else: parent is idle
+- from: child
+  to: bus
+  label: system message on the inbound bus
+  kind: async
+  ref: pkg/agent/wake_session.go::WakeSession -> async_notifier.go::WakeParentAlways -> Notify (bus.InboundMessage Channel system)
+  verified: true
+- from: bus
+  to: parent
+  label: new parent turn starts with the helper's answer
+  kind: async
+  ref: pkg/agent/async_notifier.go::Notify (publishAsyncNotify)
+  verified: true
+- else: parent has an open question card or was stopped
+- over: lifecycle
+  note: Answer is held in the inbox (held_for_question / suppressed_by_stop); not lost
+  ref: pkg/agent/wake_session.go::WakeSession (questionCardOpen, wakeBlocked)
+  verified: true
+- end: true
+- phase: 4 · Stop
+- from: person
+  to: stop
+  label: 'WS cancel frame, /stop or /cancel (each with a requested scope: session = Stop, tree = Stop all), or delegate stop_all (always tree)'
+  kind: call
+  ref: 'pkg/gateway/websocket_stop_scope.go::requestScopedStopCounted (Tree: stopAll) -> pkg/agent/stop_session.go::StopSession; pkg/agent/command_controls.go::RequestScopedCancelForSession'
+  verified: true
+- from: stop
+  to: lifecycle
+  label: durable stop marker + note first
+  kind: store
+  ref: pkg/agent/stop_session.go header (SteerCanceller.StopTurns)
+  verified: true
+- over: stop
+  note: 'Stop all only: finds the tree by walking steered-by edges in the lifecycle store, not by contexts. Plain Stop (Tree false) reaches only the requested session'
+  ref: pkg/agent/cancel.go::CollectDescendantSessionIDs; pkg/agent/stop_session.go::StopSession (req.Tree)
+  verified: true
+- from: stop
+  to: parent
+  label: graceful interrupt; pending approvals cancelled; cancel_stage graceful
+  kind: async
+  ref: pkg/agent/cancel.go::interruptGracefully
+  verified: true
+- from: stop
+  to: child
+  label: 'Stop all only: graceful interrupt of each running helper in the tree'
+  kind: async
+  ref: pkg/agent/cancel.go::interruptGracefully (interruptCancelTargets)
+  verified: true
+- over: stop
+  note: '3 s later: hard abort is requested for anything still running (a cancel request, not a kill of the goroutine); 3 s after that a turn that still has not ended is marked abandoned (its later writes
+    are suppressed) and audited turn_cancel_stuck. Stop all also kills the background shells of every session in the tree; plain Stop leaves background shell processes running'
+  ref: pkg/agent/cancel.go::scheduleEscalation (cancelHardAbortDelay = 3s, cancelDetachDelay = 3s); pkg/agent/stop_session.go::StopSession, ::killTreeBackgroundShells; pkg/gateway/websocket_stop_scope.go::webStopHooks
+  verified: true
+- alt: redirect (stop-redirect or redirect frame)
+- over: stop
+  note: 'Ordinary chat: Stop, wait until stopped, then the instruction is sent as the next user message (one new turn). Helper: Stop, then revive with the instruction. Third-party helpers cannot be redirected'
+  ref: pkg/agent/command_controls.go::RedirectSessionTurn; stop_redirect_root.go::redirectOrdinarySession; steer_redirect.go::RedirectSteeredSession
+  verified: true
+- end: true
+stores:
+- what: Helper state history (queued, running, completed, stopped...), steered-by edge, generation
+  where: session_lifecycle/<session_id>.jsonl
+  when: at launch, dispatch, each state change, stop
+  ref: pkg/session/lifecycle.go
+- what: Stop intents and control ledger
+  where: session_lifecycle/controls/<session_id>.jsonl
+  when: on stop, steer, redirect
+  ref: pkg/session/lifecycle_control_ledger.go
+- what: Child-to-parent messages and final answers
+  where: session_messages/<owner_key>.jsonl
+  when: on message_parent and on completion
+  ref: pkg/session/message_inbox.go; pkg/agent/steer_audience.go::publishUpward
+- what: Helper's own transcript
+  where: its own session folder under sessions/
+  when: during its turn
+  ref: pkg/agent/steer_launcher.go::writeChildMetaAndHistory
+- what: Steering queue (messages for a live turn)
+  where: memory only
+  when: until consumed at the next step
+  ref: pkg/agent/steering.go::steeringQueue
+failures:
+- case: Too many agents running
+  effect: Helper is queued, not refused; the parent is told the queue position
+  ref: pkg/tools/delegate_run.go::launchAndDispatch (DispatchQueued)
+- case: Parent turn is cancelled by its own context (not Stop)
+  effect: 'Helper keeps running: it runs on context.Background() and is only reached through the Stop tree walk'
+  ref: pkg/agent/steer_launcher.go::runDispatchedSteeredTurn (runCtx := context.Background())
+- case: Wake cannot be delivered
+  effect: Answer stays durable in the inbox; delivery progress is recorded and retried at boot
+  ref: 'pkg/agent/steer_completion_commit.go::publishCommittedFinal (recordFinalDeliveryProgress); pkg/agent/boot_sweep.go::Run (pass two: retry pending committed finals)'
+- case: Gateway restarts while a helper runs
+  effect: Boot recovery reads lifecycle records. A finished result is delivered upward. An eligible native delegated helper stopped by the restart is revived and dispatched again (resumeRestartHelper);
+    a third-party helper, a task-origin run or a helper with an accepted human Stop still pending is not revived and no refusal row is written for it (these checks return first). If the helper's agent or workspace
+    is no longer valid, or the revival or dispatch fails, the code attempts to save a visible "resume did not start" row; if that save fails the failure is only logged. Other helpers interrupted mid-run are stopped
+    with cause restart by the steer boot recovery (not marked failed). See the Restart section.
+  ref: pkg/agent/boot_sweep.go::SteerBootRecovery.Run, recoverSteered, failInterrupted; pkg/agent/boot_helper_resume.go::resumeRestartHelper, recordResumeRefused
+- case: Turn ignores the graceful stop
+  effect: Hard abort is requested after 3 s; after another 3 s it is marked abandoned (later writes suppressed) and audited as stuck
+  ref: pkg/agent/cancel.go::scheduleEscalation
+facts:
+- fact: The parent turn only launches a helper; the helper runs on its own goroutine with a background context and reports back through the durable inbox and a wake.
+  ref: pkg/agent/steer_launcher.go::runDispatchedSteeredTurn; pkg/agent/wake_session.go::WakeSession
+- fact: A helper's final answer comes back as a new inbound 'system' message on the bus (a new parent turn), or is injected into a live parent turn's steering queue. It does not stream back.
+  ref: pkg/agent/async_notifier.go::Notify; pkg/agent/wake_session.go
+- fact: 'Third-party helpers run in the agent''s real workspace, and their permission requests are approved automatically (recorded operator decision, ADR-032 / issue #488).'
+  ref: pkg/agent/external_dispatch.go header
+- fact: 'Stop is durable-first: it writes a stop marker to the lifecycle store, then interrupts, then requests a hard abort after 3 s. Plain Stop is session-only; Stop all (StopRequest.Tree) finds children
+    through the store, not through running memory, and kills the tree''s background shells.'
+  ref: pkg/agent/stop_session.go::StopSession (StopRequest.Tree), header; pkg/agent/cancel.go::CollectDescendantSessionIDs
+- fact: 'A helper is not tied to the cancellation of its parent''s own turn context (it runs on a background context). This is separate from Stop scope: only a Stop all reaches the helper tree.'
+  ref: pkg/agent/steer_launcher.go::runDispatchedSteeredTurn; pkg/agent/stop_session.go::StopSession

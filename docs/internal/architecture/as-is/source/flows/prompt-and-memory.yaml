@@ -1,0 +1,275 @@
+id: prompt-and-memory
+title: What the model is actually sent on one call, how it is kept inside the model's window, and how memory is written and read back
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'Every model request is built fresh in four layers. First comes one system message: a cached part (environment, the agent''s soul, the user''s profile, the skills menu and the newest saved notes
+  (up to 20, packed into an 8,000-character budget) plus this workspace''s last-session summary), then a live part (runtime, channel, sender, delegation, working folder). Next come the recalled old turns,
+  if any, and then the conversation window from the session store. Last, a few per-call notes are added and never saved: the workspace''s AGENT.md, the scratchpad, the current time, and goal and tool hints.
+  When this is too big, nothing is summarised by a model. The oldest whole turns slide out of the window, large tool results are shortened, and a plain "Earlier in this conversation" list of snippets replaces
+  them. Memory is written only when an agent calls `remember` (one Markdown file per note) and when a conversation goes idle (a model-written recap). Knowledge-base and Library content never enters the
+  prompt by itself; it arrives only through tools. Attachments on the current message are the exception for media: they go directly into the new user message sent to the provider, with no tool call.
+
+  '
+participants:
+- id: turn
+  label: Agent turn (prepare -> request -> model -> tools)
+  kind: server
+  ref: pkg/agent/loop_run_turn.go
+- id: win
+  label: Session window store ($OMNIPUS_HOME/sessions)
+  kind: store
+  ref: session.ContextWindowStore::WindowView
+- id: cb
+  label: Prompt builder (cached per agent x workspace)
+  kind: server
+  ref: pkg/agent/context.go::ContextBuilder
+- id: files
+  label: Agent and workspace files (SOUL.md, USER.md, AGENT.md, skills)
+  kind: store
+- id: mem
+  label: Memory store (notes, last-session summary, retros) + search index
+  kind: store
+  ref: pkg/agent/memory.go::MemoryStore
+- id: tools
+  label: Tool registry + policy filter
+  kind: server
+  ref: pkg/tools::FilterToolsByPolicy
+- id: model
+  label: Model provider (fallback chain)
+  kind: external
+  ref: pkg/agent/loop_run_turn.go::callProviderOnce
+- id: recap
+  label: Session-end recap (idle timer goroutine)
+  kind: worker
+  ref: pkg/agent/session_end.go::CloseSession
+steps:
+- phase: 1 · Load the conversation
+- from: turn
+  to: win
+  label: repair tool calls left without a result by a crash
+  kind: call
+  ref: pkg/agent/loop_run_turn.go::assembleInitialContext -> pkg/agent/session_recovery.go::RecoverOrphanedToolCalls
+  verified: true
+- from: turn
+  to: win
+  label: 'WindowView: saved turns, the window cursor (what was already evicted) and saved shortenings'
+  kind: call
+  ref: pkg/agent/loop_window.go::assembleMessages (store.WindowView, projectMessagesChecked)
+  verified: true
+- from: win
+  to: turn
+  label: live window + 'Earlier in this conversation' breadcrumb of evicted turns (literal snippets, no summary)
+  kind: return
+  ref: pkg/agent/window_relief.go::breadcrumbForWindow -> pkg/agent/breadcrumb_archive.go::buildArchiveBreadcrumbFrom
+  verified: true
+- phase: 2 · Build the system message
+- from: turn
+  to: cb
+  label: BuildMessagesForSession(workspace, channel, sender, breadcrumb, active skills)
+  kind: call
+  ref: pkg/agent/context.go::BuildMessagesForSession
+  verified: true
+- over: cb
+  note: Current-message attachments (media) go directly into the new user message sent to the provider, also when the message has attachments but no text. They do not need a tool call.
+  ref: pkg/agent/context.go::BuildMessagesForSession
+  verified: true
+- over: cb
+  note: cached part reused unless a source file's mtime or the rendered notes changed
+  ref: context.go::BuildSystemPromptWithCacheForWorkspace, ::workspaceVariantStaleLocked
+  verified: true
+- from: cb
+  to: files
+  label: 'read SOUL.md for the prompt (core agents: compiled prompt instead) and the one global USER.md profile'
+  kind: call
+  ref: pkg/agent/definition.go::loadAgentDefinition, ::loadUserDefinition; context.go::buildSystemPromptForShelf (coreagent.GetPrompt)
+  verified: true
+- from: cb
+  to: files
+  label: skills MENU only (names + one line), filtered by the agent's grants and the workspace's project shelf; full text loads later via the Skill tool
+  kind: call
+  ref: context.go::buildSystemPromptForShelf (BuildSkillsSummaryFuncWithProject)
+  verified: true
+- from: cb
+  to: mem
+  label: '''# Memory'': this workspace''s last-session summary + newest notes from private and shared rooms (max 20 selected, packed into an 8,000-character budget)'
+  kind: call
+  ref: context.go::carryForwardContext, ::longTermMemoryContext -> memory.go::GetMemoryContextForScope (SearchEntriesInScope("",20,...), maxMemoryContextChars=8000)
+  verified: true
+- over: cb
+  note: 'cached order: environment · identity/workspace info · SOUL + USER.md · skills menu · memory · split-marker rule'
+  ref: context.go::buildSystemPromptForShelf
+  verified: true
+- over: cb
+  note: 'live part appended after the cache mark: runtime, channel + chat id, ''user watching'', sender, delegation block, working folder, channels, God-Mode note'
+  ref: context.go::buildDynamicContextFor
+  verified: true
+- from: cb
+  to: turn
+  label: '[system: cached block (1h cache hint) + live block + active skills + breadcrumb] [recalled span] [window] [new user message]'
+  kind: return
+  ref: context.go::BuildMessagesForSession; loop_window.go::assembleMessages (span placed after the first window message, before the rest)
+  verified: true
+- phase: 3 · Tools and per-call notes (never saved)
+- from: turn
+  to: tools
+  label: all agent tools -> filter by the agent's allow/ask/deny policy; goal-forcing may narrow to set_goal; compressed manifest sends a lazy subset
+  kind: call
+  ref: pkg/agent/loop_run_turn.go::prepareToolSurface (tools.FilterToolsByPolicy, evaluateGoalForcing, buildCompressedToolDefs)
+  verified: true
+- over: turn
+  note: 'added per call, rebuilt every time: workspace AGENT.md (project instructions) right after the system message; scratchpad checklist; web-only Mermaid hint; goal rubric; unloaded-tool list; current
+    time'
+  ref: loop_run_turn.go::prepareCallMessages (injectWorkspaceInstructions, buildScratchpadNote, injectWebRenderingNote, injectGoalRubricNote, injectManifestNote); prompt_cache_tail.go::buildVolatileContext,
+    ::consolidateVolatileNotes
+  verified: true
+- phase: 4 · Keep it inside the window
+- alt: messages + tool definitions + per-call notes exceed the budget B
+- from: turn
+  to: win
+  label: 'windowTrim: drop recalled span first, slide oldest whole turns out, then shorten biggest tool results; commit new cursor'
+  kind: store
+  ref: loop_run_turn.go:783 -> loop_window.go::windowTrim -> window_trim_checked.go::trimWindowChecked (trimWholeTurns, shortenNext, commitWindowProjections)
+  verified: true
+- over: win
+  note: nothing is deleted; evicted turns stay in the archive for recall_conversation
+  ref: breadcrumb_archive.go comment; window_trim_checked.go
+  verified: true
+- end: true
+- from: turn
+  to: model
+  label: request
+  kind: call
+  ref: loop_run_turn.go::callProviderOnce
+  verified: true
+- alt: provider answers 'context too long'
+- from: turn
+  to: win
+  label: same windowTrim, then one retry (UI says 'Compressing history')
+  kind: store
+  ref: pkg/agent/loop_run_turn_response.go:506 (windowTrim)
+  verified: true
+- end: true
+- phase: 5 · Memory written and read during the turn
+- from: model
+  to: turn
+  label: 'tool call: remember(content, category, room)'
+  kind: return
+  verified: false
+- from: turn
+  to: mem
+  label: write memories/<uuid>.md (frontmatter + body), index in bleve, near-duplicate check (still saved), audit event
+  kind: store
+  ref: pkg/tools/memory.go::RememberTool.Execute -> pkg/agent/memory.go::AppendLongTermToScope
+  verified: true
+- over: mem
+  note: the cached prompt is rebuilt on the NEXT call because the rendered notes are part of its cache identity
+  ref: context.go comment on BuildSystemPromptWithCache
+  verified: true
+- from: turn
+  to: mem
+  label: 'recall_memory(query): bleve search over private + shared rooms'
+  kind: call
+  ref: pkg/tools/memory.go::RecallMemoryTool; memory.go::SearchEntriesInScope
+  verified: true
+- from: turn
+  to: win
+  label: 'recall_conversation: read evicted turns back from the archive and splice them into the very next request if they fit, else say so'
+  kind: call
+  ref: pkg/agent/recall_conversation.go; pkg/agent/recall_injection.go (decide/splice)
+  verified: true
+- phase: 6 · After the conversation goes quiet
+- over: recap
+  note: each turn resets an idle timer (agents.defaults idle_timeout_minutes); also fired when a delegated helper ends and for missed sessions at boot
+  ref: pkg/agent/loop_idle.go::resetIdleTicker; session_end.go (triggers idle, delegate_terminal, bootstrap)
+  verified: true
+- from: recap
+  to: model
+  label: summarise the transcript (user turns, tool count)
+  kind: call
+  ref: pkg/agent/session_end.go::runRecap
+  verified: true
+- from: recap
+  to: mem
+  label: write workspaces/<ws>/.omnipus/carry-forward/<agent>.md (read by the NEXT prompt in that workspace) + a retro file; on model failure a heuristic fallback
+  kind: store
+  ref: session_end.go (WriteCarryForward lines 515/681, AppendRetro 537/701, writeHeuristicFallbackRetro); memory.go::carryForwardPath, ::AppendRetro
+  verified: true
+stores:
+- what: conversation window, cursor and archive
+  where: $OMNIPUS_HOME/sessions/ (one store for all agents)
+  when: every turn; cursor moves on trim
+  ref: pkg/agent/instance.go:403; window_trim_checked.go::commitWindowProjections
+- what: saved notes (private)
+  where: <agent folder>/.omnipus/memories/<uuid>.md
+  when: remember
+  ref: pkg/memrooms/rooms.go (OmnipusRoomDir, MemoriesSubdir); memory.go::NewMemoryStore
+- what: saved notes (shared with the workspace)
+  where: $OMNIPUS_HOME/workspaces/<ws>/.omnipus/memories/<uuid>.md
+  when: remember with the shared room
+  ref: pkg/memrooms/rooms.go:105
+- what: search index and duplicate signatures (derived)
+  where: <room>/.index/bleve, minhash
+  when: on write; rebuilt if damaged
+  ref: memory.go::AppendLongTermToScope, ::roomIndexLocked
+- what: last-session summary
+  where: $OMNIPUS_HOME/workspaces/<ws>/.omnipus/carry-forward/<agent>.md
+  when: recap
+  ref: memory.go::carryForwardPath
+- what: retrospectives
+  where: <agent folder>/.omnipus/retros/<date>/<session>_retro.md
+  when: recap or run_retrospective
+  ref: memory.go::AppendRetro
+- what: system prompt cache
+  where: memory only
+  when: per agent x workspace
+  ref: context.go::workspacePromptCache
+failures:
+- case: Memory notes cannot be read
+  effect: 'The ''# Memory'' section says ''Error: ...'' (or a partial-results warning) inside the prompt; the turn continues'
+  ref: memory.go::GetMemoryContextForScope
+- case: Last-session summary unreadable
+  effect: Silently left out (treated like a first session)
+  ref: context.go::carryForwardContext
+- case: Search index write fails
+  effect: Note is saved; WARN; index rebuilt on next open
+  ref: memory.go::AppendLongTermToScope
+- case: Window cannot be trimmed enough (immutable residue)
+  effect: Sent anyway; the provider decides
+  ref: window_trim_checked.go ('Immutable residue goes to the provider')
+- case: Window store error during assembly or trim
+  effect: Turn ends with a context-window error event
+  ref: loop_window.go::assembleMessages (setContextWindowError); loop_run_turn.go::contextWindowTurnExit
+- case: Agent's model has no known window (local model)
+  effect: Turn refused with context_window_unknown
+  ref: loop_run_turn.go::assembleInitialContext (windowSnapshot)
+- case: Recap model fails
+  effect: Heuristic fallback summary keeps the newest user turns
+  ref: session_end.go::buildCarryForward, ::writeHeuristicFallbackRetro
+facts:
+- fact: 'The cached system prompt also holds the global USER.md profile. There are two different AGENT.md files. The workspace''s AGENT.md (project instructions) is not in the cached system prompt: it is
+    injected per call as a separate system message, never cached or saved. The agent-home AGENT.md (beside SOUL.md) is stored and revisioned by the agent state store (with SOUL.md and the agent record);
+    the prompt-definition loader reads only SOUL.md from the agent folder. Whether the agent-home AGENT.md reaches a prompt by another route: not verified.'
+  ref: pkg/agent/definition.go::loadAgentDefinition; pkg/agentstore/state.go::readStateFiles; pkg/agent/loop_run_turn.go::prepareCallMessages (injectWorkspaceInstructions); pkg/agent/workspace_instructions.go::buildWorkspaceInstructionsNote
+- fact: Memory in the prompt is the newest notes (up to 20) across private and shared rooms, newest first, packed into an 8,000-character budget (counted in characters, not bytes). The newest note is always
+    shown even if it alone exceeds the budget; the framing text and the 'older memories not shown' line are outside that count. So 8,000 is a packing budget, not a hard bound on the whole section. There
+    is no relevance ranking.
+  ref: pkg/agent/memory.go::GetMemoryContextForScope (maxMemoryContextChars=8000)
+- fact: The agent turn calls the prompt builder and calls the provider; neither calls the turn.
+  ref: loop_window.go::assembleMessages; loop_run_turn.go::callProviderOnce
+- fact: The prompt builder reads memory; the memory store calls nothing.
+  ref: context.go::longTermMemoryContext
+- fact: recall_conversation reads the conversation's own archive in the session store, not the memory store.
+  ref: recall_conversation.go; window_archive.go (memory.ArchivedMessage is a type only)
+- fact: Memory notes and the last-session summary enter the system prompt. Knowledge base and Library content reach the model only through tool calls. Media attached to the current message goes directly
+    into the user message sent to the provider (no tool call); the review reports that older media references are also resolved when the context is assembled (not verified here).
+  ref: pkg/agent/context.go::buildSystemPromptForShelf (no knowledge/library read), ::BuildMessagesForSession; pkg/agent/loop_run_turn.go::assembleInitialContext
+- fact: 'Provider keys are not looked up on each ordinary request: they are resolved at start-up and copied into the process environment, which the provider clients read; channels get an in-memory bundle
+    instead. They are also re-injected when the config is reloaded (reload preparation calls InjectFromConfig against the live credential store).'
+  ref: pkg/gateway/gateway_boot_credentials.go::bootCredentials (InjectFromConfig); pkg/gateway/gateway_reload.go::prepareReloadConfig
+- fact: The browser opens the HTTP and WebSocket connections; the server pushes events (tokens, tool events, approval cards, state) over the WebSocket that is already open. There is no separate request
+    from the gateway into the web app.
+  ref: pkg/gateway/rest.go route registration; pkg/gateway/ws_session_hub.go::publishMeta; pkg/gateway/ws_tool_approval.go::broadcastToolApprovalRequired
+- fact: 'When the window is too long, trimming is model-free: whole oldest turns are evicted, long tool results shortened and a literal breadcrumb left. No model writes a summary; forceCompression no longer
+    exists (a test asserts it).'
+  ref: pkg/agent/window_trim_test.go:638-640; window_trim_checked.go
+- fact: There is no Dreamcatcher code in pkg/; the recap/retrospective path is what runs.
+  ref: grep -ril dreamcatcher pkg (no result)

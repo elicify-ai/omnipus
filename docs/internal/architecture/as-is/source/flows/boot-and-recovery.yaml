@@ -1,0 +1,330 @@
+id: boot-and-recovery
+title: 'Starting Omnipus: from `omnipus gateway` to a server that answers, and what it does with work the last run left behind'
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'One function, RunContextWithOptions, runs boot as a fixed list of stages; any stage that returns "stop" ends the process with an error. The order matters: the credential store is unlocked before
+  the config is read (the config holds only references to secrets); the agent loop is built before the kernel sandbox is switched on (Landlock and seccomp are applied by the server at boot, not only around
+  the commands agents run). Schedulers start before the web server binds its port, and the agent loop starts reading messages last. Scheduled fires call the agent directly rather than waiting in the message
+  queue. What happens to work the previous run left half-done depends on its class: an interrupted ordinary turn is ended with a "restart" Stop and not re-run; an eligible native delegated helper is revived;
+  a running plan is reconciled and processed again; a task left in progress is set to failed with interrupted-task text; a leftover running or queued parentless session that is not a standing root (for example an isolated task session) is swept to failed(interrupted) except exempt ones, while a MAIN-mode task session stays stopped(restart); open question
+  cards are re-armed. See the Restart section for the full list.
+
+  '
+participants:
+- id: op
+  label: Operator / service manager
+  kind: person
+- id: boot
+  label: Boot sequence (one function, fixed stages)
+  kind: server
+  ref: pkg/gateway/gateway.go::RunContextWithOptions
+- id: creds
+  label: Credential store (credentials.json)
+  kind: store
+  ref: pkg/credentials/keymgr.go::Unlock
+- id: cfg
+  label: Config (config.json)
+  kind: store
+  ref: pkg/config::LoadConfigWithStore
+- id: loop
+  label: Agent loop + agent registry
+  kind: server
+  ref: pkg/agent/loop.go::NewAgentLoop
+- id: kernel
+  label: Linux kernel (Landlock + seccomp)
+  kind: external
+  ref: pkg/gateway/sandbox_apply.go::applySandbox
+- id: sched
+  label: Schedulers and engines (cron, task trigger, task drain, chat loops, plan engine)
+  kind: worker
+  ref: pkg/gateway/gateway_boot.go::startSchedulers
+- id: chan
+  label: Channel manager + the one HTTP server
+  kind: server
+  ref: pkg/channels/manager.go::StartAll
+- id: disk
+  label: Data folder $OMNIPUS_HOME (sessions, lifecycle, plans)
+  kind: store
+steps:
+- phase: 1 · Start and logging
+- from: op
+  to: boot
+  label: omnipus gateway [--allow-god-mode] [--allow-empty]
+  kind: call
+  ref: pkg/app/internal/gateway/command.go::NewGatewayCommand (RunE calls gateway.RunWithOptions)
+  verified: true
+- over: boot
+  note: SIGINT/SIGTERM cancel one root context; every later stage hangs off it
+  ref: pkg/gateway/gateway.go::RunWithOptions
+  verified: true
+- from: boot
+  to: disk
+  label: create logs/, panic log, gateway.log; create the data folders
+  kind: store
+  ref: pkg/gateway/gateway.go::initializePanicLog; pkg/gateway/gateway_boot.go::bootLoggingAndDataModel (datamodel.Init)
+  verified: true
+- phase: 2 · Secrets before config
+- from: boot
+  to: creds
+  label: 'Unlock: first key source found wins'
+  kind: call
+  ref: pkg/gateway/gateway_boot_credentials.go::bootCredentials -> pkg/credentials/keymgr.go::Unlock
+  verified: true
+- over: creds
+  note: 'order: 0 OMNIPUS_MASTER_KEY_SOURCE (read once, file deleted) · 1 OMNIPUS_MASTER_KEY · 2 OMNIPUS_KEY_FILE · 3 $OMNIPUS_HOME/master.key · 4 auto-generate master.key only if credentials.json does
+    not exist · 5 passphrase, only on a terminal. An explicit source that fails is fatal; it never falls through to auto-generate'
+  ref: pkg/credentials/keymgr.go::Unlock, ::unlockFromDeliveredKey
+  verified: true
+- from: boot
+  to: cfg
+  label: load config.json (secrets appear only as <field>_ref names)
+  kind: call
+  ref: pkg/gateway/gateway_boot_credentials.go::bootCredentials -> config.LoadConfigWithStore
+  verified: true
+- from: creds
+  to: boot
+  label: provider keys copied into the process environment (os env); channel and mail secrets resolved into an in-memory SecretBundle
+  kind: return
+  ref: credentials.InjectFromConfig, credentials.ResolveBundle in bootCredentials
+  verified: true
+- alt: a single reference cannot be resolved
+- over: boot
+  note: logged at ERROR; that provider / channel / mailbox stays unusable; boot continues
+  ref: pkg/gateway/gateway_boot_credentials.go::reportInjectionErrors, ::bootCredentials
+  verified: true
+- else: the whole store is unreadable (wrong key, damaged file)
+- over: boot
+  note: boot aborts
+  ref: bootCredentials -> storeHealthFailure / fatalStoreWideAuthFailure
+  verified: true
+- end: true
+- from: boot
+  to: boot
+  label: derive the audit-log HMAC key from the master key; resolve God Mode availability
+  kind: self
+  ref: pkg/gateway/gateway.go::loadConfigAndProvider (DeriveSubkey, resolveAllowGodMode)
+  verified: true
+- from: boot
+  to: boot
+  label: build the default provider; if the default model is missing or its key is unusable, start a 'limited mode' provider that answers every turn with the reason
+  kind: self
+  ref: pkg/gateway/gateway_boot_credentials.go::createStartupProvider (startupBlockedProvider)
+  verified: true
+- phase: 3 · Agent loop, then sandbox
+- from: boot
+  to: loop
+  label: 'NewAgentLoop: one shared session store, agent registry, fallback chain, admission limit, audit logger'
+  kind: call
+  ref: pkg/agent/loop.go::NewAgentLoop -> pkg/agent/loop_construct.go::initializeConvertedSessions, ::initializeCore, ::initializeAudit
+  verified: true
+- from: loop
+  to: disk
+  label: open $OMNIPUS_HOME/sessions/ (one store for every agent)
+  kind: store
+  ref: pkg/agent/shared_session_store.go::sessionsHomeFor; pkg/agent/instance.go:403 (nai.sessions = sharedStore)
+  verified: true
+- from: boot
+  to: boot
+  label: validate every agent's tool policy; a coverage gap or invalid policy aborts boot
+  kind: self
+  ref: pkg/gateway/gateway.go::validateAndApplySandbox (line 1188 'aborting boot (FR-062)')
+  verified: true
+- from: boot
+  to: kernel
+  label: 'harden the server: PR_SET_DUMPABLE=0, then Landlock, then seccomp'
+  kind: call
+  ref: pkg/gateway/sandbox_apply.go::applySandbox -> ::applyLinuxSandbox
+  verified: true
+- alt: kernel does not know the requested Landlock rights
+- over: kernel
+  note: degrade to app-level enforcement, nag banner
+  ref: sandbox_apply.go::degradeAfterLandlockFailure; gateway.go StartNagBanner
+  verified: true
+- else: any other Landlock failure on a capable kernel
+- over: boot
+  note: boot aborts with SandboxBootError (its own exit code)
+  ref: sandbox_apply.go::applyLinuxSandbox; pkg/app/internal/gateway/command.go (ExitSandboxConfig)
+  verified: true
+- end: true
+- phase: 4 · Services, in this order
+- over: sched
+  note: 'Before any task producer starts: tasks the dead process left in_progress are set to failed (interrupted-task text) and their open runs are closed on a best-effort basis (status failed, with the abandonment wording in the result text); interrupted one-time Calendar fires are classified so an owed
+    fire can run again'
+  ref: pkg/gateway/gateway_boot.go::setupAndStartServices (agent.ReconcileInterruptedTasks, prepareTaskTrigger); pkg/agent/task_interrupted.go::ReconcileInterruptedTasks
+  verified: true
+- from: boot
+  to: sched
+  label: start cron (restores only the dead run's flags), reconcile heartbeat schedules per workspace, start task drain, mail watcher, task-trigger scheduler, chat-loop scheduler
+  kind: call
+  ref: pkg/gateway/gateway_boot.go::startSchedulers (lines 499-593)
+  verified: true
+- from: boot
+  to: chan
+  label: create channel manager (owns the HTTP server) and the chat-app channels
+  kind: call
+  ref: pkg/gateway/gateway_boot.go::setupMediaAndChannels (channels.NewManager, line 634)
+  verified: true
+- from: boot
+  to: boot
+  label: wire approvals, question cards, egress proxy; re-arm saved question cards in the background
+  kind: async
+  ref: pkg/gateway/gateway_boot.go::wireInteractiveServices (askReg.RearmSession, line 923)
+  verified: true
+- phase: 5 · Recovery of the last run's work
+- from: boot
+  to: loop
+  label: 'boot hook: classify every saved session and settle it'
+  kind: call
+  ref: pkg/gateway/gateway_boot.go::setupPlans -> SteerDeps.BootHook -> pkg/agent/boot_sweep.go::SteerBootRecovery.Run
+  verified: true
+- from: loop
+  to: disk
+  label: 'ordinary conversation that was running, queued or waiting for an answer: write a ''restart'' Stop; the turn is NOT re-run'
+  kind: store
+  ref: pkg/agent/boot_ordinary_recovery.go::recoverOrdinaryRoot, ::admittedStandingRoot
+  verified: true
+- from: loop
+  to: disk
+  label: 'helper (steered) sessions: deliver a finished result upward; revive an eligible native delegated helper that the restart stopped (resumeRestartHelper); otherwise a helper interrupted mid-run is stopped with cause restart; damaged or unknown
+    records are refused and named in the log'
+  kind: store
+  ref: pkg/agent/boot_sweep.go::recoverSteered, ::failInterrupted, Run switch on steer.Class*; pkg/agent/boot_helper_resume.go::resumeRestartHelper, ::recordResumeRefused
+  verified: true
+- over: loop
+  note: 'Not revived: third-party helpers, task-origin runs and helpers with an accepted human Stop still pending (these return before any refusal row is written). Helpers whose agent or workspace is no longer valid,
+    or whose revival or dispatch fails, are not revived either; for them the code attempts to save a visible refusal row and only logs if that save fails. A task-origin run follows the task''s own restart rule
+    instead: its session stays stopped(restart).'
+  ref: pkg/agent/boot_helper_resume.go::resumeRestartHelper
+  verified: true
+- from: loop
+  to: disk
+  label: finish Stop requests that were accepted but never took effect
+  kind: store
+  ref: pkg/agent::FinishUnfinishedStopIntents (called in the BootHook closure)
+  verified: true
+- over: boot
+  note: recovery errors are logged; they never stop boot
+  ref: 'gateway_boot.go setupPlans: ''ADR-091 boot recovery failed'''
+  verified: true
+- from: boot
+  to: sched
+  label: 'start plan engine: replay its intent log, then bootReconcile re-runs processPlan for every running plan (a judging round resumes; an awaiting_supervision plan with an unchanged unmet signature
+    is not re-judged); then the boot sweep settles leftover running or queued parentless non-standing sessions as failed(interrupted) within a budget (default 30 s); steered (helper and MAIN-mode task) sessions are skipped here because the steer recovery owns them'
+  kind: call
+  ref: pkg/gateway/gateway_boot.go::startPlanEngine -> pkg/agent/plan_engine.go::Start, ::bootReconcile (processPlan) -> boot_sweep.go::runBootSweep, ::bootSweep
+  verified: true
+- over: sched
+  note: 'Sweep exemptions (not failed): a needs-input session that can still be rebuilt; a paused plan-owner session whose plan is awaiting_supervision; a standing root conversation (no helper edge; origin
+    chat, channel, main, heartbeat or scheduled), which ordinary-root recovery handles separately; helper sessions, which belong to helper recovery.'
+  ref: pkg/agent/boot_sweep.go::bootSweep, ::standingRootExemptFromSweep; pkg/agent/boot_ordinary_recovery.go::recoverOrdinaryRoot
+  verified: true
+- phase: 6 · Open the door
+- from: boot
+  to: chan
+  label: 'wrap the router: CSRF -> planted-cookie guard -> navigation guard -> preview host dispatch; sign-in is checked per route class inside the route table (open routes, optional-auth routes, authenticated
+    routes)'
+  kind: call
+  ref: pkg/gateway/gateway_boot.go::prepareListener
+  verified: true
+- from: chan
+  to: chan
+  label: 'StartAll: start each chat-app channel, then bind the ONE port (3 tries) and serve the web app, REST, WebSockets and /preview/'
+  kind: call
+  ref: pkg/channels/manager.go::StartAll (net.Listen retry loop)
+  verified: true
+- alt: every configured chat-app channel fails to start, or the port is taken
+- over: boot
+  note: boot aborts ('error starting channels'); the web app is not reachable either, because it shares this server
+  ref: manager.go::StartAll ('all %d configured channels failed'); gateway_boot.go::prepareListener
+  verified: true
+- end: true
+- from: boot
+  to: loop
+  label: 'start agent loop goroutine: initialise hooks and MCP servers, then read the inbound message queue forever'
+  kind: async
+  ref: pkg/gateway/gateway.go::startBackgroundServices (line 1744) -> pkg/agent/loop.go::Run
+  verified: true
+- from: boot
+  to: loop
+  label: 'background: retention sweeps (daily), catch-up recaps for sessions missing one, session-message consumer'
+  kind: async
+  ref: gateway.go::startBackgroundServices (startRetentionSweepLoop, BootstrapRecapPass line 1807, StartSessionMessageConsumer)
+  verified: true
+- from: boot
+  to: cfg
+  label: 'if hot reload is on: poll config.json and apply changes in place'
+  kind: wait
+  ref: gateway.go::configureHealthAndWatcher (setupConfigWatcherPolling), ::serveReloadLoop (executeReload)
+  verified: true
+stores:
+- what: panic log, gateway.log
+  where: $OMNIPUS_HOME/logs/
+  when: first stage
+  ref: gateway.go::initializePanicLog; gateway_boot.go::bootLoggingAndDataModel
+- what: master key (auto-generated only on a fresh install)
+  where: $OMNIPUS_HOME/master.key (0600, created with O_EXCL)
+  when: unlock, mode 4
+  ref: pkg/credentials/keymgr.go::Unlock, ::generateAndPersistMasterKey
+- what: encrypted secrets
+  where: $OMNIPUS_HOME/credentials.json
+  when: read at unlock; orphaned provider keys deleted after the agent loop is built
+  ref: gateway_boot_credentials.go::sweepOrphanedProviderCredentials
+- what: conversation transcripts and windows for ALL agents
+  where: $OMNIPUS_HOME/sessions/
+  when: opened by NewAgentLoop
+  ref: pkg/agent/shared_session_store.go; pkg/agent/instance.go:403
+- what: restart Stop lines / failed(interrupted) states
+  where: session lifecycle records
+  when: boot recovery
+  ref: boot_ordinary_recovery.go; boot_sweep.go::runBootSweep
+failures:
+- case: Whole credential store unreadable
+  effect: Boot aborts
+  ref: gateway_boot_credentials.go::bootCredentials
+- case: One secret reference broken
+  effect: Only that provider/channel/mailbox is unusable; boot continues
+  ref: gateway_boot_credentials.go::reportInjectionErrors
+- case: Default model missing or its key unusable
+  effect: Gateway runs in limited mode; every turn answers with the reason
+  ref: gateway_boot_credentials.go::createStartupProvider
+- case: Agent tool policy invalid
+  effect: Boot aborts
+  ref: gateway.go::validateAndApplySandbox
+- case: Landlock fails on a capable kernel
+  effect: Boot aborts with its own exit code
+  ref: sandbox_apply.go::applyLinuxSandbox
+- case: Every configured chat-app channel fails to start, or the port is taken
+  effect: Boot aborts; the web app is down too
+  ref: pkg/channels/manager.go::StartAll
+- case: Boot recovery hits a damaged session
+  effect: Session refused and named in the log; boot continues
+  ref: boot_sweep.go::SteerBootRecovery.Run
+- case: Agent loop panics after boot
+  effect: Logged to the panic file; /health reports 503 'agent loop exited unexpectedly — gateway requires restart'; nothing restarts it
+  ref: gateway.go::startBackgroundServices, ::configureHealthAndWatcher
+- case: A scheduled job fires before the agent loop reads the queue
+  effect: 'Scheduled fires do not use the bus. A Calendar (task-trigger) fire that comes due before the task executor''s session plane is wired is held in the executor and released when it is wired; the
+    queued-task poller likewise dispatches nothing until then. For heartbeats and chat loops in that early window: not verified.'
+  ref: pkg/agent/task_trigger_boot_hold.go::holdFire; pkg/agent/loop.go::ProcessScheduled; pkg/agent/scheduled_execution_admission.go::runScheduledTurnWithAdmission
+  verified: false
+facts:
+- fact: Unlocking the credential store starts with a one-time key delivery file (OMNIPUS_MASTER_KEY_SOURCE) that is read and then deleted; a failure there stops start-up.
+  ref: pkg/credentials/keymgr.go::Unlock, ::unlockFromDeliveredKey
+- fact: The server applies the kernel sandbox to itself at start-up (after the agent loop is built, before services start), and again on the thread that starts each child program. Its exact coverage is
+    under separate security review and is not described here.
+  ref: pkg/gateway/gateway.go::validateAndApplySandbox; pkg/gateway/sandbox_apply.go::applyLinuxSandbox
+- fact: The channel manager (pkg/channels) owns and binds the single HTTP server; the gateway registers its routes on it. A channel start failure can therefore stop the web app from coming up. There is
+    one port, not two.
+  ref: pkg/channels/manager.go::StartAll; pkg/gateway/gateway.go header lines 10-11
+- fact: All agents share one session store at $OMNIPUS_HOME/sessions/; per-agent session folders are read only once, by the start-up cutover.
+  ref: pkg/agent/instance.go:403; pkg/agent/shared_session_store.go; pkg/agent/loop_construct.go::initializeConvertedSessions
+- fact: 'Recovery is by class. Ordinary conversation that was running, queued or waiting: ended with a restart Stop, not re-run. Eligible native delegated helper: revived. Third-party helper, task-origin
+    run: not revived. Running plan: reconciled and processed again (not failed). Task left in_progress: task record failed with interrupted-task text; its open runs closed best effort as failed with abandonment text. MAIN-mode task session: stopped(restart), not revived. Leftover running or queued parentless non-standing sessions (for example an isolated task session): failed(interrupted), except the sweep
+    exemptions. Open question cards: re-armed with timers counted from their creation time. A Calendar one-time fire that had started: replayed. Not distinguished here: the task record, the plan record,
+    the session lifecycle record and one particular execution are four different things.'
+  ref: pkg/agent/boot_ordinary_recovery.go::recoverOrdinaryRoot; pkg/agent/boot_helper_resume.go::resumeRestartHelper; pkg/agent/plan_engine.go::bootReconcile; pkg/agent/task_interrupted.go::ReconcileInterruptedTasks;
+    pkg/agent/boot_sweep.go::standingRootExemptFromSweep; pkg/gateway/gateway_boot.go::wireInteractiveServices
+- fact: 'Processes and sockets: one main Omnipus server process. Separate from it: a Chromium child process when the local browser tool starts, long-lived child processes for stdio MCP servers, and WebRTC
+    media sockets opened by the gateway''s browser WebRTC code (purpose not traced here). The server is one operating-system process only for its own work.'
+  ref: pkg/tools/browser/manager_local_startup.go::runLocalStartup; pkg/mcp/manager.go::ConnectServer; pkg/gateway/browser_webrtc.go::sharedMediaConn, ::sharedMediaTCP
+- fact: 'Provider keys are re-injected on config reload, not only at boot: reload preparation calls InjectFromConfig against the live credential store.'
+  ref: pkg/gateway/gateway_reload.go::prepareReloadConfig

@@ -1,0 +1,353 @@
+id: plans-and-goals
+title: How a Plan runs its tasks, how a task run is judged, and how a chat Goal keeps an agent working
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'A Plan is a set of tasks with dependencies. Once a plan is approved, the plan engine pushes it along by itself. It wakes every 30 seconds and also whenever a task changes status. Each time, it
+  starts any member task that is ready. When every member has finished, it asks the Judge whether the plan''s Definition of Done is met. Inside each task run the worker agent keeps trying in the same conversation
+  until it says "done" with the goal_claim tool. The Judge then checks that claim. "Not met" sends the Judge''s feedback back to the worker. Too many failed tries ends the run, and the task restarts in
+  a fresh run while its attempt budget lasts (a total number of runs, configurable per task and globally; the shipped default is 3). A chat Goal (/goal) uses the same Judge. There the check is started by
+  the turn engine after the turn in which the agent claimed success. If the verdict is "not met", a follow-up message goes back through the message bus.
+
+  '
+participants:
+- id: person
+  label: Person (approves plan / types /goal)
+  kind: person
+- id: planeng
+  label: Plan engine (30 s tick + task events)
+  kind: server
+  ref: pkg/agent/plan_engine.go::PlanEngine
+- id: exec
+  label: Task executor
+  kind: server
+  ref: pkg/agent/task_executor.go::TaskExecutor
+- id: worker
+  label: Worker agent turn (assignee)
+  kind: worker
+  ref: pkg/agent/task_executor.go::processTaskDirect
+- id: judge
+  label: Judge (checks, then Judge agent turn)
+  kind: worker
+  ref: pkg/agent/judge.go::JudgeCriteria
+- id: owner
+  label: Plan owner / Plan Supervisor turn
+  kind: worker
+  ref: pkg/agent/plan_engine.go::dispatchPlanTurn
+- id: goalhook
+  label: Goal keeper (runs after each chat turn)
+  kind: server
+  ref: pkg/agent/goal_loop.go::checkGoalLoopAfterTurn
+- id: bus
+  label: Message bus
+  kind: server
+  ref: pkg/bus/bus.go
+- id: store
+  label: Files on disk
+  kind: store
+steps:
+- phase: 1 · Plan starts
+- from: person
+  to: store
+  label: 'approve plan: draft -> approved'
+  kind: store
+  ref: pkg/gateway/rest_plans.go; pkg/plan/plan.go (StateDraft/StateApproved)
+  verified: true
+- from: planeng
+  to: planeng
+  label: 'tick (every 30 s): Admit(''plan'') under the shared cap of 16 plans+goals+loops'
+  kind: self
+  ref: pkg/agent/plan_engine.go::Tick -> plan_engine_play.go::tryStartApprovedPlan -> Admit
+  verified: true
+- from: planeng
+  to: store
+  label: approved -> running
+  kind: store
+  ref: pkg/agent/plan_engine_play.go::tryStartApprovedPlan
+  verified: true
+- phase: 2 · Members are dispatched (repeats on every tick and every task-status event)
+- from: planeng
+  to: store
+  label: 'promote members: inbox -> next; blocked -> next once every dependency is done'
+  kind: store
+  ref: pkg/agent/plan_engine_play.go::processPlan -> promoteInboxMembers, promoteReadyMembers
+  verified: true
+- from: planeng
+  to: exec
+  label: 'for each ''next'' member: executeTaskPlanVerified / executeTaskPlanInitiated'
+  kind: call
+  ref: pkg/agent/plan_engine_play.go::dispatchReadyMembers
+  verified: true
+- over: exec
+  note: 'Gates: plan must be running and dependencies done. A MAIN-mode run goes to the launcher before the task slot limit is checked; other runs need a free slot of the task dispatch limit (performance
+    max parallel agents). A refusal is retried on the next tick'
+  ref: pkg/agent/task_executor.go::executeTask (executeMainTask before dispatchSema.TryAcquire)
+  verified: true
+- from: exec
+  to: store
+  label: 'task: next -> in_progress (atomic claim); create the run''s conversation; open run record'
+  kind: store
+  ref: pkg/task/claim.go::ClaimForRun; task_executor.go::createTaskSessionSyncAs; task_executor_run.go::openRun
+  verified: true
+- phase: 3 · Inside one task run (inner tries)
+- loop: repeat in the same conversation until the claim is judged, the run fails, or it is stopped
+- from: exec
+  to: worker
+  label: 'turn(prompt): task + criteria + ''claim done only with goal_claim'''
+  kind: call
+  ref: pkg/agent/task_run_loop.go::executeTaskRun; task_executor_run.go::buildPrompt
+  verified: true
+- from: worker
+  to: exec
+  label: turn ends; executor reads the last goal_claim (met / blocked / waiting_on_user)
+  kind: return
+  ref: pkg/agent/task_run_loop.go::resolveRunClaim, finishRunTurn
+  verified: true
+- alt: claim = met with evidence
+- from: exec
+  to: judge
+  label: JudgeCriteria(task scope, criteria + Definition of Done, evidence)
+  kind: call
+  ref: pkg/agent/task_run_loop.go::adjudicateRunClaim
+  verified: true
+- over: judge
+  note: Machine checks run first through the assignee's own bash tool; prose criteria go to a fresh conversation of the Judge agent; no prose = no model call
+  ref: pkg/agent/judge.go::JudgeCriteria (runDeterministicRungs, runProseRungAndFinalize -> verifier_adjudication.go::runVerifierAdjudication)
+  verified: true
+- from: judge
+  to: exec
+  label: verdict met / not met / unavailable
+  kind: return
+  ref: pkg/agent/judge.go::JudgeCriteriaResult
+  verified: true
+- else: no claim, bare claim, or Judge said 'not met'
+- over: exec
+  note: One try spent; the worker gets the feedback as its next prompt in the same conversation
+  ref: pkg/agent/task_run_loop.go::continueAfterInnerTry
+  verified: true
+- end: true
+- end: true
+- alt: tries used up, run broke, or two reasoning-only replies
+- from: exec
+  to: store
+  label: 'attempt +1; if attempts remain (total budget: per-task override, else global planning setting, else default 3) restart in a NEW conversation'
+  kind: store
+  ref: 'pkg/agent/task_run_loop.go (header: OUTER task attempts), ::failedRunStep, ::consumeTaskAttempt; pkg/config/planning.go::EffectiveTaskMaxAttempts, DefaultTaskMaxAttempts; task_executor_run.go::runTask
+    (redispatch -> ExecuteTask)'
+  verified: true
+- else: Judge upheld the claim
+- from: exec
+  to: store
+  label: 'task: in_progress -> done; close run; verdict written into the run''s transcript'
+  kind: store
+  ref: pkg/agent/task_executor_judge.go::completeTaskWithResult; task_run_loop.go::writeJudgeVerdictTranscript
+  verified: true
+- end: true
+- from: exec
+  to: planeng
+  label: task_status_changed event wakes the engine at once
+  kind: async
+  ref: pkg/agent/task_executor.go::emitStatusChanged; plan_engine.go::runEventLoop
+  verified: true
+- phase: 4 · Plan judge round
+- from: planeng
+  to: judge
+  label: 'all members finished: JudgeCriteria(plan scope, plan DoD) in a goroutine'
+  kind: async
+  ref: pkg/agent/plan_engine_supervise.go::beginPlanJudgeRound -> runPlanJudgeRound
+  verified: true
+- alt: met
+- from: planeng
+  to: store
+  label: plan -> done (phase 'synthesizing')
+  kind: store
+  ref: pkg/agent/plan_engine_supervise.go::synthesizeAndComplete
+  verified: true
+- from: planeng
+  to: owner
+  label: 'wake owner: ''write a closing summary'' (via message bus if the origin chat can receive it, else a direct turn)'
+  kind: async
+  ref: pkg/agent/plan_engine.go::wakeOwner -> AsyncNotifier.Notify or dispatchPlanTurn
+  verified: true
+- else: not met
+- from: planeng
+  to: owner
+  label: wake the hidden Plan Supervisor with the Judge's steering; it may add correction tasks. The plan is parked at phase awaiting_supervision with the unmet evidence signature saved, so unchanged evidence
+    is not judged again, also after a restart
+  kind: async
+  ref: 'pkg/agent/plan_engine_supervise.go::wakeSupervisor -> dispatchPlanTurn; plan_engine_supervise.go (unmet verdict: PlanPhase awaiting_supervision, LastUnmetTerminalSignature)'
+  verified: true
+- over: planeng
+  note: Judge rounds capped; at the cap the plan fails and the owner is told
+  ref: pkg/agent/plan_engine_supervise.go::beginPlanJudgeRound (EffectivePlanJudgeMaxRounds, failPlanLocked)
+  verified: true
+- end: true
+- phase: 5 · A chat Goal (/goal)
+- from: person
+  to: goalhook
+  label: '/goal <condition>: goal record created for this chat'
+  kind: call
+  ref: pkg/agent/goal_loop_command.go; pkg/goal/store.go
+  verified: true
+- from: goalhook
+  to: goalhook
+  label: 'after every user-started chat turn: did the agent call goal_claim?'
+  kind: self
+  ref: pkg/agent/loop.go::runAgentLoopBody -> goal_loop.go::checkGoalLoopAfterTurn
+  verified: true
+- over: goalhook
+  note: Skipped for task runs, scheduled/heartbeat/loop turns and task-owned goals
+  ref: pkg/agent/goal_loop.go::checkEligibility
+  verified: true
+- from: goalhook
+  to: judge
+  label: 'claim met: Judge runs in a background goroutine after the answer is sent'
+  kind: async
+  ref: pkg/agent/goal_loop.go::handleOutcome -> loop.go (go dispatchDeferredGoalAdjudication) -> goal_triggers.go::runGoalAdjudicationOutcome
+  verified: true
+- from: judge
+  to: bus
+  label: 'not met: Judge''s feedback as a follow-up message for the same chat'
+  kind: async
+  ref: pkg/agent/goal_triggers.go::dispatchGoalAsyncFollowUp -> async_notifier.go (PublishInbound, channel 'system')
+  verified: true
+- from: bus
+  to: goalhook
+  label: follow-up becomes a new turn; the loop repeats until met, tries used up, Stop, or 7 days idle
+  kind: async
+  ref: pkg/agent/goal_loop.go (goalLoopFollowUpSenderID); goalIdleExpirySweep
+  verified: true
+- over: planeng
+  note: The goal and loop idle sweeps run on the plan engine's 30 s tick; a quiet goal only gets a reminder and is never judged without a claim
+  ref: pkg/agent/plan_engine.go::goalAndLoopIdleExpirySweep; goal_loop.go::resolveClaim (FR-095 comment)
+  verified: true
+stores:
+- what: Plan record
+  where: ~/.omnipus/plans/<id>.json
+  when: every state/phase change
+  ref: pkg/gateway/gateway_boot.go (plan.New); pkg/plan/store.go::path
+- what: Plan intent log (write-ahead, HMAC-chained)
+  where: ~/.omnipus/plan_intents/<planID>.jsonl
+  when: before a correction is applied; replayed at engine start
+  ref: pkg/agent/plan_engine.go::Start (replayIntentLogs)
+- what: Task record
+  where: ~/.omnipus/tasks/<id>.json (status, attempts, session id, result)
+  when: claim, completion, attempt
+  ref: pkg/task/store.go::path; pkg/task/claim.go::ClaimForRun
+- what: Task run records
+  where: ~/.omnipus/tasks/<id>/runs/<day>.jsonl
+  when: run open / close
+  ref: pkg/task/run_store.go
+- what: 'Goal record (task- or chat-owned): criteria, round, latest claim and verdict'
+  where: ~/.omnipus/entities/goals/<goal_id>.json
+  when: activation, claim, verdict
+  ref: pkg/goal/store.go
+- what: Judge verdicts
+  where: the run's or chat's session transcript (judge_verdict entries)
+  when: after each verdict
+  ref: pkg/agent/task_run_loop.go::writeJudgeVerdictTranscript
+failures:
+- case: Judge unavailable (provider down, rate limit)
+  effect: 'Task: retried without spending a try, then the task fails with ''not verified'' and the worker''s evidence kept. Plan: the owner is woken; after repeated failures the plan is parked as stalled'
+  ref: pkg/agent/task_run_loop.go::adjudicateRunClaim (judgeUnavailableRetryBound); plan_engine_supervise.go::applyJudgeRoundOutcomeFor
+- case: Settings problem only an operator can fix (bad key, no model)
+  effect: Task ends Failed at once with the fix; no attempt used, no restart
+  ref: pkg/agent/task_run_loop.go (header, classifyOperatorOnlyTurnError)
+- case: goal_claim(blocked) or (waiting_on_user) in a task run
+  effect: 'Task ends Failed ''Blocked: …'' / ''Needs the operator: …''; no Judge, no restart'
+  ref: pkg/agent/task_run_loop.go (header)
+- case: Restart while a plan was running
+  effect: 'At start the plan engine re-runs processPlan for every running plan (bootReconcile): a judging round with nothing in flight resumes, an awaiting_supervision plan with an unchanged unmet signature
+    is not re-judged, ready members are dispatched, an already in_progress task is not dispatched twice. Tasks left in_progress by the dead process are set to failed with interrupted-task text before the engine starts
+    (open runs closed best effort). The plan sweep then marks leftover running or queued parentless non-standing sessions failed(interrupted) except exempt ones; steered sessions (helpers and MAIN-mode task sessions)
+    are left to the steer recovery, which stops them with cause restart. The plan record itself is not failed by restart. See the Restart section.'
+  ref: pkg/agent/plan_engine.go::bootReconcile, ::Start; pkg/agent/plan_engine_play.go::processPlan; pkg/agent/task_interrupted.go::ReconcileInterruptedTasks; pkg/agent/boot_sweep.go::bootSweep
+- case: Task slot limit reached (non-MAIN run)
+  effect: Member dispatch refused and retried on the next 30 s tick. MAIN-mode runs are admitted by the launcher instead
+  ref: pkg/agent/plan_engine_play.go::dispatchReadyMembers ('will retry')
+task_state_machine:
+  states:
+  - inbox, next, in_progress, blocked, done, failed (a set of states, not a sequence)
+  transitions:
+  - from: inbox
+    to: next
+    by: person triages, or the plan engine promotes a plan member
+    ref: pkg/agent/plan_engine_play.go::promoteInboxMembers
+  - from: blocked
+    to: next
+    by: every blocked_by dependency reached done
+    ref: pkg/task/task.go (header); plan_engine_play.go::promoteReadyMembers; plan_engine.go::promoteReadyStandaloneTasks
+  - from: next
+    to: in_progress
+    by: atomic claim by the executor
+    ref: pkg/task/claim.go::ClaimForRun
+  - from: in_progress
+    to: done
+    by: Judge upholds the claim
+    ref: pkg/agent/task_executor_judge.go::completeTaskWithResult
+  - from: in_progress
+    to: failed
+    by: attempts used up, blocked claim, operator-only error, Stop
+    ref: pkg/agent/task_run_loop.go (header)
+  - from: in_progress
+    to: next
+    by: failed run with attempts left (restart in a fresh conversation)
+    ref: pkg/agent/task_executor_run.go::runTask (redispatch)
+  - from: done/failed
+    to: next
+    by: repeating task's next occurrence fires (SpawnReset)
+    ref: pkg/task/store.go::SpawnReset; pkg/agent/task_trigger.go::prepareFire
+  run_record_extra_states: skipped, missed (run records only, never on the task)
+  note: 'The states are not a chain: done and failed are alternative outcomes of in_progress; blocked is a side state for an unmet dependency and is not a compulsory stage; see transitions'
+plan_state_machine:
+  states:
+  - draft, approved, running, done, failed (a set of states, not a sequence)
+  phases_while_running: 'six phases: dispatching, judging, synthesizing, idle, awaiting_supervision, stalled (EffectivePlanPhase; an unset phase reads as idle; synthesizing is shown as the plan completes)'
+  ref: pkg/plan/plan.go::legalPlanTransitions, ::ValidateStateTransition, ::ValidateRestartTransition, ::IsValidPlanPhase
+  note: running ends in either done or failed (alternative outcomes); done never becomes failed. A failed plan stopped by the user can be restarted back to approved by a separate reason-aware guard; other
+    failures stay failed. See transitions
+  transitions:
+  - from: draft
+    to: approved
+    by: person approves
+    ref: pkg/plan/plan.go::legalPlanTransitions
+  - from: approved
+    to: draft
+    by: allowed by the matrix
+    ref: pkg/plan/plan.go::legalPlanTransitions
+  - from: approved
+    to: running
+    by: plan engine tick, under the shared cap
+    ref: pkg/agent/plan_engine_play.go::tryStartApprovedPlan
+  - from: approved
+    to: failed
+    by: allowed by the matrix
+    ref: pkg/plan/plan.go::legalPlanTransitions
+  - from: running
+    to: done
+    by: plan Judge says met
+    ref: pkg/agent/plan_engine_supervise.go::synthesizeAndComplete
+  - from: running
+    to: failed
+    by: failure reasons include judge rounds exhausted, stopped by user and idle expiry
+    ref: pkg/plan/plan.go::FailedReason
+  - from: failed
+    to: approved
+    by: restart, only when the failure reason is stopped_by_user
+    ref: pkg/plan/plan.go::ValidateRestartTransition
+facts:
+- fact: The agent turn engine calls the goal keeper after a turn (runAgentLoopBody -> checkGoalLoopAfterTurn). The Judge itself is a separate Judge-agent turn started in the background.
+  ref: pkg/agent/loop.go::runAgentLoopBody
+- fact: The Judge runs only on a claim. The idle path (goalQuietWindowSettle) only sends a reminder and never judges (FR-095 in the code comment).
+  ref: pkg/agent/goal_loop.go::resolveClaim (comment); goal_triggers.go::goalQuietWindowSettle
+- fact: If the plan's origin chat can receive messages, the owner wake goes through the async notifier (message bus); otherwise it is a direct processTaskDirect turn. The Plan Supervisor is always a direct
+    turn.
+  ref: pkg/agent/plan_engine.go::wakeOwner, dispatchPlanTurn; plan_engine_supervise.go::wakeSupervisor
+- fact: 'Besides plans, three producers dispatch tasks: the 1-minute queue poller, Calendar fires and Run-now. They share one atomic claim (next -> in_progress). They share one task slot limit only for
+    non-MAIN runs: a MAIN-mode run goes to the launcher (executeMainTask) before the slot limit is checked.'
+  ref: pkg/agent/task_executor.go::executeTask, CheckQueuedTasks, SpawnTriggeredRun, StartOccurrenceRun; pkg/agent/task_run_mode.go::deriveTaskRunMode
+- fact: 'The Judge is one entry point (JudgeCriteria) with three callers: the task run loop, the plan engine and the chat goal keeper. It is a shared service, not part of Goals.'
+  ref: pkg/agent/judge.go::JudgeCriteria
+- fact: 'Task and plan lifecycles are explicit state machines: 6 task states, 5 plan states plus 6 plan phases (including awaiting_supervision), and 2 run-only states (drawn above).'
+  ref: pkg/task/task.go; pkg/plan/plan.go::validPlanPhases; pkg/task/run_store.go
+- fact: 'Attempt budgets: the outer task attempt budget is configurable (per task, then global planning setting, then default 3) and counts total runs, not extra restarts. It is separate from the inner
+    goal tries and from the plan judge round cap.'
+  ref: pkg/tools/task_attempt_budget.go::EffectiveTaskMaxAttempts; pkg/config/planning.go::EffectiveTaskMaxAttempts; pkg/agent/task_run_loop.go::failedRunStep
