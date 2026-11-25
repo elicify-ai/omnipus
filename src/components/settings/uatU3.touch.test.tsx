@@ -7,8 +7,9 @@ import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { jsonG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
+import { jsonG1, providersG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 import { tokenAxisU3, tokenTouchU3 } from '../../../tests/helpers/settings-u3-contracts'
+import { touchSweepU4 } from '../../../tests/helpers/settings-u4-sweep'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -59,6 +60,37 @@ describe('U3-1 — shared sheet/dialog Close and Connect row use the touch-minim
       { name: 'Custom endpoint', height: true }, { name: 'Close', height: true, width: true },
     ])
   })
+})
+
+it('T4-9 / FR-070 — the actual expanded Recent row has the coarse touch minimum and selects that provider', async () => {
+  const t = transportG1()
+  // HTTP-edge input: one configured provider with a timestamp. Do not inject
+  // Recent DOM, mock the Picker, or invoke its onSelect directly.
+  t.on('GET', '/providers', () => jsonG1([{ ...providersG1[0], updated_at: '2026-11-25T00:00:00Z' }]))
+  sectionG1('providers')
+  await userEvent.click(await screen.findByRole('button', { name: 'Connect a provider' }))
+  const sheet = screen.getByRole('dialog', { name: 'Connect a provider' })
+  const toggle = await within(sheet).findByRole('button', { name: 'Recent (1)' })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(within(sheet).queryByRole('option', { name: 'OpenRouter' })).not.toBeInTheDocument()
+  await userEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  const recent = within(sheet).getByRole('option', { name: 'OpenRouter' })
+  expect(recent).toBeVisible()
+  expect(recent).toHaveAttribute('data-testid', 'picker-recent-openrouter')
+  const rows = await touchSweepU4('sheet:Connect-picker:Recent')
+  expect.soft(rows.filter((row) => row.id.startsWith('picker-recent-') && row.role === 'option')
+    .map(({ id, height, width, pass }) => ({ id, height, width, pass })),
+  'T4-9/FR-070: the visible Recent option itself needs compiled coarse sizing and a row-wide target').toEqual([
+    { id: 'picker-recent-openrouter', height: true, width: true, pass: true },
+  ])
+  expect.soft(tokenAxisU3(recent.classList, 'h'),
+    `T4-9/FR-070: Recent must use the root-independent pointer-coarse touch-minimum token; classes=${recent.className}`).toBe(true)
+  await userEvent.click(recent)
+  const configure = await screen.findByRole('dialog', { name: 'OpenRouter' })
+  expect(within(configure).getByLabelText('API Key')).toHaveAttribute('data-testid', 'api-key-input-openrouter')
+  expect(screen.queryByRole('dialog', { name: 'Connect a provider' })).not.toBeInTheDocument()
+  expect(t.writes()).toEqual([])
 })
 
 it('U3-3 — expanded Protection health action Open Sandbox & network has the token touch contract', async () => {
