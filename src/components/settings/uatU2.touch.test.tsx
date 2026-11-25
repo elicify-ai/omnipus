@@ -43,6 +43,20 @@ describe('U2-1 — touch-contract instrument controls', () => {
       expect(atLeastTouchU2('var(--missing-size)', css)).toBe(false)
     },
   )
+  it('T4-4 — the existing U2 matcher rejects unscoped minima and accepts the coarse-pointer contract', async () => {
+    // Synthetic native fields avoid Button's independent shared minimum and pseudo credit.
+    // Rule 12: a mouse-screen 44px minimum is not the coarse-pointer contract.
+    render(<>
+      <input aria-label="Unscoped instrument" className="h-[44px] w-[44px]" />
+      <input aria-label="Coarse instrument" className="pointer-coarse:h-[44px] pointer-coarse:w-[44px]" />
+    </>)
+    expect(await touchContractU2(screen.getByRole('textbox', { name: 'Unscoped instrument' }))).toEqual({
+      pass: false, height: false, width: false, pseudo: false,
+    })
+    expect(await touchContractU2(screen.getByRole('textbox', { name: 'Coarse instrument' }))).toEqual({
+      pass: true, height: true, width: true, pseudo: false,
+    })
+  })
   it('a Switch-only expander cannot falsely certify an ordinary Button', () => {
     render(<><Button>Ordinary action</Button><Switch aria-label="Example switch" /></>)
     const css = parse(`
