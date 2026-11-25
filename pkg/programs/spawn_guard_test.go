@@ -9,10 +9,12 @@
 // Part (a) is a source guard over the packages that compose agent
 // environments, mirroring the S-111 producer-guard instrument. It scans the
 // production tree (non-test Go files, recursively under every scoped root —
-// CHECK F10) for same-function constructor-to-launch sites, regardless of
-// violations. Classification is still file+function, NOT a complete per-site
-// inventory. Helper-split flows and an added launch in the SAME listed
-// function are explicit loud blockers in spawn_inventory_boundaries_test.go.
+// CHECK F10) for child-start sites, regardless of violations. Classification
+// is per SITE (CHECK R06): each table row lists the launches its function
+// holds, so a launch added to a listed function fails; a row no discovered
+// launch matches is flagged as vacuous; helper-split flows are discovered
+// (spawn_guard_discovery_test.go); and the program-variable-without-Attach
+// rule also runs over the whole tree (spawn_guard_tree_test.go).
 //
 // A site is the LAUNCH of a command constructed from exec.Command or
 // exec.CommandContext (resolved through the file's own import table, so an
@@ -32,11 +34,13 @@
 //
 // The site table (file, function) rows were read off THIS tree with an
 // independent enumeration, not off any behaviour; the mandatory set comes
-// from the spec's S1 list. GREEN's new mandatory kinds (account check, git
-// version probe — the part-(b) leaves) have NO pending rows: when GREEN
-// creates their sites the guard fails them as unlisted and the same test
-// author adds their exact site rows (the reconciliation the spec assigns to
-// this author).
+// from the spec's S1 list. The account check's site is runCheck, which
+// attaches and then hands its command to the launcher startCurrentCheck. The
+// git version probe starts through sandbox.Run, which builds its own command
+// from an argv, so no command is constructed in the scanned code and it has
+// no row here; its program environment comes only from the limits' Programs,
+// attached inside pkg/sandbox, and the runtime campaign in pkg/gateway
+// observes its sinks.
 //
 // The negative controls feed in-memory test-only files (the repository is
 // never modified): the clean constructor→Attach→launch shape must be
@@ -75,43 +79,50 @@ import (
 // spawnSiteRow is one row of the spawn-site table: the exact site (file and
 // enclosing function, repo-relative forward-slash file) and its
 // classification. Classification is per site — a function not listed here
-// that launches a child is unlisted no matter how clean its file is.
+// that launches a child is unlisted no matter how clean its file is, and a
+// listed function must hold exactly the launches its row lists.
 type spawnSiteRow struct {
-	File string
-	Func string
-	Kind string // "mandatory-s1" or "non-program"
-	Note string
+	File     string
+	Func     string
+	Kind     string // "mandatory-s1", "non-program" or "launcher"
+	Launches int    // how many launches the function holds (the per-site inventory, S-106/R06)
+	Note     string
 }
 
 // spawnSiteTable is the spawn-site inventory (S-106's Given). S1 mandatory:
 // bash foreground/background/God Mode (the shell runner and its background
-// runner), environment_setup. The account check and the git version probe
-// are S1 NEW code: GREEN creates their sites and the same author adds
-// exact site rows then (see the part-(b) leaves). Everything found in the
-// scoped packages today beyond the mandatory rows is a non-program site
-// (drivers, hooks, probes, worktree git, taskkill, channel media decoder,
-// browser) — enumerated site by site, not file by file.
+// runner), environment_setup, the account check. The git version probe starts
+// through sandbox.Run, which builds its own command, so it has no site here
+// (the runtime campaign in pkg/gateway observes it). Everything else found in
+// the scoped packages is a non-program site (drivers, hooks, probes, worktree
+// git, taskkill, channel media decoder, browser) or a launcher helper that
+// starts a command its caller attached — enumerated site by site, with the
+// number of launches each function holds, read off the tree function by
+// function (not off the scanner's output).
 var spawnSiteTable = []spawnSiteRow{
 	// S1 mandatory sites:
-	{"pkg/tools/shell.go", "runUnconstrained", "mandatory-s1", "bash foreground and God Mode share the shell runner"},
-	{"pkg/tools/shell_bg.go", "runBackground", "mandatory-s1", "bash background"},
-	{"pkg/tools/environment_setup_runner.go", "startSession", "mandatory-s1", "environment_setup"},
-	{"pkg/programs/check.go", "runCheck", "mandatory-s1", "account check (FR-005/S-106), with source masking before Start"},
+	{"pkg/tools/shell.go", "runUnconstrained", "mandatory-s1", 2, "bash foreground and God Mode share the shell runner (the closure start and the sandbox locked start)"},
+	{"pkg/tools/shell_bg.go", "runBackground", "mandatory-s1", 2, "bash background (the God-floor wrapper and the sandbox locked start)"},
+	{"pkg/tools/environment_setup_runner.go", "startSession", "mandatory-s1", 2, "environment_setup (its two sandbox locked starts)"},
+	{"pkg/programs/check.go", "runCheck", "mandatory-s1", 1, "account check (FR-005/S-106): attaches, then hands the command to startCurrentCheck"},
+	// Launcher helpers: they start a command their caller constructed and
+	// attached, so the callers' sites above carry the Attach check.
+	{"pkg/programs/check.go", "startCurrentCheck", "launcher", 1, "starts the account check's command (runCheck attached it)"},
+	{"pkg/tools/shell_bg.go", "startGodFloorChild", "launcher", 1, "God-floor start of the background command (runBackground attached it)"},
 	// Non-program sites (this tree's inventory):
-	{"pkg/programs/procgroup_windows.go", "stopProcessGroup", "non-program", "taskkill control child; receives no program environment"},
-	{"pkg/agent/hook_process.go", "NewProcessHook", "non-program", "lifecycle hooks carry no program variables"},
-	{"pkg/agent/runner/driver_stream.go", "detectCLIVersion", "non-program", "driver version probe"},
-	{"pkg/agent/runner/driver_claude.go", "Run", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/driver_opencode.go", "Run", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/driver_codex.go", "Run", "non-program", "third-party worker driver"},
-	{"pkg/agent/runner/conntest.go", "probeVersion", "non-program", "connection test"},
-	{"pkg/agent/runner/worktree.go", "runGit", "non-program", "worktree git operations"},
-	{"pkg/agent/testutil/home_isolation.go", "IsolateProcessHome", "non-program", "test helper (go env)"},
-	{"pkg/tools/session_process_windows.go", "killProcessGroup", "non-program", "taskkill"},
-	{"pkg/tools/browser/exec_resolver.go", "chromeMajorVersion", "non-program", "browser version probe"},
-	{"pkg/tools/browser/manager_session_startup.go", "probeChromiumBinaryWithTimeout", "non-program", "browser version probe"},
-	{"pkg/tools/browser/cdppipe/allocator.go", "start", "non-program", "chrome allocation"},
-	{"pkg/channels/weixin/media.go", "tryTranscodeSilkToWAV", "non-program", "channel media decoder"},
+	{"pkg/agent/hook_process.go", "NewProcessHook", "non-program", 1, "lifecycle hooks carry no program variables"},
+	{"pkg/agent/runner/driver_stream.go", "detectCLIVersion", "non-program", 1, "driver version probe"},
+	{"pkg/agent/runner/driver_claude.go", "Run", "non-program", 1, "third-party worker driver"},
+	{"pkg/agent/runner/driver_opencode.go", "Run", "non-program", 1, "third-party worker driver"},
+	{"pkg/agent/runner/driver_codex.go", "Run", "non-program", 1, "third-party worker driver"},
+	{"pkg/agent/runner/conntest.go", "probeVersion", "non-program", 1, "connection test"},
+	{"pkg/agent/runner/worktree.go", "runGit", "non-program", 1, "worktree git operations"},
+	{"pkg/agent/testutil/home_isolation.go", "IsolateProcessHome", "non-program", 1, "test helper (go env)"},
+	{"pkg/tools/session_process_windows.go", "killProcessGroup", "non-program", 1, "taskkill"},
+	{"pkg/tools/browser/exec_resolver.go", "chromeMajorVersion", "non-program", 1, "browser version probe"},
+	{"pkg/tools/browser/manager_session_startup.go", "probeChromiumBinaryWithTimeout", "non-program", 1, "browser version probe"},
+	{"pkg/tools/browser/cdppipe/allocator.go", "start", "non-program", 1, "chrome allocation"},
+	{"pkg/channels/weixin/media.go", "tryTranscodeSilkToWAV", "non-program", 1, "channel media decoder"},
 }
 
 // scopedSpawnRoots are the packages that compose agent environments (the
@@ -142,13 +153,13 @@ var spawnSinkSelectors = map[string]bool{
 	"StartLocked": true, "StartLockedWithPolicy": true,
 }
 
-// spawnLocalStartWrappers are the scanned tree's own wrappers over those
-// sinks (pkg/tools/shell_bg.go::startGodFloorChild — the God-floor path of
-// the mandatory background runner). GREEN reconciliation extends this list
-// if a new wrapper becomes a mandatory row's only launch path.
-var spawnLocalStartWrappers = map[string]bool{
-	"startGodFloorChild": true,
-}
+// spawnLocalStartWrappers are the scanned tree's own launcher helpers: the
+// functions the table lists with kind "launcher" (the God-floor start of the
+// background runner, the account check's start). A caller that hands such a
+// helper its constructed command has launched it; a helper added to the tree
+// is an unlisted site until its row says so, and the row then makes its
+// callers visible. One list, not two.
+var spawnLocalStartWrappers = spawnLauncherNames(spawnSiteTable)
 
 // spawnSite is one discovered child-start site, whether or not it violates
 // the table or the Attach rule. Classification sees all discovered sites,
@@ -159,6 +170,7 @@ type spawnSite struct {
 	Func              string // the enclosing function's name
 	AttachSameCommand bool   // programs.Attach(<this command>) sits between its construction and this launch
 	EnvProgramNameLit bool   // a literal program-token name appears in the function
+	ReadsProgramToken bool   // the function reads a program-owned token through the credentials API
 	Mandatory         bool   // a mandatory-s1 table row matches (file, function)
 }
 
@@ -197,13 +209,23 @@ func spawnImportAliases(f *ast.File) map[string]string {
 // by their label.
 func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
 	t.Helper()
+	return spawnScanRoots(t, root, scopedSpawnRoots, "", extraFiles)
+}
+
+// spawnScanRoots is spawnScan over an explicit list of roots. When
+// onlyContaining is not empty, a file whose source lacks that text is skipped
+// without being parsed (the tree-wide scan skips every file that cannot
+// construct a command, because no site needs a file that never imports
+// os/exec). A root absent from the checkout is skipped.
+func spawnScanRoots(t *testing.T, root string, roots []string, onlyContaining string, extraFiles [][2]string) []spawnSite {
+	t.Helper()
 	var sites []spawnSite
 	fset := token.NewFileSet()
 	scanOne := func(label, src string) {
 		fileSites := scanFileForSpawnSites(t, fset, label, src)
 		sites = append(sites, fileSites...)
 	}
-	for _, dir := range scopedSpawnRoots {
+	for _, dir := range roots {
 		pkgDir := filepath.Join(root, filepath.FromSlash(dir))
 		if _, err := os.Stat(pkgDir); err != nil {
 			continue // root absent from this checkout
@@ -225,6 +247,9 @@ func spawnScan(t *testing.T, root string, extraFiles [][2]string) []spawnSite {
 			src, rerr := os.ReadFile(path)
 			if rerr != nil {
 				return fmt.Errorf("instrument: read %s: %w", path, rerr)
+			}
+			if onlyContaining != "" && !strings.Contains(string(src), onlyContaining) {
+				return nil
 			}
 			rel, rerr := filepath.Rel(root, path)
 			if rerr != nil {
@@ -266,67 +291,12 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 	aliases := spawnImportAliases(f)
 	samePackage := f.Name != nil && f.Name.Name == "programs"
 
-	qualifierSuffix := func(x ast.Expr) string {
-		if id, ok := x.(*ast.Ident); ok {
-			return aliases[id.Name]
-		}
-		return ""
-	}
-	isExecCtor := func(call *ast.CallExpr) bool {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return false
-		}
-		if sel.Sel.Name != "Command" && sel.Sel.Name != "CommandContext" {
-			return false
-		}
-		return qualifierSuffix(sel.X) == "/os/exec"
-	}
-	// attachVar returns the command variable an Attach call attaches, or ""
-	// when the call is not a recognised programs.Attach of a named variable.
-	attachVar := func(call *ast.CallExpr) string {
-		if len(call.Args) == 0 {
-			return ""
-		}
-		first, ok := call.Args[0].(*ast.Ident)
-		if !ok {
-			return ""
-		}
-		switch fun := call.Fun.(type) {
-		case *ast.SelectorExpr:
-			if fun.Sel.Name != "Attach" || qualifierSuffix(fun.X) != "/pkg/programs" {
-				return ""
-			}
-		case *ast.Ident:
-			if fun.Name != "Attach" || !samePackage {
-				return ""
-			}
-		default:
-			return ""
-		}
-		return first.Name
-	}
-	// isSinkCall reports whether a call is a known child-start sink (the
-	// sandbox's locked starts through the file's import table, or the
-	// scanned tree's own wrapper over them).
-	isSinkCall := func(call *ast.CallExpr) bool {
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-			return qualifierSuffix(sel.X) == "/pkg/sandbox" && spawnSinkSelectors[sel.Sel.Name]
-		}
-		if id, ok := call.Fun.(*ast.Ident); ok {
-			return spawnLocalStartWrappers[id.Name]
-		}
-		return false
-	}
-
-	mandatory := func(funcName string) bool {
-		for _, row := range spawnSiteTable {
-			if row.File == file && row.Func == funcName && row.Kind == "mandatory-s1" {
-				return true
-			}
-		}
-		return false
-	}
+	// The recognisers live in spawn_guard_discovery_test.go so the parameter
+	// pass and this one cannot drift apart.
+	isExecCtor := func(call *ast.CallExpr) bool { return spawnIsExecCtor(aliases, call) }
+	attachVar := func(call *ast.CallExpr) string { return spawnAttachVar(aliases, samePackage, call) }
+	isSinkCall := func(call *ast.CallExpr) bool { return spawnIsSinkCall(aliases, call) }
+	mandatory := func(funcName string) bool { return spawnIsMandatory(file, funcName) }
 
 	var sites []spawnSite
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -453,16 +423,17 @@ func scanFileForSpawnSites(t *testing.T, fset *token.FileSet, file, src string) 
 		})
 		return true
 	})
-	return sites
+	return spawnFinishSites(fset, file, f, aliases, samePackage, sites)
 }
 
-// spawnClassify returns the guard's violations for a full site enumeration:
-// unlisted file+function pairs (a new function in a listed file is unlisted;
-// another launch in the SAME function still inherits its classification),
-// mandatory sites whose launch has no
-// same-command Attach between construction and launch, and any site whose
-// function composes a literal program-token name without that Attach
-// (I-1: Attach is the only way program variables reach a child).
+// spawnClassify returns the guard's violations for a site enumeration:
+// unlisted file+function pairs (a new function in a listed file is unlisted),
+// listed functions that hold more or fewer launches than their row lists
+// (spawnCountViolations: a second launch inherits no exemption), mandatory
+// sites whose launch has no same-command Attach between construction and
+// launch, and any site whose function composes a literal program-token name
+// without that Attach (I-1: Attach is the only way program variables reach a
+// child).
 func spawnClassify(sites []spawnSite) []string {
 	var violations []string
 	listed := map[[2]string]bool{}
@@ -488,7 +459,7 @@ func spawnClassify(sites []spawnSite) []string {
 				fmt.Sprintf("%s:%d (%s) does not attach program variables through a same-command programs.Attach before the launch", s.File, s.Line, s.Func))
 		}
 	}
-	return violations
+	return append(violations, spawnCountViolations(sites)...)
 }
 
 func TestProgramSpawnGuard(t *testing.T) {
@@ -496,7 +467,7 @@ func TestProgramSpawnGuard(t *testing.T) {
 		root := repoRootForSpawnGuard(t)
 		sites := spawnScan(t, root, nil)
 		requireSitesScanned(t, sites)
-		violations := spawnClassify(sites)
+		violations := append(spawnClassify(sites), spawnStaleRows(sites)...)
 		if len(violations) > 0 {
 			t.Fatalf("S-106/I-1: every S1 mandatory child kind must add program variables only via a same-command programs.Attach before the launch (and install the masking writers in the same call); violating sites: %v", violations)
 		}
