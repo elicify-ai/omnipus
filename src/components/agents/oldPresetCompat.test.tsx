@@ -6,15 +6,15 @@
  * newer {default_policy, policies} schema without mutating the policy on
  * mere render.
  *
- * The wire contract has since dropped `default_policy` entirely — every
- * static builtin tool now MUST have an explicit, literal policy entry in a
- * COMPLETE per-tool map (there is no sparse "overrides + fallback default"
- * shape left anywhere, client or server). This file now verifies the
- * equivalent invariant under the new contract: a persisted COMPLETE policy
- * map — whatever its shape (all-allow, mixed, mostly-deny, arbitrary) — loads
- * and round-trips through ToolsAndPermissions without mutation on mere
- * render. There are no more named presets to be "compatible" with; the
- * invariant that matters is round-trip identity of an explicit map.
+ * The wire contract has since dropped `default_policy` entirely. This file
+ * verifies the equivalent invariant under the new contract: a persisted
+ * policy map — whatever its shape (all-allow, mixed, mostly-deny, arbitrary,
+ * incomplete) — loads and round-trips through ToolsAndPermissions without
+ * mutation on mere render. There are no more named presets to be
+ * "compatible" with (they are retired, US-3 AS1 and T-Q6 A); the invariant
+ * that matters is round-trip identity of whatever map is stored. (An agent's
+ * map is the sparse set of its own overrides on top of the global value, Hard
+ * Constraint 6; every shape below is still a legal stored input.)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -24,13 +24,18 @@ import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('@/lib/api', () => ({
+// The agent-tools edge of the API module is doubled. The global value is not:
+// the real client reads it from GET /security/permissions through the fetch
+// double below (C-22 row 6 retires GET /security/tool-policies, this tab's
+// last reader).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
+  fetchGodMode: vi.fn(),
   isApiError: vi.fn(() => false),
 }))
 
@@ -48,6 +53,14 @@ vi.mock('./MCPServerPicker', () => ({
 
 import * as api from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+// The empty global value this file's earlier global-policies double returned.
+// Only the fetch edge is doubled.
+useSkillPermissionNetwork(() => ({
+  policies: {},
+  skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -81,9 +94,7 @@ beforeEach(() => {
   vi.mocked(api.fetchRegistryTools).mockResolvedValue(SOME_TOOLS)
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue(SOME_TOOLS)
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: {},
-  })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: false, available: true, supported: true })
 })
 
 // ── Compatibility tests ────────────────────────────────────────────────────────

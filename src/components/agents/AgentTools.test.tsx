@@ -3,8 +3,8 @@
  *
  * Tests for:
  *   - B-2 (#332 / US-D5): locked agent renders read-only editor, no write fires
- *   - B-1 (#331 / US-D4): system.* tools (category==='system') appear in the
- *     Advanced disclosure, NOT the primary category grid
+ *   - US-1 (#357): system.* tools (category==='system') appear in the flat
+ *     category grid, with no separate system disclosure
  *
  * These tests use ToolsAndPermissions with mocked API. (The D1 CreateAgentModal
  * preset test was removed with the modal — omnipus-system-agent FR-108 retires
@@ -18,13 +18,18 @@ import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('@/lib/api', () => ({
+// The agent-tools edge of the API module is doubled. The global value is not:
+// the real client reads it from GET /security/permissions through the fetch
+// double below (C-22 row 6 retires GET /security/tool-policies, this tab's
+// last reader).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
+  fetchGodMode: vi.fn(),
   fetchProviders: vi.fn(),
   fetchSkills: vi.fn().mockResolvedValue([]),
   createAgent: vi.fn(),
@@ -59,6 +64,14 @@ vi.mock('@/store/ui', () => ({
 
 import * as api from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+// The empty global value this file's earlier global-policies double returned.
+// Only the fetch edge is doubled.
+useSkillPermissionNetwork(() => ({
+  policies: {},
+  skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -130,9 +143,7 @@ beforeEach(() => {
     skills: [],
   })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: {},
-  })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: false, available: true, supported: true })
   vi.mocked(api.fetchProviders).mockResolvedValue([])
 })
 
@@ -305,7 +316,8 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
   })
 })
 
-// D1 (#334, closed): the Tools editor + Balanced-preset tests belong to the
-// wizard's deferred Advanced step (see CreateAgentWizard.tsx header). Write
-// them WITH that feature when it lands — placeholder .skip stubs were removed
-// deliberately (they only added skip-noise to every run).
+// D1 (#334, closed): a Tools editor test for the wizard's deferred Advanced
+// step belongs with that feature when it lands (see CreateAgentWizard.tsx
+// header) — placeholder .skip stubs were removed deliberately (they only added
+// skip-noise to every run). The role presets this note once named are retired
+// (US-3 AS1, T-Q6 A); no preset test is to be written.

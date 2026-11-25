@@ -4,16 +4,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockRunGated = vi.fn(async (fn: (token: string) => unknown) => fn(''))
 
-vi.mock('@/lib/api', () => ({
+// The agent-tools edge of the API module is doubled. The global value is not:
+// the real client reads it from GET /security/permissions through the fetch
+// double below (C-22 row 6 retires GET /security/tool-policies, this tab's
+// last reader).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
+  fetchGodMode: vi.fn(),
   reAuth: vi.fn(),
   isApiError: vi.fn(() => false),
-  REAUTH_HEADER: 'X-Reauth-Token',
 }))
 
 vi.mock('@/components/settings/useReAuthGate', () => ({
@@ -32,6 +36,14 @@ vi.mock('@/store/ui', () => ({
 import * as api from '@/lib/api'
 import type { RegistryTool, AgentToolsCfg, McpServer } from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+// The global value this file's earlier global-policies double returned
+// (read_file Allow). Only the fetch edge is doubled.
+useSkillPermissionNetwork(() => ({
+  policies: { read_file: 'allow' },
+  skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 const READ_FILE: RegistryTool = {
   name: 'read_file',
@@ -62,7 +74,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockRunGated.mockImplementation(async (fn: (token: string) => unknown) => fn(''))
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([READ_FILE])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: { read_file: 'allow' } })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: false, available: true, supported: true })
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([SERVER])
   vi.mocked(api.updateAgentTools).mockImplementation(async (_id, cfg) => ({
     revision: REVISION,

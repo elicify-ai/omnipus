@@ -1,8 +1,11 @@
 // Unit tests for ToolsAndPermissions — FR-027, FR-029, FR-086, MAJ-008
 //
-// Updated for #333 (US-D2): ToolsAndPermissions now delegates to the shared
-// ToolPolicyEditor. The four ad-hoc presets (Unrestricted/Cautious/Standard/Minimal)
-// are replaced by Cautious/Balanced/Full access role presets.
+// Updated for #333 (US-D2): ToolsAndPermissions delegates to the shared
+// ToolPolicyEditor. The role presets (Cautious/Balanced/Full access) are gone
+// with the Skills & Tools redesign (spec T-Q6 A, US-3 AS1): a save is driven by
+// one row's Allow / Ask / Deny badge (US-3 AS8: a per-agent value that is
+// changed "saves on its own"), and the global value the badges are floored by
+// is read from GET /security/permissions (C-22 row 6).
 //
 // Individual tool rows are now inside collapsed CategorySection accordions.
 // Fence badge (FR-086 / MAJ-008) is no longer rendered inline in ToolsAndPermissions
@@ -12,10 +15,10 @@
 //  1. Calls fetchRegistryTools (GET /api/v1/tools)
 //  2. Source badge for MCP tools visible in the MCP section
 //  3. Shell/fs conflict banner (still rendered by ToolsAndPermissions directly)
-//  4. ToolPolicyEditor role preset buttons (Cautious/Balanced/Full access) present
+//  4. ToolPolicyEditor shows no role preset control (US-3 AS1, T-Q6 A)
 //  5. No write fires for locked agents (B-2 / #332)
 //  6. NO spurious PUT fires when opening Tools tab (server hydration ≠ user edit)
-//  7. Real policy change triggers the re-auth-gated save path (not a bare 403)
+//  7. Real policy change (a row badge) triggers the re-auth-gated save path (not a bare 403)
 //  8. 403 re-auth path: gate detects re-auth 403, retries with token (Spec-6 FR-12.2)
 //  9. Latest-wins: edits made while a save is in-flight are not dropped (bug fix)
 
@@ -24,17 +27,20 @@ import { render, screen, waitFor, fireEvent, act, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-// Mock the API module. updateAgentTools now accepts an optional reAuthToken.
-vi.mock('@/lib/api', () => ({
+// Mock the agent-tools edge of the API module. updateAgentTools accepts an
+// optional reAuthToken. The global value is NOT mocked here: the real client
+// reads it from GET /security/permissions through the fetch double below (C-22
+// row 6 retires GET /security/tool-policies, the tab's last reader).
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   fetchRegistryTools: vi.fn(),
   fetchBuiltinTools: vi.fn(),
   fetchAgentTools: vi.fn(),
   fetchMcpServersForAgent: vi.fn(),
   updateAgentTools: vi.fn(),
-  fetchGlobalToolPolicies: vi.fn(),
+  fetchGodMode: vi.fn(),
   reAuth: vi.fn(),
   isApiError: vi.fn(() => false),
-  REAUTH_HEADER: 'X-Reauth-Token',
 }))
 
 // Mock the useReAuthGate module so runGated is a controllable spy.
@@ -52,10 +58,18 @@ vi.mock('@/components/settings/useReAuthGate', () => ({
 
 import * as api from '@/lib/api'
 import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
-// ApiError must be imported from its own module, not from the @/lib/api mock,
-// because the mock factory for @/lib/api does not re-export class constructors.
+// ApiError is imported from its own module, as before: the re-auth 403 below
+// is built from the class itself, not from whatever the mocked barrel exposes.
 import { ApiError } from '@/lib/api-error'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { useSkillPermissionNetwork } from '../../../tests/helpers/skill-permission-network'
+
+// The global value the agent's badges are floored by (Skills & Tools). Only the
+// fetch edge is doubled. The empty map is the global value this file always
+// used; a test that clicks a badge states the value it needs in its own Given.
+const permissions = useSkillPermissionNetwork(() => ({
+  policies: {}, skill_policies: {}, visibility: {}, skill_visibility: {}, skill_trust: 'ask',
+}))
 
 // reAuth403 mirrors the exact 403 the backend's requireReAuth gate returns.
 // useReAuthGate detects it by body/message match and replays a consent token.
@@ -159,9 +173,7 @@ beforeEach(() => {
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL])
   vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse())
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
-    policies: {},
-  })
+  vi.mocked(api.fetchGodMode).mockResolvedValue({ enabled: false, persisted: false, available: true, supported: true })
   // Default: updateAgentTools succeeds and returns the same config
   vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
 })
@@ -169,6 +181,39 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
 })
+
+// A person's single edit on a tool row (US-3 AS8): open the Files group, then
+// take the row's badge once it is enabled — which means the tools draft and the
+// global value have both landed. A click before that is a no-op by design (see
+// ToolsAndPermissions.hydration.test.tsx), so every caller awaits this.
+async function openFilesGroup() {
+  const grid = await screen.findByTestId('category-grid')
+  fireEvent.click(within(grid).getByRole('button', { name: /files/i }))
+}
+
+async function enabledBadge(tool: string, value: 'Allow' | 'Ask' | 'Deny') {
+  const row = await screen.findByTestId(`tool-row-${tool}`)
+  const badge = within(row).getByRole('button', { name: value })
+  await waitFor(() => expect(badge).toBeEnabled())
+  return badge
+}
+
+// The same badge, found without waiting: for the fake-timer sections below,
+// where a waitFor would sit on a faked clock. Callers have awaited
+// enabledBadge for the row first.
+function rowBadge(tool: string, value: 'Allow' | 'Ask' | 'Deny') {
+  return within(screen.getByTestId(`tool-row-${tool}`)).getByRole('button', { name: value })
+}
+
+// The tab's two reads have been sent and answered: its own tools (GET
+// /agents/{id}/tools) and the global value (GET /security/permissions). A test
+// that expects a control to STAY disabled awaits this first, so it can tell
+// "disabled by design" from "not loaded yet".
+async function readsSettled() {
+  await waitFor(() => expect(api.fetchAgentTools).toHaveBeenCalled())
+  await waitFor(() => expect(permissions().seen.some(({ method }) => method === 'GET')).toBe(true))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+}
 
 describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
   it('calls fetchRegistryTools (GET /api/v1/tools), not /tools/builtin', async () => {
@@ -185,7 +230,7 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
     })
   })
 
-  it('renders ToolPolicyEditor (role preset buttons) after registry loads', async () => {
+  it('renders the ToolPolicyEditor with no role preset control after the registry loads (US-3 AS1)', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -194,12 +239,22 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
         onChange={NOOP_CHANGE}
       />
     )
+    // The editor and its category grid are on screen first, so the absences
+    // below are about the rendered editor, not about a tab that has not rendered.
     await waitFor(() => {
-      // New role presets (Cautious/Balanced/Full access) are shown instead of old presets
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
-      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
-      expect(document.querySelector('[data-testid="preset-full_access"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
     })
+    // EXPECTATION FLIPPED by the spec (CHECK round 4, candidate 9): US-3 AS1
+    // "Given any agent's Tools tab, When it opens, Then no role preset control
+    // is shown"; T-Q6 A removes the presets from every agent's Tools tab. The
+    // old expectation (three preset buttons present) is the retired behaviour.
+    for (const id of ['preset-cautious', 'preset-balanced', 'preset-full_access']) {
+      expect(document.querySelector(`[data-testid="${id}"]`), id).not.toBeInTheDocument()
+    }
+    for (const name of ['Cautious', 'Balanced', 'Full access']) {
+      expect(screen.queryByRole('button', { name }), name).not.toBeInTheDocument()
+    }
   })
 })
 
@@ -368,7 +423,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   beforeEach(() => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([SHELL_TOOL, ...FS_TOOLS])
     vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse())
-    vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
+    // The empty global map this block re-mocked is the file's default one.
   })
 
   it('banner renders when bash is allow and a filesystem tool is deny', async () => {
@@ -445,8 +500,20 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   })
 })
 
-describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
-  it('shows Cautious, Balanced, Full access preset buttons', async () => {
+// The role preset selector describe (US-D2 / #333) is retired with the
+// presets: US-3 AS1 "no role preset control is shown", FR-022 and T-Q6 A, and
+// the flipped test in the first describe above now pins that. Its second case,
+// the gated save, is ported to the control that replaced the preset: one row's
+// badge (US-3 AS8). The retired presence case ("shows Cautious, Balanced, Full
+// access preset buttons") has no equivalent and is deleted; the spec's
+// regression table ("Presets ... Deleted with the feature (T-Q6 A) — the
+// deletion is the expected change, not a weakened test") names the preset
+// cases of the editor's own suites, and this file follows the same rule.
+describe('ToolsAndPermissions — a row edit saves through the re-auth gate (US-3 AS8 / #333)', () => {
+  it('clicking Ask on a tool row calls updateAgentTools via runGated (re-auth gated)', async () => {
+    // Given: Skills & Tools holds read_file at Allow, so Ask is a value the
+    // agent may take (US-3 AS2: only a looser badge is locked).
+    permissions().stored.policies = { read_file: 'allow' }
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -455,44 +522,24 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
         onChange={NOOP_CHANGE}
       />
     )
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
-      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
-      expect(document.querySelector('[data-testid="preset-full_access"]')).toBeInTheDocument()
-    })
-  })
+    await openFilesGroup()
+    const ask = await enabledBadge('read_file', 'Ask')
 
-  it('clicking Cautious preset calls updateAgentTools via runGated (re-auth gated)', async () => {
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-      />
-    )
-    // Preset buttons render before the tools draft hydrates; awaiting
-    // enablement (not just presence) keeps this click out of the
-    // pre-hydration window (see ToolsAndPermissions.hydration.test.tsx).
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
-    })
-
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    fireEvent.click(ask)
 
     // The real save goes through updateAgentTools (re-auth gated mutation).
-    // The registry for this describe block is [read_file, mcp_search] (see
-    // beforeEach) — Cautious expands to a COMPLETE map over exactly those
-    // tools, each explicitly set to 'ask'. There is no default_policy field.
+    // One click is one sparse override (Hard Constraint #6, layer 2): the map
+    // and override_names carry exactly the clicked tool, with the revision the
+    // tab hydrated from. There is no default_policy field.
     await waitFor(() => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
         expect.objectContaining({
           revision: TOOLS_REVISION,
-          override_names: ['mcp_search', 'read_file'],
+          override_names: ['read_file'],
           config: expect.objectContaining({
             builtin: expect.objectContaining({
-              policies: { read_file: 'ask', mcp_search: 'ask' },
+              policies: { read_file: 'ask' },
             }),
           }),
         }),
@@ -572,7 +619,14 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
     expect(screen.queryByTestId('external-cli-tools-notice')).toBeNull()
   })
 
+  // The role preset buttons this pair used (CHECK round 4, candidate 9) are
+  // gone (US-3 AS1, T-Q6 A); the same two invariants — the editor is disabled
+  // for an external worker, and no write can come out of it — are pinned on a
+  // row's badges, the control that replaced them. The Main-agent test earlier in
+  // this file clicks the very same badge of the very same fixture and saves, so
+  // a disabled badge here is the agent kind's doing, not an unloaded tab.
   it('renders the ToolPolicyEditor disabled for agentType=subagent_3p', async () => {
+    permissions().stored.policies = { read_file: 'allow' }
     renderWithQuery(
       <ToolsAndPermissions
         agentId="ext-1"
@@ -581,14 +635,16 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         onChange={NOOP_CHANGE}
       />
     )
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
-    })
-    const cautious = document.querySelector('[data-testid="preset-cautious"]') as HTMLButtonElement
-    expect(cautious.disabled).toBe(true)
+    await openFilesGroup()
+    await readsSettled()
+    const row = await screen.findByTestId('tool-row-read_file')
+    for (const name of ['Allow', 'Ask', 'Deny']) {
+      expect(within(row).getByRole('button', { name }), name).toBeDisabled()
+    }
   })
 
-  it('does NOT call updateAgentTools for agentType=subagent_3p even on a preset click attempt', async () => {
+  it('does NOT call updateAgentTools for agentType=subagent_3p even on a badge click attempt', async () => {
+    permissions().stored.policies = { read_file: 'allow' }
     renderWithQuery(
       <ToolsAndPermissions
         agentId="ext-1"
@@ -597,12 +653,14 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         onChange={NOOP_CHANGE}
       />
     )
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
-    })
+    await openFilesGroup()
+    await readsSettled()
+    const row = await screen.findByTestId('tool-row-read_file')
     // A disabled native <button> does not dispatch its click handler.
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
-    await new Promise((r) => setTimeout(r, 50))
+    fireEvent.click(within(row).getByRole('button', { name: 'Ask' }))
+    // Wait past the 500 ms autosave debounce: a save queued by this click would
+    // fire inside that window, so a shorter wait could not have seen it.
+    await new Promise((r) => setTimeout(r, 700))
     expect(api.updateAgentTools).not.toHaveBeenCalled()
     expect(mockRunGated).not.toHaveBeenCalled()
   })
@@ -703,11 +761,17 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
 })
 
 describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
+  // The two preset clicks that drove this describe (Cautious, Balanced) are
+  // replaced by two different edits on the row that replaced them (US-3 AS8,
+  // CHECK round 4, candidate 9): Deny, and Allow. With the Ask edit in the
+  // describe above, each of the three values goes through the gate and is
+  // saved as the value the person clicked, not as a fixed one.
   it('calls runGated then updateAgentTools when user changes policy', async () => {
-    // When the user clicks a preset (a real policy change), the save must flow
+    // When the user clicks a badge (a real policy change), the save must flow
     // through runGated → updateAgentTools(agentId, cfg, token). The mock
     // runGated passes '' as the token on the optimistic first attempt.
     vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
+    permissions().stored.policies = { read_file: 'allow' }
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -718,32 +782,30 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
       />
     )
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
-    })
+    await openFilesGroup()
+    const deny = await enabledBadge('read_file', 'Deny')
 
     // No runGated before user interaction
     expect(mockRunGated).not.toHaveBeenCalled()
 
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    fireEvent.click(deny)
 
     await waitFor(() => {
       // runGated must have been called (re-auth gate ran for the user's edit)
       expect(mockRunGated).toHaveBeenCalledTimes(1)
     })
 
-    // updateAgentTools was called through the gate with the token. The
-    // registry is [read_file, mcp_search] (beforeEach) — Cautious expands to
-    // a complete map over exactly those tools, each set to 'ask'. There is no
+    // updateAgentTools was called through the gate with the token: one sparse
+    // override for the clicked tool, at the clicked value. There is no
     // default_policy field on the wire anymore.
     await waitFor(() => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
         expect.objectContaining({
           revision: TOOLS_REVISION,
-          override_names: ['mcp_search', 'read_file'],
+          override_names: ['read_file'],
           config: expect.objectContaining({
-            builtin: expect.objectContaining({ policies: { read_file: 'ask', mcp_search: 'ask' } }),
+            builtin: expect.objectContaining({ policies: { read_file: 'deny' } }),
           }),
         }),
         '', // token from runGated's optimistic pass
@@ -751,8 +813,9 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
     })
   })
 
-  it('calls runGated then updateAgentTools when switching to Balanced preset', async () => {
+  it('calls runGated then updateAgentTools when the person sets Allow on a row', async () => {
     vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
+    permissions().stored.policies = { read_file: 'allow' }
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -763,17 +826,21 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
       />
     )
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeEnabled()
-    })
+    await openFilesGroup()
+    const allow = await enabledBadge('read_file', 'Allow')
 
-    fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
+    fireEvent.click(allow)
 
     await waitFor(() => {
       expect(mockRunGated).toHaveBeenCalledTimes(1)
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
-        expect.any(Object),
+        expect.objectContaining({
+          override_names: ['read_file'],
+          config: expect.objectContaining({
+            builtin: expect.objectContaining({ policies: { read_file: 'allow' } }),
+          }),
+        }),
         '', // token arg always present (re-auth gate path)
       )
     })
@@ -818,6 +885,7 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
     })
 
     const onChange = vi.fn()
+    permissions().stored.policies = { read_file: 'allow' }
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -828,15 +896,15 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
       />
     )
 
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
-    })
+    await openFilesGroup()
+    const ask = await enabledBadge('read_file', 'Ask')
 
     // No save before user interaction.
     expect(api.updateAgentTools).not.toHaveBeenCalled()
 
-    // User clicks the Cautious preset — triggers the gated save.
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    // User sets Ask on the row (US-3 AS8; the role preset this test clicked
+    // before is retired, US-3 AS1) — triggers the gated save.
+    fireEvent.click(ask)
 
     // The gate ran: first attempt with '' returned 403, gate retried with 'reauth_tok'.
     await waitFor(() => {
@@ -899,27 +967,33 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
   // C's save no longer fires WHILE A is in-flight — it fires immediately
   // after A settles, still carrying C's (latest) data.
   //
+  // The role presets this describe used for its three edits are retired (US-3
+  // AS1, T-Q6 A; CHECK round 4, candidate 9). The three edits are now the
+  // person's three badge clicks on two rows: the invariants they exercise
+  // (debounce, one save in flight, latest wins, no snap-back) are unchanged.
+  //
   // Test strategy (fake timers throughout, except during initial data load):
   //   1. Load editor (real timers for queries to resolve).
   //   2. Switch to fake timers.
-  //   3. Click preset A (Cautious) → debounce starts.
+  //   3. Edit A: read_file → Ask → debounce starts.
   //   4. Advance 600ms → A's save fires (blocked by a deferred promise).
-  //   5. While in-flight: click preset B (Balanced) → debounce starts.
-  //   6. While in-flight: click preset C (Full access) → debounce resets.
+  //   5. While in-flight: edit B: read_file → Deny → debounce starts.
+  //   6. While in-flight: edit C: write_file → Ask → debounce resets.
   //   7. Advance 600ms → C's debounce fires, but the save is QUEUED (not
   //      dispatched) because A is still in flight — still only 1 call.
   //   8. Resolve A's save → the queued save for C fires immediately after,
-  //      as the second updateAgentTools call, carrying C's config.
+  //      as the second updateAgentTools call, carrying the person's latest
+  //      state: read_file Deny (B) and write_file Ask (C).
   //   9. Assert updateAgentTools was called exactly twice, and the SECOND
-  //      call used Full access config (latest-wins), not Cautious (stale A).
+  //      call carried both rows' latest values (latest-wins), not A's Ask on
+  //      read_file (stale A) and not B's state alone.
 
   it('latest-wins: edits B and C made while A is in-flight are not dropped; C persists', async () => {
-    // Add write_file to the registry so Balanced (which sets write_file:'ask'
-    // per the §2.1 override table) and Full access (write_file:'allow')
-    // produce genuinely DIFFERENT complete maps. With only read_file/mcp_search
-    // in scope neither preset has an override for either tool, so Balanced and
-    // Full access would collapse into an identical map and we could no longer
-    // tell "C won" from "B won" from the PUT payload alone.
+    // Add write_file to the registry so edit C lands on a different row from
+    // edits A and B. The saved map after C then holds BOTH rows' latest values
+    // (read_file Deny, write_file Ask), which no earlier edit alone produces:
+    // from the PUT payload alone we can tell "C won" from "A persisted" or
+    // "B persisted". With one row only, C would collapse onto A or B.
     const WRITE_FILE_TOOL: RegistryTool = {
       name: 'write_file', scope: 'general', category: 'filesystem', description: 'Write file', source: 'builtin',
       visibility: 'full',
@@ -928,6 +1002,9 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     }
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
     vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
+    // Both rows' global value is Allow, so Ask and Deny are the agent's own,
+    // stricter values (US-3: an agent value only ever tightens the global one).
+    permissions().stored.policies = { read_file: 'allow', write_file: 'allow' }
 
     // Deferred promise to block the FIRST updateAgentTools call (A's save).
     let resolveFirstSave!: (v: ReturnType<typeof toolsResponse>) => void
@@ -935,14 +1012,15 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
       (resolve) => { resolveFirstSave = resolve },
     )
 
-    // Full access config (edit C) — this is the expected final persisted value.
-    const fullAccessCfg = {
-      builtin: { policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' } },
+    // The state the person ends on (edits B and C) — the expected final
+    // persisted value, as the server would acknowledge it.
+    const finalCfg = {
+      builtin: { policies: { read_file: 'deny', write_file: 'ask' } },
     }
 
     vi.mocked(api.updateAgentTools)
       .mockReturnValueOnce(firstSavePromise) // A: blocked
-      .mockResolvedValue(toolsResponse(fullAccessCfg as typeof DEFAULT_TOOLS_CFG)) // C and beyond
+      .mockResolvedValue(toolsResponse(finalCfg as typeof DEFAULT_TOOLS_CFG)) // C and beyond
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -954,11 +1032,11 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     )
 
     // Wait for the editor to hydrate with REAL timers (queries are async).
-    // Enablement (not just presence) confirms hydration landed before the
-    // fake-timer section clicks presets.
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
-    })
+    // Enablement (not just presence) of both rows' badges confirms hydration
+    // landed before the fake-timer section clicks them.
+    await openFilesGroup()
+    await enabledBadge('read_file', 'Ask')
+    await enabledBadge('write_file', 'Ask')
     // Confirm isDraftReady gate opened (agentToolsData arrived).
     await waitFor(() => {
       expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1')
@@ -968,28 +1046,27 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // Switch to fake timers NOW — queries have resolved; only debounce timers remain.
     vi.useFakeTimers()
 
-    // Edit A: click Cautious preset — complete map, every known tool → 'ask'.
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    // Edit A: read_file → Ask.
+    fireEvent.click(rowBadge('read_file', 'Ask'))
 
     // Advance past the useAutoSave debounce (500ms) → A's save fires.
     await act(async () => { vi.advanceTimersByTime(600) })
 
-    // A's save is now in-flight (blocked by firstSavePromise).
+    // A's save is now in-flight (blocked by firstSavePromise). It carries the
+    // person's one edit and nothing else: the agent's overrides are sparse.
     expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(api.updateAgentTools).mock.calls[0][1]).toMatchObject({
-      revision: TOOLS_REVISION,
-      config: { builtin: { policies: { read_file: 'ask', mcp_search: 'ask', write_file: 'ask' } } },
-    })
+    const firstCallCfg = vi.mocked(api.updateAgentTools).mock.calls[0][1]
+    expect(firstCallCfg).toMatchObject({ revision: TOOLS_REVISION })
+    expect(firstCallCfg.config.builtin?.policies).toEqual({ read_file: 'ask' })
 
-    // Edit B while A is in-flight: Balanced (write_file → 'ask' per §2.1;
-    // read_file/mcp_search → 'allow', no override for either).
+    // Edit B while A is in-flight: read_file → Deny.
     // Does NOT call updateAgentTools yet — the debounce resets.
-    fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
+    fireEvent.click(rowBadge('read_file', 'Deny'))
     await act(async () => { vi.advanceTimersByTime(100) })
 
-    // Edit C while A is still in-flight: Full access (every tool → 'allow').
+    // Edit C while A is still in-flight: write_file → Ask.
     // B's debounce was cleared; C starts a fresh 500ms debounce.
-    fireEvent.click(document.querySelector('[data-testid="preset-full_access"]')!)
+    fireEvent.click(rowBadge('write_file', 'Ask'))
     await act(async () => { vi.advanceTimersByTime(100) })
 
     // A is still blocked — only 1 call so far. B and C are still debouncing.
@@ -1012,13 +1089,15 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
 
     expect(api.updateAgentTools).toHaveBeenCalledTimes(2)
 
-    // The second call must use Full access's complete map (C wins, not A or B) —
-    // write_file:'allow' distinguishes it from Balanced's write_file:'ask'.
+    // The second call carries the person's latest state of BOTH rows (C wins,
+    // and B's earlier edit is not lost): read_file Deny is neither A's Ask
+    // (stale A) nor absent (a dropped B), and write_file Ask exists only in C.
+    // The map is exactly those two rows: the overrides stay sparse.
     const secondCallCfg = vi.mocked(api.updateAgentTools).mock.calls[1][1]
-    expect(secondCallCfg).toMatchObject({
-      revision: '2'.repeat(64),
-      config: { builtin: { policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' } } },
-    })
+    expect(secondCallCfg).toMatchObject({ revision: '2'.repeat(64) })
+    expect(secondCallCfg.config.builtin?.policies).toEqual({ read_file: 'deny', write_file: 'ask' })
+    // Order is not part of the contract; both edited rows are the agent's own.
+    expect([...secondCallCfg.override_names].sort()).toEqual(['read_file', 'write_file'])
 
     // No further save fires — resolving A's queued follow-up did not
     // trigger a spurious third save.
@@ -1030,17 +1109,20 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // Additional check: after A saves and invalidates the cache, the agentToolsData
     // refetch must NOT overwrite the editor with A's stale value. The isDraftReady
     // gate blocks the hydration useEffect once the user has edited.
-    const cautionsCfg = {
+    const staleCfg = {
       builtin: { policies: {} },
     }
 
     // fetchAgentTools: first call returns DEFAULT, re-fetch after A saves returns
-    // Cautious (the value A persisted). This simulates the stale snap-back scenario.
+    // a config without A's edit (a stale read). This simulates the snap-back
+    // scenario: were the draft to take it, the editor would drop the person's
+    // Ask, which differs from the draft and would fire a second save.
     vi.mocked(api.fetchAgentTools)
       .mockResolvedValueOnce(toolsResponse())
-      .mockResolvedValue(toolsResponse(cautionsCfg as typeof DEFAULT_TOOLS_CFG))
+      .mockResolvedValue(toolsResponse(staleCfg as typeof DEFAULT_TOOLS_CFG))
 
-    vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse(cautionsCfg as typeof DEFAULT_TOOLS_CFG))
+    vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse(staleCfg as typeof DEFAULT_TOOLS_CFG))
+    permissions().stored.policies = { read_file: 'allow' }
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -1052,15 +1134,14 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     )
 
     // Wait for initial hydration (real timers). Enablement, not just
-    // presence — the preset click below must be post-hydration.
-    await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
-    })
+    // presence — the badge click below must be post-hydration.
+    await openFilesGroup()
+    const ask = await enabledBadge('read_file', 'Ask')
     await waitFor(() => expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1'))
     expect(api.updateAgentTools).not.toHaveBeenCalled()
 
-    // Edit A: Cautious — fires after debounce (real timers, waitFor will wait).
-    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
+    // Edit A: read_file → Ask — fires after debounce (real timers, waitFor will wait).
+    fireEvent.click(ask)
 
     // Wait for A's save to fire (useAutoSave debounces 500ms; waitFor polls up to 2s).
     await waitFor(() => {
@@ -1068,7 +1149,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     }, { timeout: 2000 })
 
     // After A saves, the cache is invalidated and fetchAgentTools re-fires
-    // returning cautionsCfg. The editor must NOT revert because isDraftReady
+    // returning staleCfg. The editor must NOT revert because isDraftReady
     // blocks the hydration effect once the user has edited.
     // Give the refetch + any re-render time to propagate.
     await new Promise((r) => setTimeout(r, 200))
