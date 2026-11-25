@@ -56,7 +56,7 @@ jobs:
             arch: arm64
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 65
 
     env:
       CGO_ENABLED: "0"
@@ -116,8 +116,15 @@ jobs:
         # grew; nothing was stuck. -timeout is raised to 30m while the slow
         # tests are identified and cut (founder 2026-10-29: find out why they
         # are slow). A real hang still trips it; the job limit stays 45.
+        #
+        # 2026-11-25 (S1, #1991): the s1seams tag turns on the S1 runtime
+        # tests, which start real gateways and git repositories; pkg/gateway
+        # then needed more than 30m on the 4-core runners (amd64 and arm64 both
+        # hit the deadline with nothing stuck: one test was running at the
+        # alarm). -timeout is 50m and the job limit 65 until the slow S1
+        # tests are measured and cut.
         shell: bash
-        run: go test -tags goolm,stdjson,s1seams -short -timeout 30m ./...
+        run: go test -tags goolm,stdjson,s1seams -short -timeout 50m ./...
 
       - name: Smoke boot + /health
         # Run the compiled binary once with --allow-empty on the local runner
