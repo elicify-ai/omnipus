@@ -277,6 +277,13 @@ The site permission lasts for that one run; it never widens what the conversatio
 - Two sources set the same variable (two programs, or a program and one of the agent's private variables): neither value is set, and the result says "&lt;VAR&gt; was not set for this command: two sources set it. A person can fix this in Settings → Programs."
 - Two programs supply a login for the same git site: no git login is added for that site, and the result names it.
 
+**Commands the git check refuses.** Omnipus keeps its own protected git history of each workspace's files. To stop a command from pushing into that history or changing how it accepts a push, the shell check refuses some command lines that are harmless. It reads the whole command line as text, not word by word like the shell does, so it cannot tell which part belongs to which command:
+
+- When the command line contains `push` or `send-pack`, any word starting with `--ex` is refused, even in another command. Example: `git push origin main; grep --exclude=x .` is refused because of `--exclude`.
+- When the command line mentions git, any receive-side override is refused: `receive-pack`, a `--rece…` option, a `receive.*` setting given with `-c` or `--config-env`, or the names `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` or `GIT_CONFIG_KEY_…`. Example: `git log --grep=receive-pack` is refused.
+
+The refusal names the word that caused it. Workaround: run the two commands as separate commands, for example `git push origin main` first and `grep --exclude=x .` next.
+
 **Output.** The program's own messages and exit code reach the agent unchanged, except that program tokens are hidden in its output (see [security](security.md#how-program-tokens-are-hidden)). If a token is wrong or expired, the agent sees the program's own error, such as `HTTP 401: Bad credentials`.
 
 ## Background results
