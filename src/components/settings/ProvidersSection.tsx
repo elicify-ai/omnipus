@@ -695,9 +695,10 @@ function ProviderConfigSheet({
             </Card>
           )}
 
-          {/* Footer actions */}
-          <div className="flex justify-between gap-[var(--space-2)] pt-[var(--space-2)]">
-            <div className="flex gap-[var(--space-2)]">
+          {/* Footer actions. U5-2: the row wraps at 390 px so nothing scrolls sideways;
+              the save group keeps to the right, away from Remove provider (ADR-068 US-3). */}
+          <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)] pt-[var(--space-2)]">
+            <div className="flex flex-wrap gap-[var(--space-2)]">
               {provider && provider.status === 'connected' && (
                 <Button
                   variant="ghost"
@@ -723,7 +724,7 @@ function ProviderConfigSheet({
                 </Button>
               )}
             </div>
-            <div className="flex gap-[var(--space-2)]">
+            <div className="ml-auto flex gap-[var(--space-2)]">
               <Button
                 variant="outline"
                 size="sm"
