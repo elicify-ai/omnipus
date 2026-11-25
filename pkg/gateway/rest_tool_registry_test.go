@@ -1014,15 +1014,28 @@ func TestWS_BroadcastToolApprovalRequired_NilEntry(t *testing.T) {
 	handler.broadcastToolApprovalRequired(nil)
 }
 
-// --- REST: POST /api/v1/tool-approvals/{id} with action:"allow" (ADR-036 §3.4, ADR-092 D4) ---
+// --- REST: POST /api/v1/tool-approvals/{id} with action:"allow_for" (skills-tools-redesign-spec.md C-26; ADR-036 §3.4, ADR-092 D4) ---
 
 // TestApproveTool_ActionAllow_RecordsGrantAndApproves proves the generic REST
-// approval path's "allow" action (ADR-092 D4's rename of "always") BOTH (a)
-// approves the pending tool call — the same terminal transition as
-// "allow_once", so the blocked loop goroutine proceeds — AND (b) records a
-// session-scoped grant for the approval's (session, agent, tool), queryable
-// via ApprovalGrantStore.IsAllowed afterward. agent-delegation-spec.md's
-// FR-D8 grant inheritance depends on this grant.
+// approval path's remembering action BOTH (a) approves the pending tool call —
+// the same terminal transition as "allow_once", so the blocked loop goroutine
+// proceeds — AND (b) records an allowance for the approval's (agent, tool),
+// queryable via ApprovalGrantStore.IsAllowed afterward. agent-delegation-spec.md's
+// FR-D8 grant inheritance depended on this grant; C-26 keeps the same-agent half
+// of it (a helper the agent starts for itself reads the same allowance).
+//
+// Migrated for skills-tools-redesign-spec.md C-26 (founder R2-Q1, 2026-11-22):
+// the remembering action is "allow_for" with a duration; the old "allow" is
+// refused with 400 "This choice is no longer offered. Choose Approve Once or a
+// time limit." The test keeps its name so existing run commands still select it.
+// Two expectations changed because C-26 orders them; every other assertion is
+// unchanged:
+//   - the response echoes allow_for (the action that was posted);
+//   - a DIFFERENT SESSION of the same agent is now covered. C-26, "Lifetime and
+//     scope", Key: "(agent id, kind, subject) ... The session id is no longer part
+//     of the key", and Covers: "every session of that agent". The agent boundary,
+//     the tool boundary and the exact-argument boundary (the exact fingerprint
+//     stays "only for the bash exact scope") are asserted exactly as before.
 func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 	api, reg := newTestRestAPIWithApprovalReg(t)
 
@@ -1034,9 +1047,9 @@ func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 	grants := api.agentLoop.ApprovalGrants()
 	require.NotNil(t, grants, "test harness must wire a real ApprovalGrantStore")
 
-	// Precondition: no grant exists for this (session, agent, tool) yet.
+	// Precondition: no allowance exists for this (session, agent, tool) yet.
 	require.False(t, grants.IsAllowed(sessionID, agentID, toolName, nil),
-		"precondition: no Always-Allow grant may exist before the request")
+		"precondition: no allowance may exist before the request")
 
 	lsArgs := map[string]any{"command": "ls"}
 	entry, accepted := reg.requestApproval(
@@ -1044,11 +1057,11 @@ func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	// Act: resolve via the generic REST endpoint with action:"allow".
-	w := postToolApproval(t, api, entry.ApprovalID, "allow")
+	// Act: resolve via the generic REST endpoint with action:"allow_for".
+	w := postToolApprovalRaw(t, api, entry.ApprovalID, `{"action":"allow_for","duration":"1h"}`)
 
 	// (a1) HTTP 200 with the echoed action and ok status.
-	require.Equal(t, http.StatusOK, w.Code, "always must be accepted with 200")
+	require.Equal(t, http.StatusOK, w.Code, "allow_for must be accepted with 200: %s", w.Body.String())
 	var resp struct {
 		ApprovalID    string `json:"approval_id"`
 		Action        string `json:"action"`
@@ -1057,16 +1070,16 @@ func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, entry.ApprovalID, resp.ApprovalID)
-	assert.Equal(t, "allow", resp.Action, "response must echo the allow action")
+	assert.Equal(t, "allow_for", resp.Action, "response must echo the allow_for action")
 	assert.Equal(t, "ok", resp.Status)
-	require.NotNil(t, resp.GrantRecorded, "always must report whether the grant stuck")
-	assert.True(t, *resp.GrantRecorded, "a complete identity must record the grant")
+	require.NotNil(t, resp.GrantRecorded, "allow_for must report whether the allowance stuck")
+	assert.True(t, *resp.GrantRecorded, "a complete identity must record the allowance")
 
 	// (a2) The pending tool call proceeds: entry transitioned to approved and the
 	// blocked loop goroutine receives an Approved outcome on its result channel.
 	require.NotNil(t, reg.get(entry.ApprovalID))
 	assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state,
-		"always must resolve the pending call as approved (same as approve)")
+		"allow_for must resolve the pending call as approved (same as approve)")
 	select {
 	case outcome := <-entry.resultCh:
 		assert.True(t, outcome.Approved, "the pending call must be approved")
@@ -1075,56 +1088,95 @@ func TestApproveTool_ActionAllow_RecordsGrantAndApproves(t *testing.T) {
 		t.Fatal("expected an approved outcome buffered on the entry's resultCh")
 	}
 
-	// (b) A session-scoped grant was recorded and is queryable via IsAllowed.
+	// (b) An allowance was recorded and is queryable via IsAllowed.
 	assert.True(t, grants.IsAllowed(sessionID, agentID, toolName, lsArgs),
-		"always must record a grant for the approval's exact arguments")
+		"allow_for on a bash card (exact scope) must record the exact command")
 	assert.False(t, grants.IsAllowed(sessionID, agentID, toolName, map[string]any{"command": "rm -rf /"}),
-		"a grant for {command:ls} must not approve a different argv")
+		"an allowance for {command:ls} must not approve a different argv")
 
-	// Scoping proof (consent boundary): the grant must NOT leak to a different
-	// agent, session, or tool.
+	// Scoping proof (consent boundary): the allowance must NOT leak to a different
+	// agent or tool, and it DOES reach another session of the same agent (C-26 Key).
 	assert.False(t, grants.IsAllowed(sessionID, "agent-b", toolName, lsArgs),
-		"grant must not apply to a different agent")
-	assert.False(t, grants.IsAllowed("session-other", agentID, toolName, lsArgs),
-		"grant must not apply to a different session")
+		"allowance must not apply to a different agent")
+	assert.True(t, grants.IsAllowed("session-other", agentID, toolName, lsArgs),
+		"C-26 Key: the session id is no longer part of the key, so another session of the same agent is covered")
 	assert.False(t, grants.IsAllowed(sessionID, agentID, "read_file", lsArgs),
-		"grant must not apply to a different tool")
+		"allowance must not apply to a different tool")
 }
 
-// HTTP 200 + grant_recorded:false is the honesty contract: this call is
-// approved, but Always Allow did not stick because the approval had no
-// session identity. requestApproval still accepts an empty session id
-// (it increments missingActingSessionID) — that is the production shape
-// of a grant that cannot be stored.
+// An approval's identity decides whether an allowance can be stored, and the
+// response must say honestly whether it stuck: HTTP 200 + grant_recorded is the
+// honesty contract (the call is approved either way).
+//
+// Before skills-tools-redesign-spec.md C-26 the allowance was keyed by the chat,
+// so an approval with no session id could not store one and the test pinned
+// grant_recorded:false for that case. C-26 Key ("(agent id, kind, subject) ... The
+// session id is no longer part of the key") reverses that half: an approval with
+// an agent but no session id DOES record, and the allowance then covers every
+// session of the agent. The other half is the safety property the old test
+// protected: an unidentified approval must not store a standing allowance. The
+// spec names the agent on the card as the key owner ("The agent is the pending
+// approval's entry.AgentID") and does not say what happens with no agent at all,
+// so the no-agent leg is the closest reading of the old property, not a quoted
+// rule (report to team-lead as a spec gap). The test keeps its name so existing
+// run commands still select it.
 func TestApproveTool_ActionAllow_GrantNotRecordedWhenSessionMissing(t *testing.T) {
-	api, reg := newTestRestAPIWithApprovalReg(t)
-	grants := api.agentLoop.ApprovalGrants()
-	require.NotNil(t, grants)
-
-	lsArgs := map[string]any{"command": "ls"}
-	entry, accepted := reg.requestApproval(
-		"tc-always-nosess", "bash", lsArgs, "agent-a", "", "turn-1",
-	)
-	require.True(t, accepted)
-
-	w := postToolApproval(t, api, entry.ApprovalID, "allow")
-	require.Equal(t, http.StatusOK, w.Code, "the call itself is still approved")
-
-	var resp struct {
+	type response struct {
 		Action        string `json:"action"`
 		Status        string `json:"status"`
 		GrantRecorded *bool  `json:"grant_recorded"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "allow", resp.Action)
-	assert.Equal(t, "ok", resp.Status)
-	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
-	assert.False(t, *resp.GrantRecorded, "an empty session id cannot store a standing grant")
+	lsArgs := map[string]any{"command": "ls"}
 
-	require.NotNil(t, reg.get(entry.ApprovalID))
-	assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state)
-	assert.False(t, grants.IsAllowed("", "agent-a", "bash", lsArgs),
-		"Record must refuse an empty session key")
+	t.Run("no session id: the allowance is still recorded, by agent (C-26 Key)", func(t *testing.T) {
+		api, reg := newTestRestAPIWithApprovalReg(t)
+		grants := api.agentLoop.ApprovalGrants()
+		require.NotNil(t, grants)
+		entry, accepted := reg.requestApproval(
+			"tc-always-nosess", "bash", lsArgs, "agent-a", "", "turn-1",
+		)
+		require.True(t, accepted)
+
+		w := postToolApprovalRaw(t, api, entry.ApprovalID, `{"action":"allow_for","duration":"1h"}`)
+		require.Equal(t, http.StatusOK, w.Code, "the call itself is approved: %s", w.Body.String())
+		var resp response
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "allow_for", resp.Action)
+		assert.Equal(t, "ok", resp.Status)
+		require.NotNil(t, resp.GrantRecorded, "allow_for must report the allowance outcome")
+		assert.True(t, *resp.GrantRecorded, "C-26 Key: the session id is not part of the key, so a missing one cannot block the allowance")
+		require.NotNil(t, reg.get(entry.ApprovalID))
+		assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state)
+		assert.True(t, grants.IsAllowed("any-session-of-agent-a", "agent-a", "bash", lsArgs),
+			"C-26 Covers: the allowance reaches every session of that agent")
+		assert.False(t, grants.IsAllowed("any-session-of-agent-a", "agent-b", "bash", lsArgs),
+			"another agent is never covered")
+	})
+
+	t.Run("no agent id: nothing is stored and grant_recorded says so", func(t *testing.T) {
+		api, reg := newTestRestAPIWithApprovalReg(t)
+		grants := api.agentLoop.ApprovalGrants()
+		require.NotNil(t, grants)
+		entry, accepted := reg.requestApproval(
+			"tc-always-noagent", "bash", lsArgs, "", "session-x", "turn-1",
+		)
+		require.True(t, accepted, "instrument: the approval with no agent id must be pending so the answer is real")
+
+		w := postToolApprovalRaw(t, api, entry.ApprovalID, `{"action":"allow_for","duration":"1h"}`)
+		require.Equal(t, http.StatusOK, w.Code, "the call itself is still approved: %s", w.Body.String())
+		var resp response
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, "allow_for", resp.Action)
+		assert.Equal(t, "ok", resp.Status)
+		require.NotNil(t, resp.GrantRecorded, "allow_for must report the allowance outcome")
+		assert.False(t, *resp.GrantRecorded, "an approval naming no agent cannot store a standing allowance")
+		require.NotNil(t, reg.get(entry.ApprovalID))
+		assert.Equal(t, ApprovalStateApproved, reg.get(entry.ApprovalID).state)
+		assert.False(t, grants.IsAllowed("session-x", "", "bash", lsArgs),
+			"nothing may be stored under an empty agent id")
+		assert.False(t, grants.IsAllowed("session-x", "agent-a", "bash", lsArgs),
+			"an unidentified approval must not leak an allowance to a named agent")
+	})
 }
 
 // Compile-time check that wsConn has the userID field used by emitSessionState.

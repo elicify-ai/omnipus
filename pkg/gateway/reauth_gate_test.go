@@ -141,57 +141,79 @@ func TestSandboxConfigPUT_WithReAuth_Succeeds(t *testing.T) {
 
 // --- Global tool policies (UAT: step-up re-auth REMOVED) ---
 //
-// The step-up re-auth gate was intentionally removed from the global tool-policy
-// PUT per UAT feedback (operator found re-typing the password to change a tool
-// permission to be unnecessary friction). Authorization is unchanged: the PUT
-// still requires an authenticated caller (withAuth). These tests now PROVE the
-// gate is gone — a valid authenticated session with NO X-Reauth-Token succeeds —
-// while the re-auth gate on OTHER sensitive routes (sandbox/providers/credentials/...)
-// keeps its dedicated tests above and below.
+// The step-up re-auth gate was intentionally removed from the global tool-policy write per UAT
+// feedback (operator found re-typing the password to change a tool permission to be unnecessary
+// friction). Authorization is unchanged: the write still requires an authenticated caller
+// (withAuth). These tests PROVE the gate is gone: a valid authenticated session with NO
+// X-Reauth-Token succeeds, while the re-auth gate on OTHER sensitive routes
+// (sandbox/providers/credentials/...) keeps its dedicated tests above and below.
+//
+// FIX ROUND 4, Part B row 6: the write is PATCH /security/permissions now (C-2); the PUT route is
+// retired by C-22 row 6 and "PATCH is the only writer of these maps". Both tests drive the real
+// route table, authenticated by the env bearer. C-2 names no re-auth for the PATCH, says the read
+// uses "the same authentication the retired route used", and spec section "Existing code touched"
+// records the retired handler as "no re-auth"; carrying that invariant forward is Inferred and is
+// reported as a spec silence. The request body changes bash to deny: a value that differs from the
+// stored one, so the write really happens (the retired tests sent ask, which the stored default
+// already was once the ceiling is complete, and an equal-value request is a no-op under C-2).
+//
+// RULED by team-lead (fix round 4, part B row 6, option B): PATCH /security/permissions does NOT
+// require X-Reauth-Token. Grounds the ruling gives: spec line 60 records the retired writer as
+// "no re-auth"; C-2 says the replacement uses the same authentication; this header records the
+// UAT removal of the step-up gate; C-16 autosave cannot carry a token. The frontend client
+// src/lib/api/permissions.ts::patchPermissionSettings sends no re-auth header either. The first
+// test below is therefore the RED proof the backend fixes by removing the requireReAuth call in
+// the PATCH handler; the two Q7T35 writer tests (channel_q7_policy_writers_test.go) and the CSRF
+// happy-path leg (tests/security/csrf_test.go) send the plain no-token request too, so no test
+// quietly relies on the gate.
 
-// TestToolPoliciesPUT_NoReAuthToken_Succeeds proves the global tool-policy PUT now
-// succeeds with a valid admin session and NO re-auth consent token — the step-up
-// gate was removed per UAT. This would fail (403) if the gate were restored.
-func TestToolPoliciesPUT_NoReAuthToken_Succeeds(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	// There is no default_policy field on the wire any more (CLAUDE.md hard
-	// constraint 6) — this body used to send one (and assert it echoed back)
-	// before that field was removed; a bare "policies" map is the current
-	// contract. newTestRestAPIWithHome seeds an empty agent list, so
-	// config.ValidateToolPolicyCoverage has nothing to check regardless of
-	// what this map contains.
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
-		strings.NewReader(`{"policies":{"bash":"ask"}}`))
+// patchPermissionsWithoutToken PATCHes /api/v1/security/permissions through the route table with
+// bearer auth and DELIBERATELY no re-auth consent token.
+func patchPermissionsWithoutToken(t *testing.T, routes routeTable, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPatch, "/api/v1/security/permissions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdminNoToken(r) // admin user/role, but deliberately NO token
+	r.Header.Set("Authorization", "Bearer "+permissionsTestBearer)
+	require.Empty(t, r.Header.Get(reAuthHeader), "instrument: this request carries no re-auth token")
 	w := httptest.NewRecorder()
-	api.HandleToolPolicies(w, r)
-	require.Equal(t, http.StatusOK, w.Code,
-		"tool-policies PUT must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	policies, _ := resp["policies"].(map[string]any)
-	assert.Equal(t, "ask", policies["bash"])
+	routes.ServeHTTP(w, r)
+	return w
 }
 
-// TestToolPoliciesPUT_WithReAuthToken_StillSucceeds proves a stale/legacy client
-// that still sends an X-Reauth-Token is not penalized — the PUT succeeds whether
-// or not the token is present (the gate no longer consumes it).
-func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	// See TestToolPoliciesPUT_NoReAuthToken_Succeeds — no default_policy field
-	// on the wire any more.
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
-		strings.NewReader(`{"policies":{"bash":"ask"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = withReAuthAdmin(t, api, r)
-	w := httptest.NewRecorder()
-	api.HandleToolPolicies(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "tool-policies PUT must succeed; body=%s", w.Body.String())
+// TestPermissionsPatch_NoReAuthToken_Succeeds proves the global permission write succeeds with a
+// valid authenticated session and NO re-auth consent token, as the retired tool-policy PUT did.
+// This would fail (403) if a step-up gate were put on it. The unauthenticated leg is the
+// instrument: the same route refuses a caller without the bearer, so the 200 is the bearer check
+// passing and not an open route.
+func TestPermissionsPatch_NoReAuthToken_Succeeds(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
+
+	anonymous := httptest.NewRequest(http.MethodPatch, "/api/v1/security/permissions", strings.NewReader(`{"policies":{"bash":"deny"}}`))
+	anonymous.Header.Set("Content-Type", "application/json")
+	refused := httptest.NewRecorder()
+	routes.ServeHTTP(refused, anonymous)
+	require.Equal(t, http.StatusUnauthorized, refused.Code, "instrument: the route refuses a caller without the bearer; body=%s", refused.Body.String())
+
+	w := patchPermissionsWithoutToken(t, routes, `{"policies":{"bash":"deny"}}`)
+	require.Equal(t, http.StatusOK, w.Code,
+		"permissions PATCH must succeed without a re-auth token (gate removed per UAT); body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	policies, _ := resp["policies"].(map[string]any)
-	assert.Equal(t, "ask", policies["bash"])
+	assert.Equal(t, "deny", policies["bash"])
+	assert.Equal(t, "deny", permStoredToolPolicy(t, api.configPath(), "bash"), "the write reached config.json")
+}
+
+// TestPermissionsPatch_WithReAuthToken_StillSucceeds proves a stale/legacy client that still sends
+// an X-Reauth-Token is not penalized: the PATCH succeeds whether or not the token is present.
+func TestPermissionsPatch_WithReAuthToken_StillSucceeds(t *testing.T) {
+	api, routes := newPermissionsAPI(t)
+	w := patchPermissions(t, api, routes, `{"policies":{"bash":"deny"}}`) // mints and sends a re-auth token
+	require.Equal(t, http.StatusOK, w.Code, "permissions PATCH must succeed; body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	policies, _ := resp["policies"].(map[string]any)
+	assert.Equal(t, "deny", policies["bash"])
 }
 
 // --- Provider / model API-key PUT (Spec-6 FR-12.2 / FR-6.6) ---

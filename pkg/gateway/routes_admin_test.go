@@ -67,8 +67,11 @@ var allAdminRoutes = []bypassGatedRoute{
 	{http.MethodPost, "/api/v1/gateway/restart", ""},
 	{http.MethodGet, "/api/v1/security/audit-log", ""},
 	{http.MethodPut, "/api/v1/security/audit-log", `{"enabled":true}`},
-	{http.MethodGet, "/api/v1/security/skill-trust", ""},
-	{http.MethodPut, "/api/v1/security/skill-trust", `{"mode":"require_signed"}`},
+	// C-22 row 6 retires GET/PUT /security/skill-trust (skill trust moves into the permissions
+	// maps, C-3), so its two rows leave this table of bypass-gated routes. The replacement route
+	// is deliberately NOT added here: the spec does not say whether PATCH /security/permissions is
+	// dev-mode-bypass-gated (the retired skill-trust route was, the retired tool-policies route was
+	// not), so a row would pin a gate nobody specified. Reported to team-lead as a spec gap.
 	{http.MethodGet, "/api/v1/security/prompt-guard", ""},
 	{http.MethodPut, "/api/v1/security/prompt-guard", `{"enabled":false}`},
 	{http.MethodGet, "/api/v1/security/rate-limits", ""},
