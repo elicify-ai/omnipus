@@ -14,6 +14,11 @@ export class SkillPermissionNetwork {
   stored: PermissionSettings
   seen: Seen[] = []
   rejection?: { status: number; body: ErrorResponse; stored?: PermissionSettings }
+  // Read-side doubles for a screen that only reads the global value (an agent's
+  // Tools tab): GETs held unanswered, or one GET that fails. A PATCH never sees
+  // either, and each test starts from a fresh network.
+  readsHeld = false
+  readFailure?: { status: number; body: ErrorResponse }
 
   constructor(settings: PermissionSettings) {
     SettingsSchema.parse(settings)
@@ -30,6 +35,16 @@ export class SkillPermissionNetwork {
     this.rejection = { status, body: { error }, stored }
   }
 
+  // Every GET stays unanswered from now on, as a server that is still working.
+  holdReads() {
+    this.readsHeld = true
+  }
+
+  // The next GET answers with a server error; the GETs after it answer normally.
+  failNextRead(status: number, error: string) {
+    this.readFailure = { status, body: { error } }
+  }
+
   fetch: typeof fetch = async (input, init) => {
     const rawURL = input instanceof Request ? input.url : String(input)
     const path = new URL(rawURL, 'http://localhost').pathname
@@ -39,6 +54,12 @@ export class SkillPermissionNetwork {
     }
     const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body))
     this.seen.push({ method, path, ...(body === undefined ? {} : { body }) })
+    if (method === 'GET') {
+      if (this.readsHeld) return new Promise<Response>(() => {})
+      const failure = this.readFailure
+      this.readFailure = undefined
+      if (failure) return Response.json(failure.body, { status: failure.status })
+    }
     if (method === 'PATCH') {
       // Keep RAW body in observations: schema stripping must not hide extras.
       const patch: PermissionSettingsPatch = PatchSchema.parse(body)
@@ -52,6 +73,9 @@ export class SkillPermissionNetwork {
         return Response.json(failure.body, { status: failure.status })
       }
       this.stored = {
+        // Read-only members this fixture does not model (C-2 `upgrade_unfinished`) stay as the server holds
+        // them: every PATCH answer carries the whole stored state, those members included.
+        ...this.stored,
         policies: { ...this.stored.policies, ...patch.policies },
         skill_policies: { ...this.stored.skill_policies, ...patch.skill_policies },
         visibility: { ...this.stored.visibility, ...patch.visibility },
