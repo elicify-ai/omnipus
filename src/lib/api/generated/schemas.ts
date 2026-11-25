@@ -1598,6 +1598,7 @@ type Agent = {
   degraded_reason?: "needs_provider" | undefined;
   needs_model: boolean;
   context_window_effective?: number | undefined;
+  full_skills_tokens?: number | undefined;
   context_window_source?: ContextWindowSource | undefined;
   context_window_clamped?: boolean | undefined;
   context_window_override?: number | undefined;
@@ -1931,6 +1932,11 @@ type PermissionSettings = {
   visibility: {};
   skill_visibility: {};
   skill_trust: ToolPolicy;
+  upgrade_unfinished?: Array<SkillUpgradeUnfinishedAgent> | undefined;
+};
+type SkillUpgradeUnfinishedAgent = {
+  agent_id: string;
+  reason: "write_failed" | "unreadable";
 };
 type PermissionSettingsPatch = Partial<{
   policies: {};
@@ -2352,6 +2358,7 @@ type Skill = {
   description?: string | undefined;
   author?: string | undefined;
   source?: ("builtin" | "global" | "workspace") | undefined;
+  full_tokens?: number | undefined;
   verified: boolean;
   status: "active" | "disabled" | "inactive" | "error";
   agent_assignment?: string | undefined;
@@ -5045,6 +5052,7 @@ export const Agent: z.ZodType<Agent> = z
     degraded_reason: z.literal("needs_provider").optional(),
     needs_model: z.boolean(),
     context_window_effective: z.number().int().gte(0).optional(),
+    full_skills_tokens: z.number().int().gte(0).optional(),
     context_window_source: ContextWindowSource.optional(),
     context_window_clamped: z.boolean().optional(),
     context_window_override: z.number().int().gte(1).optional(),
@@ -5426,12 +5434,18 @@ export const ToolApprovalResponse: z.ZodType<ToolApprovalResponse> = z
     not_applied_reason: z.string().min(1).max(500).optional(),
   })
   .passthrough();
+export const SkillUpgradeUnfinishedAgent: z.ZodType<SkillUpgradeUnfinishedAgent> =
+  z.object({
+    agent_id: z.string(),
+    reason: z.enum(["write_failed", "unreadable"]),
+  });
 export const PermissionSettings: z.ZodType<PermissionSettings> = z.object({
   policies: z.record(ToolPolicy),
   skill_policies: z.record(ToolPolicy),
   visibility: z.record(ModelVisibility),
   skill_visibility: z.record(ModelVisibility),
   skill_trust: ToolPolicy,
+  upgrade_unfinished: z.array(SkillUpgradeUnfinishedAgent).optional(),
 });
 export const PermissionSettingsPatch: z.ZodType<PermissionSettingsPatch> = z
   .object({
@@ -6382,6 +6396,7 @@ export const Skill: z.ZodType<Skill> = z.object({
   description: z.string().optional(),
   author: z.string().optional(),
   source: z.enum(["builtin", "global", "workspace"]).optional(),
+  full_tokens: z.number().int().gte(0).optional(),
   verified: z.boolean(),
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),

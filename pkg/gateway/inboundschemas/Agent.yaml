@@ -288,6 +288,18 @@ properties:
       actually run with, after the D2 ladder and the lower-only clamp. 0 for
       exempt subprocess-CLI rows. Optional — absent until the resolver lands.
     example: 1048576
+  full_skills_tokens:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): what this
+      agent's next turn would charge for Full skills, computed with the
+      turn's own Full-skill selection and estimator over installed skills
+      only (project skills depend on the chat's workspace and are left out).
+      0 when no Full skill would be injected; absent when it cannot be
+      computed.
+    example: 3000
   context_window_source:
     $ref: './ContextWindowSource.yaml'
   context_window_clamped:

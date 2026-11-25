@@ -67,3 +67,14 @@ properties:
       What happens with unverified skills (sandbox.skill_trust): allow =
       install and load follow the skill's own permission; ask = a person
       approves each new version; deny = unverified skills are refused.
+  upgrade_unfinished:
+    type: array
+    readOnly: true
+    description: >
+      Skills & Tools spec C-2, C-19 "The notice" (ruling spec-gaps-1): the
+      agents the one-time skill-permissions upgrade has not finished for,
+      read from the upgrade ledger on every request. Absent when there is
+      nothing to list. Not part of PermissionSettingsPatch.
+    items:
+      $ref: './SkillUpgradeUnfinishedAgent.yaml'
+      x-go-type: SkillUpgradeUnfinishedAgent

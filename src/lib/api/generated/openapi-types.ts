@@ -9153,6 +9153,11 @@ export interface components {
              * @example 1048576
              */
             context_window_effective?: number;
+            /**
+             * @description Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): what this agent's next turn would charge for Full skills, computed with the turn's own Full-skill selection and estimator over installed skills only (project skills depend on the chat's workspace and are left out). 0 when no Full skill would be injected; absent when it cannot be computed.
+             * @example 3000
+             */
+            readonly full_skills_tokens?: number;
             context_window_source?: components["schemas"]["ContextWindowSource"];
             /**
              * @description Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
@@ -10261,6 +10266,8 @@ export interface components {
             };
             /** @description What happens with unverified skills (sandbox.skill_trust): allow = install and load follow the skill's own permission; ask = a person approves each new version; deny = unverified skills are refused. */
             skill_trust: components["schemas"]["ToolPolicy"];
+            /** @description Skills & Tools spec C-2, C-19 "The notice" (ruling spec-gaps-1): the agents the one-time skill-permissions upgrade has not finished for, read from the upgrade ledger on every request. Absent when there is nothing to list. Not part of PermissionSettingsPatch. */
+            readonly upgrade_unfinished?: components["schemas"]["SkillUpgradeUnfinishedAgent"][];
         };
         /**
          * PermissionSettingsPatch
@@ -10310,6 +10317,23 @@ export interface components {
             };
             /** @description The new trust choice for unverified skills (allow, ask or deny). */
             skill_trust?: components["schemas"]["ToolPolicy"];
+        };
+        /**
+         * SkillUpgradeUnfinishedAgent
+         * @description Skills & Tools spec C-19 "The notice" (ruling spec-gaps-1): one agent the one-time skill-permissions upgrade has not finished for. write_failed = its record could not be saved (it stays pending and the next start retries it); unreadable = its record could not be read at the snapshot, listed only while the record file still exists.
+         */
+        SkillUpgradeUnfinishedAgent: {
+            /**
+             * @description The agent's id.
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description Why the upgrade has not finished for this agent.
+             * @example write_failed
+             * @enum {string}
+             */
+            reason: "write_failed" | "unreadable";
         };
         /**
          * AgentSkillsCfg
@@ -12414,6 +12438,11 @@ export interface components {
              * @enum {string}
              */
             source?: "builtin" | "global" | "workspace";
+            /**
+             * @description Skills & Tools spec C-14 "Page warning" (ruling spec-gaps-1): the estimate a chat turn charges for this skill's Full block ("### Skill: <id>" and its body), made with the turn's estimator. Served for every installed skill whatever its level. Absent when the skill file cannot be read (load_error is then set).
+             * @example 3240
+             */
+            readonly full_tokens?: number;
             /**
              * @description Skills & Tools spec C-5: true for a built-in skill, or for a skill whose install was checked against a registry hash AND whose folder has no local changes since; false otherwise. Unverified skills follow the skill trust setting (allow / ask / deny, C-3).
              * @example true
@@ -31108,6 +31137,7 @@ export type ModelVisibility = components["schemas"]["ModelVisibility"];
 export type SkillCategory = components["schemas"]["SkillCategory"];
 export type PermissionSettings = components["schemas"]["PermissionSettings"];
 export type PermissionSettingsPatch = components["schemas"]["PermissionSettingsPatch"];
+export type SkillUpgradeUnfinishedAgent = components["schemas"]["SkillUpgradeUnfinishedAgent"];
 export type AgentSkillsCfg = components["schemas"]["AgentSkillsCfg"];
 export type AgentSkillEntry = components["schemas"]["AgentSkillEntry"];
 export type AgentSkillPermission = components["schemas"]["AgentSkillPermission"];
