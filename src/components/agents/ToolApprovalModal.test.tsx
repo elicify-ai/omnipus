@@ -26,6 +26,7 @@ import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-typ
 // are doubled by the shared test fixture.
 
 import { useToolApprovalStore } from '@/store/toolApproval'
+import type { PendingToolApproval } from '@/store/toolApproval'
 import { useAuthStore } from '@/store/auth'
 import { useSessionStore } from '@/store/session'
 import type { ComponentType } from 'react'
@@ -40,7 +41,24 @@ beforeEach(async () => {
   ToolApprovalPanel = await loadApprovalPanel()
 })
 
-const SAMPLE_APPROVAL = {
+// C-24 / C-26: a card renders exactly the answers the server listed when it
+// raised the card (`offered_actions`, `allow_durations`; both are required in the
+// wire types, contracts ToolApprovalRequiredFrame). An ordinary tool's card
+// lists Approve Once, the time choices, Deny and Cancel; an exact-action tool's
+// card (environment_setup, request_mount, send_email, browser_evaluate,
+// set_config) lists Approve Once, Deny and Cancel and no time choice. Every
+// store-entry fixture below carries the list the server sends for its tool, so no
+// test depends on a rule the client would apply when a list is missing.
+const ORDINARY_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'allow_for', 'deny', 'cancel'],
+  allowDurations: ['1h', '3h', '1d'],
+}
+const EXACT_ACTION_TOOL_ANSWERS: Pick<PendingToolApproval, 'offeredActions' | 'allowDurations'> = {
+  offeredActions: ['allow_once', 'deny', 'cancel'],
+  allowDurations: [],
+}
+
+const SAMPLE_APPROVAL: PendingToolApproval = {
   approvalId: 'appr-001',
   toolCallId: 'call-001',
   toolName: 'fetch_url',
@@ -52,6 +70,7 @@ const SAMPLE_APPROVAL = {
   sessionId: 'sess-001',
   turnId: 'turn-001',
   expiresAt: Date.now() + 300_000, // 5 minutes
+  ...ORDINARY_TOOL_ANSWERS,
 }
 
 describe('ToolApprovalPanel — rendering', () => {
@@ -107,7 +126,7 @@ describe('ToolApprovalPanel — rendering', () => {
 // here for `bash` calls — verify it renders, in addition to the generic
 // Arguments JSON dump, and does NOT render for other tools.
 describe('ToolApprovalPanel — bash command preview (ADR-036 §3.4 port)', () => {
-  const BASH_APPROVAL = {
+  const BASH_APPROVAL: PendingToolApproval = {
     approvalId: 'appr-bash-001',
     toolCallId: 'call-bash-001',
     toolName: 'bash',
@@ -116,6 +135,7 @@ describe('ToolApprovalPanel — bash command preview (ADR-036 §3.4 port)', () =
     sessionId: 'sess-001',
     turnId: 'turn-001',
     expiresAt: Date.now() + 300_000,
+    ...ORDINARY_TOOL_ANSWERS,
   }
 
   it('L1 §1.2 R6: renders a Command preview with the binary highlighted and env prefix separated', () => {
@@ -351,6 +371,7 @@ describe('ToolApprovalPanel — button dispatch', () => {
             sessionId: 'sess-001',
             turnId: 'turn-001',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -398,6 +419,7 @@ describe('ToolApprovalPanel — button dispatch', () => {
             sessionId: 'sess-001',
             turnId: 'turn-002',
             expiresAt: Date.now() + 300_000,
+            ...ORDINARY_TOOL_ANSWERS,
           },
         ],
       })
@@ -803,7 +825,7 @@ describe.each(edgeCases)(
 // the missing-path exact-action case (CHECK round 1 R10/W1): no time
 // choices, and one-time approve/deny remain.
 
-const MOUNT_APPROVAL = {
+const MOUNT_APPROVAL: PendingToolApproval = {
   approvalId: 'appr-mount',
   toolCallId: 'call-mount',
   toolName: 'request_mount',
@@ -812,6 +834,8 @@ const MOUNT_APPROVAL = {
   sessionId: 'sess-001',
   turnId: 'turn-001',
   expiresAt: Date.now() + 300_000,
+  // C-26 point 9: the server never lists allow_for for an exact-action tool.
+  ...EXACT_ACTION_TOOL_ANSWERS,
 }
 
 const MOUNT_APPROVAL_NO_PATH = {

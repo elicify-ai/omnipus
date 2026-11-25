@@ -40,6 +40,7 @@ import type { Agent, Session, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 
 import { useToolApprovalStore } from '@/store/toolApproval'
+import type { PendingToolApproval } from '@/store/toolApproval'
 import { useSessionStore } from '@/store/session'
 import type { ComponentType } from 'react'
 import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
@@ -251,14 +252,35 @@ describe('ToolApprovalPanel — a normal approval renders the full approvable ca
   // a stub entry (the snapshot requires tool_call_id/turn_id/args). The
   // full-card pin below is their surviving positive counterpart.
   it('L1 §1.2 R6: a normal request_mount approval renders the full approvable card', () => {
+    // C-24 / C-26: the server computes the card's choices when it raises the
+    // card. request_mount is an exact-action tool (C-26 point 9, founder Q5 A),
+    // so its frame offers Approve Once and Deny only and an empty
+    // allow_durations (S-129). The cast keeps the fixture typechecking on a
+    // base whose store entry does not carry the two members yet.
+    const exactActionMount = {
+      ...MOUNT_APPROVAL,
+      offeredActions: ['allow_once', 'deny'],
+      allowDurations: [],
+    } as PendingToolApproval
     act(() => {
-      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
+      useToolApprovalStore.setState({ queue: [exactActionMount] })
     })
     render(<ToolApprovalPanel />)
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
-    // Real args are present, so Always Allow must be offered — it remembers
-    // THIS folder, not any folder.
-    expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+    // EXPECTATION FLIPPED (CHECK round 4, candidate 12). This line used to
+    // require the Always Allow toggle ("it remembers THIS folder, not any
+    // folder"). That choice is retired: C-26 point 9 gives the exact-action
+    // cards Approve Once and Deny only, "with no time choices, so the person
+    // always sees the exact action"; FR-089 forbids "Always Allow", "Always
+    // allow" and "Allow everywhere" on every card; S-129 says the card offers
+    // no time choice. The sibling ApprovalCard.timeChoices.test.tsx renders
+    // this same panel for an ordinary card and requires the buttons that are
+    // absent here, so these absences are not vacuous. The Add folder button
+    // and the stub-absence check below are kept as they were.
+    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Always Allow/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Allow everywhere/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Allow for (1 hour|3 hours|1 day)/i })).not.toBeInTheDocument()
     // The retired stub surface never returns.
     expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
   })
