@@ -75,7 +75,7 @@ func newSetCommand() *cobra.Command {
 				if errors.Is(err, credentials.ErrStoreBusy) {
 					// S-146: the same truthful busy message as the
 					// browser; nothing was written and the exit is nonzero.
-					return errors.New(programs.MsgStoreBusy)
+					return storeBusyError{cause: err}
 				}
 				return fmt.Errorf("failed to store credential: %w", err)
 			}
@@ -84,6 +84,15 @@ func newSetCommand() *cobra.Command {
 		},
 	}
 }
+
+// storeBusyError is the refused write's error (S-146): its text is the
+// product's own busy message (programs.MsgStoreBusy, a full sentence shared
+// with the browser, so it is not an ordinary lower-case Go error string), and
+// it still unwraps to the store's credentials.ErrStoreBusy cause.
+type storeBusyError struct{ cause error }
+
+func (e storeBusyError) Error() string { return programs.MsgStoreBusy }
+func (e storeBusyError) Unwrap() error { return e.cause }
 
 // newListCommand returns `omnipus credentials list`.
 func newListCommand() *cobra.Command {
