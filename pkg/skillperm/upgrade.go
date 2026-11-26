@@ -31,7 +31,7 @@ import (
 )
 
 // MigrationName is the sandbox.migrations key of this upgrade.
-const MigrationName = config.SkillPermissionsMigration
+const MigrationName = "skill_permissions"
 
 const (
 	lockName         = ".skill-permissions-upgrade.lock"
@@ -114,14 +114,14 @@ func Run(home string, opts Options) error {
 		return nil
 	}
 	entities := filepath.Join(home, "entities")
-	if done, err := alreadyDone(home, entities); err != nil || done {
+	if done, err := finishIfDone(home, entities); err != nil || done {
 		return err
 	}
 	if err := os.MkdirAll(entities, 0o700); err != nil {
 		return fmt.Errorf("skillperm: create entities dir: %w", err)
 	}
 	return fileutil.WithFlock(filepath.Join(entities, lockName), func() error {
-		if done, err := alreadyDone(home, entities); err != nil || done {
+		if done, err := finishIfDone(home, entities); err != nil || done {
 			return err
 		}
 		return runLocked(home, entities, opts)
@@ -175,27 +175,6 @@ func runLocked(home, entities string, opts Options) error {
 	}
 	opts.at(PointMarker, "")
 	return retireSnapshot(entities)
-}
-
-// alreadyDone reports whether the upgrade has nothing left to do: either
-// its ledger is done (finishIfDone completes the marker and the snapshot),
-// or the config carries the done marker with no ledger at all. The upgrade
-// writes its marker only after its ledger is done, so a marker with no
-// ledger is a fresh install, whose first config is written in the new shape
-// with the marker (config.SkillPermissionsMigration).
-func alreadyDone(home, entities string) (bool, error) {
-	if done, err := finishIfDone(home, entities); err != nil || done {
-		return done, err
-	}
-	_, haveLedger, err := readLedger(entities)
-	if err != nil || haveLedger {
-		return false, err
-	}
-	raw, err := readRawConfig(home)
-	if err != nil {
-		return false, err
-	}
-	return childMap(childMap(raw, "sandbox"), "migrations")[MigrationName] == stateDone, nil
 }
 
 // finishIfDone completes a done upgrade's tail (a missing config marker is

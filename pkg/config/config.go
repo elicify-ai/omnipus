@@ -2565,7 +2565,6 @@ func seedPublicURLFromEnv(cfg *Config) {
 // its very first boot and only pick up the env var on the next one.
 func freshInstallConfig() (*Config, error) {
 	c := DefaultConfig()
-	markFreshInstallMigrationsDone(c)
 	seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
 	if err := env.Parse(c); err != nil {
 		return nil, err
