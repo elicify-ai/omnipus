@@ -7,6 +7,7 @@ const { computeAccessibleName } = createRequire(import.meta.url)('dom-accessibil
   computeAccessibleName(root: Element): string
 }
 import { touchContractU2 } from './settings-u2-css'
+import { compiledCssU43, fixedWidthU43 } from './settings-u43-css'
 import { animationU4, isStaticU4, motionCssU4, movingElementsU4 } from './settings-u4-motion'
 
 const CONTROLS = 'button, select, input:not([type="hidden"]), textarea, a[href], summary, [role="button"], [role="switch"], [role="combobox"], [role="checkbox"], [role="radio"], [role="option"], [role="tab"], [role="slider"], [tabindex]'
@@ -46,17 +47,30 @@ function rowWidthU4(element: HTMLElement) {
 
 export async function touchSweepU4(state: string) {
   const controls = controlsU4()
+  const ancestors = controls.flatMap((element) => {
+    const nodes: Element[] = []
+    for (let current: Element | null = element; current; current = current.parentElement) nodes.push(current)
+    if (element instanceof HTMLInputElement) nodes.push(...element.labels ?? [])
+    return nodes
+  })
+  const css = await compiledCssU43(ancestors)
+  const widthOf = (element: HTMLElement, directWidth: boolean) => {
+    const fixed = fixedWidthU43(css, element, { width: 390, pointer: 'coarse' })
+    // A preferred w-N (or w-full) is NOT a minimum in a shrinkable flex row.
+    // Apply the rule to every target/label, not one Memory class or control id.
+    return fixed.pass || (!fixed.blocksRowCredit && (directWidth || rowWidthU4(element)))
+  }
   const rows = []
   for (const element of controls) {
     const direct = await touchContractU2(element)
-    const width = direct.width || rowWidthU4(element)
+    const width = widthOf(element, direct.width)
     // A real associated label can be the clickable target of a compact radio /
     // checkbox, but an arbitrary large ancestor is never credited.
     const label = element.matches('input[type="checkbox"], input[type="radio"]')
       ? (element as HTMLInputElement).labels?.[0] : undefined
     const labelContract = label ? await touchContractU2(label) : undefined
     const labelPass = label && labelContract
-      ? labelContract.pseudo || (labelContract.height && (labelContract.width || rowWidthU4(label))) : false
+      ? labelContract.pseudo || (labelContract.height && widthOf(label, labelContract.width)) : false
     const pass = direct.pseudo || (direct.height && width) || labelPass
     rows.push({ ...identityU4(element), ...direct, width, pass,
       labelTarget: label ? { id: label.htmlFor, classes: label.getAttribute('class') ?? '', pass: labelPass } : null })

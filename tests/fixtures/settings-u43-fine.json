@@ -1,0 +1,826 @@
+{
+  "source": "e7779b259cb9056e75b85c561cdb7075cb307d24",
+  "purpose": "Frozen OLD-only fine-pointer characterization at e7779b259; exact pre/post preservation, not absolute compact-size correctness. Ten families and virtual rows from initial OLD receipt; missing Audit Decision family from corrected OLD receipt. Captured before any U6 execution.",
+  "popups": {
+    "more": [
+      {
+        "name": "Check with my account",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Set as default model\u2026",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "default-model": [
+      {
+        "name": "g1-model-aRecommended for chat",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-bRecommended for chat",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-cRecommended for chat",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "search-default": [
+      {
+        "name": "Brave U43",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Tavily U43",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "DuckDuckGo U43",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "search-fallback": [
+      {
+        "name": "None",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Tavily U43",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "DuckDuckGo U43",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "memory-primary": [
+      {
+        "name": "g1-model-a",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-b",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-c",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "memory-fallback": [
+      {
+        "name": "g1-model-a",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-b",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-c",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "memory-add": [
+      {
+        "name": "g1-model-a",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-b",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "g1-model-c",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "effort": [
+      {
+        "name": "Provider default",
+        "signature": {
+          "height": "auto",
+          "min-height": null,
+          "padding-block": null,
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Off",
+        "signature": {
+          "height": "auto",
+          "min-height": null,
+          "padding-block": "var(--space-2)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Low",
+        "signature": {
+          "height": "auto",
+          "min-height": null,
+          "padding-block": "var(--space-2)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "High",
+        "signature": {
+          "height": "auto",
+          "min-height": null,
+          "padding-block": "var(--space-2)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "audit-events": [
+      {
+        "name": "All events",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "exec",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "file_op",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "llm_call",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "policy_eval",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "rate_limit",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "security_setting_change",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "shutdown",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "ssrf",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "startup",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "tool_call",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "profile-timezone": [
+      {
+        "name": "UTC",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "America/New_York",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "America/Chicago",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "America/Denver",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "America/Los_Angeles",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "America/Anchorage",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Pacific/Honolulu",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Europe/London",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Europe/Paris",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Europe/Berlin",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Europe/Moscow",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Dubai",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Kolkata",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Bangkok",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Shanghai",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Tokyo",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Asia/Seoul",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Australia/Sydney",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Pacific/Auckland",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ],
+    "audit-decisions": [
+      {
+        "name": "All decisions",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Allow",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Deny",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      },
+      {
+        "name": "Error",
+        "signature": {
+          "height": null,
+          "min-height": null,
+          "padding-block": "var(--space-1)",
+          "padding-top": null,
+          "padding-bottom": null,
+          "font-size": "var(--type-body-compact-size)",
+          "line-height": null
+        }
+      }
+    ]
+  },
+  "virtualRows": [
+    {
+      "name": "OpenRouter",
+      "y": 0,
+      "height": 32
+    },
+    {
+      "name": "u43-model-000Recommended for chat",
+      "y": 32,
+      "height": 32
+    },
+    {
+      "name": "u43-model-001Recommended for chat",
+      "y": 64,
+      "height": 32
+    },
+    {
+      "name": "u43-model-002Recommended for chat",
+      "y": 96,
+      "height": 32
+    },
+    {
+      "name": "u43-model-003",
+      "y": 128,
+      "height": 32
+    },
+    {
+      "name": "u43-model-004",
+      "y": 160,
+      "height": 32
+    },
+    {
+      "name": "u43-model-005",
+      "y": 192,
+      "height": 32
+    },
+    {
+      "name": "u43-model-006",
+      "y": 224,
+      "height": 32
+    },
+    {
+      "name": "u43-model-007",
+      "y": 256,
+      "height": 32
+    },
+    {
+      "name": "u43-model-008",
+      "y": 288,
+      "height": 32
+    },
+    {
+      "name": "u43-model-009",
+      "y": 320,
+      "height": 32
+    },
+    {
+      "name": "u43-model-010",
+      "y": 352,
+      "height": 32
+    },
+    {
+      "name": "u43-model-011",
+      "y": 384,
+      "height": 32
+    },
+    {
+      "name": "u43-model-012",
+      "y": 416,
+      "height": 32
+    },
+    {
+      "name": "u43-model-013",
+      "y": 448,
+      "height": 32
+    },
+    {
+      "name": "u43-model-014",
+      "y": 480,
+      "height": 32
+    },
+    {
+      "name": "u43-model-015",
+      "y": 512,
+      "height": 32
+    },
+    {
+      "name": "u43-model-016",
+      "y": 544,
+      "height": 32
+    },
+    {
+      "name": "u43-model-017",
+      "y": 576,
+      "height": 32
+    },
+    {
+      "name": "u43-model-018",
+      "y": 608,
+      "height": 32
+    }
+  ]
+}
