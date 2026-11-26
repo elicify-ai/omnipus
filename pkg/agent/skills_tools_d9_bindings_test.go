@@ -10,4 +10,5 @@ package agent
 
 func init() {
 	nativeLoopTokenEstimators = setFixedTokenEstimators
+	levelTurnPlanOf = toolLevelTurnPlan
 }
