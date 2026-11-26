@@ -62,7 +62,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchConfig: vi.fn(),
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
     fetchIntegrationProviders: vi.fn(),
   }
 })
@@ -226,7 +225,6 @@ beforeEach(() => {
   vi.mocked(api.fetchConfig).mockResolvedValue({ gateway: {}, data: { session_retention_days: 90 } } as never)
   vi.mocked(api.fetchCredentials).mockResolvedValue([] as never)
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([] as never)
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue([] as never)
   vi.mocked(api.fetchIntegrationProviders).mockResolvedValue(INTEGRATIONS_OK as never)
   // The reauth POST and the protected PUT are state-changing: the client-side
   // CSRF gate needs the session cookie planted (ProvidersSection.customModels
@@ -478,17 +476,19 @@ describe('F08 — the real section forms reach their one protected endpoint with
 
   it('protection: the real Security section saves the Auto-approve switch as exactly one PUT /security/sandbox-config carrying X-Reauth-Token', async () => {
     const calls = stubWire({ '/api/v1/security/sandbox-config': { ...SANDBOX_OK, auto_approve: true } })
-    await renderRealForm(<SecuritySection />)
+    await renderRealForm(<SecuritySection view="protection" />)
     // The shell's prompt hook decides the mode from the app-state read; wait
     // for it so Save changes takes the mode this file pins (local).
     await waitFor(() => expect(api.fetchAppState).toHaveBeenCalled())
-    // The draft is made at the primary-layer switch; the section's Save bar
-    // renders inside the collapsed Advanced disclosure, so reaching the
-    // oracle means expanding it (the committed SecuritySection pattern).
+    // The draft is made at the Auto-approve switch of the Protection view, the
+    // view the Settings shell renders for this section (SettingsSectionBody
+    // passes view="protection"). That view shows the section's one Save bar in
+    // the page itself. The legacy one-page layout, whose collapsed Advanced
+    // disclosure held the bar, was deleted by Skills & Tools (spec C-22 row 6),
+    // so there is nothing to expand.
     const toggle = await screen.findByTestId('auto-approve-global-switch')
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
     await userEvent.click(toggle)
-    await userEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
     expect(await screen.findByText(/1 unsaved change/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await answerRealPrompt()

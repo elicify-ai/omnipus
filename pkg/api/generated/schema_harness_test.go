@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -175,7 +176,7 @@ func (yamlLoader) Load(rawURL string) (any, error) {
 	if len(data) > 0 && data[0] == '{' {
 		var doc any
 		if jsonErr := json.Unmarshal(data, &doc); jsonErr == nil {
-			return doc, nil
+			return openAPINullableToJSONSchema(doc), nil
 		}
 	}
 
@@ -184,7 +185,60 @@ func (yamlLoader) Load(rawURL string) (any, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("yamlLoader: unmarshal %s: %w", path, err)
 	}
-	return doc, nil
+	return openAPINullableToJSONSchema(doc), nil
+}
+
+// openAPINullableToJSONSchema translates the OpenAPI 3.0.3 keyword `nullable`
+// into the JSON Schema the jsonschema/v6 compiler understands. The contract is
+// OpenAPI 3.0.3 (contracts/openapi.yaml, line 1) and 59 of the files in
+// contracts/components/schemas use `nullable: true`; OpenAPI 3.0 has no `null`
+// type, and jsonschema/v6 does not know the keyword, so before this translation
+// a `null` could never pass a field the contract says may be null (the "known
+// jsonschema/v6 `nullable` gap" that contract_test.go and fixtures.go name, and
+// that several fixtures worked around by never sending a null).
+//
+// The type rule is the one OpenAPI 3.0.3 states: `nullable: true` adds "null"
+// to the allowed type "only if type is explicitly defined within the same
+// Schema Object". For an `enum` the 3.0.3 text only says that "Other Schema
+// Object constraints retain their defined behavior, and therefore may disallow
+// the use of null as a value", so an enum that does not list null would still
+// refuse it; the contract's own wording (AgentSkillPermission.override: "null
+// when there is none") shows the intent, and the architect's ruling 2 settles
+// the translation: "When the field also has an `enum`, add `null` to the
+// enum." So, for one schema object that carries `nullable: true` and a string
+// `type`:
+//   - `type: T` becomes `type: [T, "null"]`;
+//   - an `enum` of that object gets a null member (once).
+//
+// Everything else keeps its meaning: a `nullable: true` without a `type` is
+// left alone (OpenAPI gives it no effect), `nullable: false` is left alone, and
+// a field that is not nullable still rejects null (the positive control in
+// schema_harness_nullable_test.go). The walk edits the freshly parsed document
+// in place; no file is touched. Architect ruling 2 of hand-off 8: fix the
+// checker, never the schemas.
+func openAPINullableToJSONSchema(node any) any {
+	switch v := node.(type) {
+	case map[string]any:
+		for key, child := range v {
+			v[key] = openAPINullableToJSONSchema(child)
+		}
+		if nullable, _ := v["nullable"].(bool); nullable {
+			if typeName, ok := v["type"].(string); ok {
+				v["type"] = []any{typeName, "null"}
+				if members, hasEnum := v["enum"].([]any); hasEnum && !slices.Contains(members, nil) {
+					v["enum"] = append(members, nil)
+				}
+			}
+		}
+		return v
+	case []any:
+		for i, child := range v {
+			v[i] = openAPINullableToJSONSchema(child)
+		}
+		return v
+	default:
+		return node
+	}
 }
 
 // initSchemas initializes the shared compiler once per test binary run.

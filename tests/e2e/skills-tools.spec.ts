@@ -5,6 +5,23 @@
 // only external model/MCP transports are scripted. No paid calls or REST stubs.
 // CI EXECUTION REQUIRED: not run locally. Collection/setup is not RED or PASS.
 // GREEN, mutations and proof-of-failability defer to independent CHECK.
+//
+// Fix round 4, Part H (findings F1, F5, F6, F9 of the frontend head e0f987fa0). Only LOCATORS were
+// checked against the page source; every expected value is still the spec's own words
+// (docs/internal/specs/skills-tools-redesign-spec.md at b27c64109) or the generated contract.
+//   - A group is a section marked data-group-id with NO role and NO label, so it is found from its header
+//     button (groupOf below), never as getByRole('group', { name }). The header words are matched ignoring
+//     case: the page draws "Research" and styles it as capitals (architect ruling F5), where S-57 prints
+//     "RESEARCH".
+//   - A service header carries icon buttons named "Test <name>", "Edit <name>" and "Remove <name>"; the error
+//     notice of a service that cannot connect carries buttons named exactly "Retry" and "Edit".
+//   - S-58: spec US-7 AS8 adds "Approve this version" for an unverified skill under trust Ask, and a folder
+//     put in by hand is unverified (C-5), so the Given fixes trust at Allow, where S-58's two-item menu is the
+//     whole menu. The Ask menu is held by skills-tools-surfaces.spec.ts.
+//   - S-61: the spec's Then is the notice with the reason, Retry and Edit. Retry is that service's Test and Edit
+//     opens the header's Edit window (architect ruling F6). Whether the service reads connected after the
+//     save is not in the spec and was not proven to connect in this fixture, so it is a hands-on row, not an
+//     assertion here.
 import fs from 'node:fs'
 import path from 'node:path'
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -26,7 +43,28 @@ test.describe.configure({ retries: 0 }) // No paid-model variance to retry away.
 const TEN_SKILLS = ['plan', 'deep-research', 'f24-one', 'f24-two', 'f24-three', 'f24-four', 'f24-five', 'f24-six', 'f24-seven', 'f24-eight'] as const
 function toolRow(page: Page, key: string) { return page.getByTestId(`tool-row-${key}`) }
 function skillRow(page: Page, key: string) { return page.getByTestId(`skill-row-${key}`) }
-function service(page: Page, id: string) { return page.getByRole('group', { name: new RegExp(`^${id}(?:\\s|$)`, 'i') }) }
+// A group header reads its name and then its count ("Tools 12"). The words are matched ignoring case, followed by a
+// space, a digit or the end, so neither the capitals the page draws by style nor the way the count joins the name in
+// the accessible name decides a result.
+function header(name: string) {
+  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|\\d|$)`, 'i')
+}
+// A group is a section marked data-group-id with no role, found from its header button (a menu trigger also
+// carries aria-expanded, so the name decides).
+function groupOf(page: Page, name: RegExp) {
+  return page.locator('section[data-group-id]').filter({ has: page.getByRole('button', { name }) })
+}
+function groupHeader(page: Page, name: RegExp) {
+  return page.getByRole('button', { name }).and(page.locator('[aria-expanded]'))
+}
+function service(page: Page, id: string) { return groupOf(page, header(id)) }
+// A More actions menu is read only once it is open: allTextContents does not wait for it. The order is not in the
+// spec (S-58 and US-7 AS8 name which items, not their order), so the items are compared sorted.
+async function menuItems(page: Page) {
+  const menu = page.getByRole('menu')
+  await expect(menu).toBeVisible()
+  return (await menu.getByRole('menuitem').allTextContents()).map((text) => text.trim()).sort()
+}
 async function selected(row: Locator, value: 'Allow' | 'Ask' | 'Deny') {
   await expect(row.getByRole('button', { name: value, exact: true })).toHaveAttribute('aria-pressed', 'true')
 }
@@ -35,7 +73,7 @@ async function tenInstalled(native: SkillsToolsNative) {
 }
 async function external(page: Page, native: SkillsToolsNative, id = 'github') {
   await openPage(page, native, 'External tools')
-  await disclose(page, new RegExp(`^${id}(?:\\s|$)`, 'i'))
+  await disclose(page, header(id))
   await expect(service(page, id)).toBeVisible()
   return service(page, id)
 }
@@ -58,13 +96,15 @@ test('S-03 github Set all Allow changes exactly five actual tools and survives r
   for (const key of GITHUB_KEYS) await selected(toolRow(page, key), 'Allow')
   const readback = await nativeGet(native, '/api/v1/security/permissions', wire.PermissionSettings)
   expect(GITHUB_KEYS.map((key) => Reflect.get(readback.policies, key))).toEqual(['allow', 'allow', 'allow', 'allow', 'allow'])
-  await page.reload(); await disclose(page, /^github(?:\s|$)/i)
+  // The page starts on the Skills tab after a reload (the active tab is page state, not stored; the spec does not
+  // say it survives a reload), so the External tools tab is opened again before the group is.
+  await page.reload(); await openPage(page, native, 'External tools'); await disclose(page, header('github'))
   for (const key of GITHUB_KEYS) await selected(toolRow(page, key), 'Allow')
 })
 
 test('S-15 Skill infrastructure row has the exact help/link and no permission badges', async ({ page, native }) => {
   await openPage(page, native, 'Omnipus tools')
-  await disclose(page, /^Skills(?:\s|$)/)
+  await disclose(page, header('Skills'))
   const row = toolRow(page, 'Skill')
   await expect(row.getByText('Permissions are set per skill on the Skills tab.', { exact: true })).toBeVisible()
   await expect(row.getByRole('button', { name: /^(Allow|Ask|Deny)$/ })).toHaveCount(0)
@@ -97,8 +137,10 @@ test('S-57 native inventory groups Research 1, Tools 12, Uncategorised 31 and no
     ...Array.from({ length: 31 }, (_, n) => [`other-${n + 1}`, 'uncategorised'] as const),
   ])
   await openPage(page, native)
-  for (const name of ['RESEARCH 1', 'TOOLS 12', 'UNCATEGORISED 31']) await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^BLOCKCHAIN(?:\s|$)/i })).toHaveCount(0)
+  // The spec prints the headers in capitals; the page draws the words as written and styles them as capitals, so
+  // each header is matched ignoring case. The counts are the oracle: 1, 12 and 31, never 10 or 3.
+  for (const name of [/^research\s*1$/i, /^tools\s*12$/i, /^uncategorised\s*31$/i]) await expect(groupHeader(page, name)).toBeVisible()
+  await expect(page.getByRole('button', { name: header('BLOCKCHAIN') }), 'no empty or unlisted category draws a group').toHaveCount(0)
 })
 
 test('S-58 actual built-in plan can only be copied; installed weather can be copied or removed', async ({ page, native }) => {
@@ -106,15 +148,21 @@ test('S-58 actual built-in plan can only be copied; installed weather can be cop
   const initial = await nativeGet(native, '/api/v1/skills', wire.Skill.array())
   expect(initial.find((s) => s.id === 'plan')?.source).toBe('builtin')
   await localSkill(native, 'weather', 'tools')
+  // Given trust Allow. US-7 AS8 adds "Approve this version" for an unverified skill under trust Ask, and a
+  // folder put in by hand is unverified (C-5), so under the default (Ask) weather's menu has a third item that
+  // S-58 does not name. With trust at Allow that item is not offered and S-58's two items are the whole menu.
+  const allow: PermissionSettingsPatch = { skill_trust: 'allow' }
+  expect((await nativeWrite(native, 'PATCH', '/api/v1/security/permissions', allow, wire.PermissionSettings)).skill_trust).toBe('allow')
   await openPage(page, native)
   // The spec's built-in category decision puts plan in Business, not Tools.
-  await disclose(page, /^BUSINESS(?:\s|$)/i)
+  await disclose(page, header('BUSINESS'))
   await skillRow(page, 'plan').getByRole('button', { name: /More actions/i }).click()
-  expect(await page.getByRole('menu').getByRole('menuitem').allTextContents()).toEqual(['Make a copy'])
+  expect(await menuItems(page)).toEqual(['Make a copy'])
   await page.keyboard.press('Escape')
-  await disclose(page, /^TOOLS(?:\s|$)/i)
+  await expect(page.getByRole('menu')).toBeHidden()
+  await disclose(page, header('TOOLS'))
   await skillRow(page, 'weather').getByRole('button', { name: /More actions/i }).click()
-  expect(await page.getByRole('menu').getByRole('menuitem').allTextContents()).toEqual(['Make a copy', 'Remove'])
+  expect(await menuItems(page)).toEqual(['Make a copy', 'Remove'])
 })
 
 test('S-60 one switch click persists Off without confirmation and removes real model offers', async ({ page, native }) => {
@@ -144,19 +192,27 @@ test('S-60 one switch click persists Off without confirmation and removes real m
   expect(after.filter((key) => key.startsWith('mcp_github_'))).toEqual([])
 })
 
-test('S-61 real missing CONTEXT7_KEY shows cause; Retry attempts native test and Edit saves recovery', async ({ page, native }) => {
+test('S-61 real missing CONTEXT7_KEY shows cause with Retry and Edit; Retry attempts native test and Edit saves the header', async ({ page, native }) => {
   await missingContext7(native)
   const group = await external(page, native, 'context7')
-  await expect(group.getByRole('alert')).toContainText('missing secret reference CONTEXT7_KEY')
+  // US-8 AS3, S-61: an error notice shows the server's reason with Retry and Edit. The notice is the only alert in
+  // the group; its two buttons are named exactly "Retry" and "Edit" (the header's icon buttons read "Edit context7").
+  const notice = group.getByRole('alert')
+  await expect(notice).toContainText('missing secret reference CONTEXT7_KEY')
+  await expect(notice.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await expect(notice.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
+  // Retry is that service's Test (architect ruling F6): the native gateway is asked again, and the service still
+  // cannot connect, so the reason stays on screen.
   const testReply = responseFor(page, 'POST', '/api/v1/mcp-servers/context7/test')
-  await group.getByRole('button', { name: 'Retry', exact: true }).click()
+  await notice.getByRole('button', { name: 'Retry', exact: true }).click()
   const retried = await testReply
   expect(retried.status()).toBe(200)
   const retry = wire.McpServerTestResponse.parse(await retried.json())
   expect(retry.success).toBe(false)
   expect(retry.message).toContain('CONTEXT7_KEY')
-  await expect(group.getByRole('alert')).toContainText('missing secret reference CONTEXT7_KEY')
-  await group.getByRole('button', { name: 'Edit', exact: true }).click()
+  await expect(notice).toContainText('missing secret reference CONTEXT7_KEY')
+  // Edit opens the same Edit window as the header's Edit (architect ruling F6).
+  await notice.getByRole('button', { name: 'Edit', exact: true }).click()
   const panel = page.getByTestId('mcp-sheet')
   await expect(panel).toBeVisible()
   const advanced = panel.getByTestId('advanced-disclosure-trigger')
@@ -174,13 +230,14 @@ test('S-61 real missing CONTEXT7_KEY shows cause; Retry attempts native test and
   expect(patch.url ?? native.edge.url + '/context7').toBe(native.edge.url + '/context7')
   expect(Object.keys(patch).filter((key) => key !== 'url')).toEqual(['headers'])
   await expect(panel).toBeHidden()
-  await expect.poll(async () => (await nativeGet(native, '/api/v1/mcp-servers', wire.McpServer.array())).find((s) => s.id === 'context7')?.status).toBe('connected')
-  await expect(group.getByRole('alert')).toHaveCount(0)
-  expect(native.edge.mcpCalls).toContain('/context7:tools/list')
+  // Architect ruling F6: this test checks that the save is STORED. It does not assert that the notice clears or
+  // that the service reads connected afterwards: the spec's S-61 does not say so, and nothing here proves the
+  // corrected settings connect, so that outcome is a hands-on row of the Part H pack.
   const stored = (await nativeGet(native, '/api/v1/mcp-servers', wire.McpServer.array())).find((s) => s.id === 'context7')
   expect(stored?.url).toBe(native.edge.url + '/context7')
   expect(stored?.header_names).toEqual(['Authorization'])
-  await group.getByRole('button', { name: 'Edit', exact: true }).click()
+  // The header's own Edit reopens the window whether or not the notice is still drawn.
+  await group.getByRole('button', { name: 'Edit context7', exact: true }).click()
   await expect(panel.getByTestId('header-names-set')).toContainText('Authorization')
   await expect(panel.getByTestId('header-value-0')).toHaveValue('')
   await panel.getByRole('button', { name: /^Close/i }).click()
@@ -191,7 +248,7 @@ test('S-62 exact Remove confirmation then Cancel sends no DELETE and preserves n
   const group = await external(page, native)
   const deletes: string[] = []
   page.on('request', (r) => { if (r.method() === 'DELETE' && new URL(r.url()).pathname === '/api/v1/mcp-servers/github') deletes.push(r.url()) })
-  await group.getByRole('button', { name: 'Remove', exact: true }).click()
+  await group.getByRole('button', { name: 'Remove github', exact: true }).click()
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toContainText('Remove this service? Agents that use it lose its tools.')
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
@@ -233,8 +290,8 @@ test('S-63 local program warning focuses the safe main action and returns to net
 test('S-64 real Web & Search side panel saves a new default with consent and reopens it', async ({ page, native }) => {
   await seedSearchDefault(native)
   await openPage(page, native, 'Omnipus tools')
-  await disclose(page, /^Web & Search(?:\s|$)/)
-  await page.getByRole('group', { name: /^Web & Search/ }).getByRole('button', { name: 'Settings', exact: true }).click()
+  await disclose(page, header('Web & Search'))
+  await groupOf(page, header('Web & Search')).getByRole('button', { name: 'Settings', exact: true }).click()
   const panel = page.getByRole('dialog', { name: /Web & Search/i })
   await expect(panel).toBeVisible()
   await expect(panel.getByTestId('default-search-card')).toContainText('Default search')
@@ -251,8 +308,8 @@ test('S-64 real Web & Search side panel saves a new default with consent and reo
   expect(wire.IntegrationProvidersResponse.parse(await response.json()).default_search).toBe('duckduckgo')
   expect((await nativeGet(native, '/api/v1/integrations/providers', wire.IntegrationProvidersResponse)).default_search).toBe('duckduckgo')
   await panel.getByRole('button', { name: /^Close/i }).click()
-  await page.reload(); await disclose(page, /^Web & Search(?:\s|$)/)
-  await page.getByRole('group', { name: /^Web & Search/ }).getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.reload(); await openPage(page, native, 'Omnipus tools'); await disclose(page, header('Web & Search'))
+  await groupOf(page, header('Web & Search')).getByRole('button', { name: 'Settings', exact: true }).click()
   await expect(panel.getByTestId('default-search-card')).toContainText('DuckDuckGo')
 })
 
@@ -261,7 +318,7 @@ test('S-65 exact Protection and Shell links navigate to current Settings tabs, n
   await expect(page.getByText('Open Settings to change Auto-approve and God Mode.', { exact: true })).toBeVisible()
   await page.getByRole('link', { name: 'Open Settings', exact: true }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=protection$/)
-  await openPage(page, native, 'Omnipus tools'); await disclose(page, /^Shell(?:\s|$)/)
+  await openPage(page, native, 'Omnipus tools'); await disclose(page, header('Shell'))
   await page.getByRole('link', { name: 'Shell safety rules (Settings)', exact: true }).click()
   await expect(page).toHaveURL(/#\/settings\?tab=sandbox$/)
   await openPage(page, native, 'Omnipus tools')
@@ -276,7 +333,7 @@ test('S-68 390x844 every tab has card lines, all visible controls meet 44x44, no
   await page.setViewportSize({ width: 390, height: 844 })
   for (const tab of ['Skills', 'Omnipus tools', 'External tools'] as const) {
     await openPage(page, native, tab)
-    const group = tab === 'Skills' ? /^TOOLS(?:\s|$)/i : tab === 'Omnipus tools' ? /^Shell(?:\s|$)/ : /^github(?:\s|$)/
+    const group = tab === 'Skills' ? header('TOOLS') : tab === 'Omnipus tools' ? header('Shell') : header('github')
     await disclose(page, group)
     const rows = page.locator('[data-testid^="tool-row-"], [data-testid^="skill-row-"]').filter({ visible: true })
     expect(await rows.count(), `${tab} actually has visible cards`).toBeGreaterThan(0)
@@ -298,7 +355,7 @@ test('S-68 390x844 every tab has card lines, all visible controls meet 44x44, no
 test('S-69 actual Tab then Enter chooses Ask on bash and the live status announces Saved', async ({ page, native }) => {
   const input: PermissionSettingsPatch = { policies: { bash: 'allow' } }
   await nativeWrite(native, 'PATCH', '/api/v1/security/permissions', input, wire.PermissionSettings)
-  await openPage(page, native, 'Omnipus tools'); await disclose(page, /^Shell(?:\s|$)/)
+  await openPage(page, native, 'Omnipus tools'); await disclose(page, header('Shell'))
   const row = toolRow(page, 'bash')
   await row.getByRole('button', { name: 'Allow', exact: true }).focus()
   await page.keyboard.press('Tab')
@@ -311,6 +368,51 @@ test('S-69 actual Tab then Enter chooses Ask on bash and the live status announc
   const live = page.getByRole('status').filter({ hasText: /^Saved$/ })
   expect(await live.evaluate((el) => el.getAttribute('aria-live') ?? 'polite')).toBe('polite') // role=status has implicit polite semantics.
   expect(Reflect.get((await nativeGet(native, '/api/v1/security/permissions', wire.PermissionSettings)).policies, 'bash')).toBe('ask')
+})
+
+// Part J3: the two rules of the retired tests/e2e/security-tools.spec.ts that no other test holds. The legacy
+// Security > Tool Access grid that file drove was deleted (spec C-22, "What this landing does" row 6; frontend
+// commit a1b321371), but both rules are still owed to the page that replaced it.
+// ORACLE: the Skills & Tools spec (b27c64109) is silent on both, so they come from the older spec that stated them,
+// docs/internal/specs/uxh-spec1-showstoppers-and-registry.md: US-1 AC1 ("no tool is listed twice, and no raw category
+// key (core/system) is shown as a user-facing label"), AC4 (a tool still reporting core reads "General") and FR-103
+// (every builtin tool exactly once, under a human-readable label). The expected set is that spec's quantifier, every
+// builtin tool, taken from the native gateway's own GET /api/v1/tools through the generated schema. S-45 ties the
+// count: the tab reads "Omnipus tools N" for N Omnipus tools.
+// GAPS: neither spec names a label for `system`, so only the bare lower-case key is refused ("System" is not judged).
+// The names the old file looked for (bash, search_web) are not repeated: S-69 names bash, and no spec names search_web.
+test('UXH-1 US-1 AC1 and FR-103: Omnipus tools lists every tool exactly once and no group is named by a raw core or system key', async ({ page, native }) => {
+  const registry = await nativeGet(native, '/api/v1/tools', wire.ToolRegistryEntry.array())
+  const builtin = registry.filter((tool) => tool.source === 'builtin')
+  expect(builtin.length, 'positive control: the native registry reports Omnipus tools').toBeGreaterThan(0)
+  await openPage(page, native, 'Omnipus tools')
+  const tabText = (await skillsToolsTab(page, 'Omnipus tools').textContent()) ?? ''
+  expect(Number(/(\d+)\s*$/.exec(tabText)?.[1]), `S-45: the tab "${tabText}" counts the registry's Omnipus tools`).toBe(builtin.length)
+  // Groups start collapsed (S-46): open every one, then read what the page lists.
+  const headers = page.locator('section[data-group-id] [data-group-header]')
+  const groups = await headers.count()
+  expect(groups, 'positive control: the group scanner sees the groups').toBeGreaterThan(0)
+  for (let n = 0; n < groups; n++) {
+    if (await headers.nth(n).getAttribute('aria-expanded') === 'false') await headers.nth(n).click()
+  }
+  const rows = page.locator('[data-testid^="tool-row-"]')
+  await expect.poll(() => rows.count(), { message: 'every opened group has drawn its rows' }).toBeGreaterThanOrEqual(builtin.length)
+  const ids = await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid') ?? ''))
+  expect(ids.filter((id, at) => ids.indexOf(id) !== at), 'AC1: no tool is listed twice').toEqual([])
+  expect([...ids].sort(), 'FR-103: every Omnipus tool is listed, and nothing else').toEqual(builtin.map((tool) => `tool-row-${tool.name}`).sort())
+  // The group names are read from the header's own text with the count that follows the name taken off.
+  const labels = await headers.evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').replace(/\s*\d+$/, '').trim()))
+  expect(labels.map((label) => label.toLowerCase()), 'positive control: the label reader sees Web & Search (S-64) and Shell (S-65, S-69)')
+    .toEqual(expect.arrayContaining(['web & search', 'shell']))
+  // core has the spec's own label (AC4), so it is refused in any letter case; of system only the bare key is.
+  expect(labels.filter((label) => /^core$/i.test(label) || label === 'system'), 'AC1: no group is named by a raw category key').toEqual([])
+  // AC4: a tool that still reports core reads under General. The loop is empty when the build reports none, and the
+  // annotation then says so in the report rather than letting an empty loop pass as proof.
+  const legacy = builtin.filter((tool) => tool.category === 'core')
+  if (legacy.length === 0) test.info().annotations.push({ type: 'not exercised', description: 'AC4: no registry entry reports category core on this build, so the General label was not checked' })
+  for (const tool of legacy) {
+    await expect(groupOf(page, header('General')).getByTestId(`tool-row-${tool.name}`), `AC4: ${tool.name} reports core and reads under General`).toBeVisible()
+  }
 })
 
 test('F24 integration: real upload, review, category, Install, exact bytes and person grant survive reopening', async ({ page, native }) => {
@@ -360,7 +462,7 @@ test('F24 integration: real upload, review, category, Install, exact bytes and p
 test('F24 integration: MCP Edit sends the exact native PATCH, waits for ACK and reopens stored URL/tools', async ({ page, native }) => {
   await github(native)
   const group = await external(page, native)
-  await group.getByRole('button', { name: 'Edit', exact: true }).click()
+  await group.getByRole('button', { name: 'Edit github', exact: true }).click()
   const panel = page.getByTestId('mcp-sheet'), url = native.edge.url + '/github-edited'
   await panel.getByTestId('network-url').fill(url)
   const ack = responseFor(page, 'PATCH', '/api/v1/mcp-servers/github')
@@ -373,8 +475,8 @@ test('F24 integration: MCP Edit sends the exact native PATCH, waits for ACK and 
   expect(wire.McpServer.parse(await response.json()).url).toBe(url)
   await expect(panel).toBeHidden()
   expect((await nativeGet(native, '/api/v1/mcp-servers', wire.McpServer.array())).find((s) => s.id === 'github')?.url).toBe(url)
-  await page.reload(); await disclose(page, /^github(?:\s|$)/i)
-  await service(page, 'github').getByRole('button', { name: 'Edit', exact: true }).click()
+  await page.reload(); await openPage(page, native, 'External tools'); await disclose(page, header('github'))
+  await service(page, 'github').getByRole('button', { name: 'Edit github', exact: true }).click()
   await expect(panel.getByTestId('network-url')).toHaveValue(url)
   await panel.getByRole('button', { name: /^Close/i }).click()
   expect((await nativeGet(native, '/api/v1/mcp-servers/github/tools', wire.McpServerToolsResponse)).tools.sort()).toEqual([...GITHUB_TOOLS].sort())

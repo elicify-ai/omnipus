@@ -204,6 +204,14 @@ async function openToolsGroup() {
 
 const PERMISSION_WORDS = /^(allow|ask|deny)$/i
 
+// Every Allow / Ask / Deny control on the page: the badges of the rows are toggle buttons and the three choices of
+// the trust block are radios (spec "Accessibility and Keyboard": a radio group of three badges). A check over the
+// whole page has to look at both roles; a button-only query returns nothing for the trust block and passes without it.
+const everyChoice = () => [
+  ...screen.queryAllByRole('button', { name: PERMISSION_WORDS }),
+  ...screen.queryAllByRole('radio', { name: PERMISSION_WORDS }),
+]
+
 describe('SkillsToolsPage — Skills tab states (UI Screens and States, row "Skills tab")', () => {
   it('Loading / FR-050: while the skills request is unanswered, no trust choice can be used', async () => {
     vi.mocked(api.fetchSkills).mockImplementation(NEVER)
@@ -212,7 +220,7 @@ describe('SkillsToolsPage — Skills tab states (UI Screens and States, row "Ski
     expect(await screen.findByText('Loading skills…')).toBeInTheDocument()
     // The table draws a trust block skeleton, so there may be no choices at
     // all; any that are drawn must be disabled (FR-050: no write while loading).
-    for (const choice of screen.queryAllByRole('button', { name: PERMISSION_WORDS })) {
+    for (const choice of everyChoice()) {
       expect(choice, 'a trust choice is disabled while loading').toBeDisabled()
     }
   })
@@ -269,7 +277,7 @@ describe('SkillsToolsPage — Skills tab states (UI Screens and States, row "Ski
     renderPage()
 
     expect(await screen.findByText(cause)).toBeInTheDocument()
-    for (const choice of screen.queryAllByRole('button', { name: PERMISSION_WORDS })) {
+    for (const choice of everyChoice()) {
       expect(choice, 'no choice is enabled while the list failed').toBeDisabled()
     }
     expect(permissions().patches(), 'nothing was written').toEqual([])

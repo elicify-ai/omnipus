@@ -47,11 +47,23 @@ function oneLine(s, max = 400) {
 }
 
 // Logs in through the real login form, confirms the instance is onboarded,
-// navigates to Settings > Security, expands the Advanced disclosure, and
-// waits for the "Process Sandbox" heading to mount. Returns the heading
+// opens Settings > Sandbox & network, and waits for the "Process Sandbox"
+// heading to mount. Returns the heading
 // locator on success; exits the process directly on every other path
 // (login failure, onboarding redirect, panel never appears), so a caller
 // only ever sees this resolve on the success path.
+//
+// LAYOUT NOTE (Part J3, N75): the sandbox panel now has its own Settings
+// section, "Sandbox & network" (data-testid="settings-nav-sandbox"), which
+// src/components/settings/SettingsSectionBody.tsx mounts directly. The
+// Security tab (data-testid="settings-tab-security") and the collapsed
+// "Advanced / technical details" disclosure this function used to open no
+// longer exist. Only the navigation below was adapted. The longer comments
+// further down that name the Security tab, SecuritySection.tsx or that
+// disclosure explain why the locators are written the way they are and
+// describe the layout BEFORE that change; they were not re-verified. The
+// adapted script was not run by its author: it needs a live gateway with
+// the SPA, which only the manual Sandbox UAT workflow provides.
 async function loginAndOpenSandboxPanel(page, browser, screenshotPath, truth) {
   // --- Log in through the real login form (src/routes/login.tsx):
   // labeled "Username" / "Password" text inputs, "Sign in" submit button. ---
@@ -89,11 +101,12 @@ async function loginAndOpenSandboxPanel(page, browser, screenshotPath, truth) {
   }
 
   // --- Reach the app, then the sandbox status surface. Source search
-  // (src/components/settings/SandboxSection.tsx, mounted inside
-  // src/components/settings/SecuritySection.tsx at Settings > Security >
-  // "Process Sandbox (Landlock / seccomp)") is where the SPA renders
-  // sandbox state; it is reached via the Settings screen's "Security" tab
-  // (data-testid="settings-tab-security", src/components/screens/SettingsScreen.tsx). ---
+  // (src/components/settings/SandboxSection.tsx, which
+  // src/components/settings/SettingsSectionBody.tsx mounts for the "sandbox"
+  // section, labelled "Sandbox & network" in settingsSections.ts) is where
+  // the SPA renders sandbox state; it is reached through the Settings
+  // screen's section list (data-testid="settings-nav-sandbox",
+  // src/components/screens/SettingsScreen.tsx). ---
   // Hash-router navigation (see the login-wait comment above): the real
   // pathname is irrelevant to route resolution, only the "#/..." fragment
   // is, so go straight to the settings route via the hash rather than a
@@ -101,43 +114,17 @@ async function loginAndOpenSandboxPanel(page, browser, screenshotPath, truth) {
   // the default workspace's Chat tab, not Settings).
   await page.goto(`${BASE}/#/settings`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
 
-  const securityTab = page.getByTestId('settings-tab-security')
-  await securityTab.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })
-  await securityTab.click()
+  // The panel has its own Settings section now, so there is nothing to
+  // expand: opening the section mounts SandboxSection directly.
+  const sandboxNav = page.getByTestId('settings-nav-sandbox')
+  await sandboxNav.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })
+  await sandboxNav.click()
 
-  // --- Root cause of the S.4 N/A verdict (issue #625): the Security tab's
-  // two-layer IA (src/components/settings/SecuritySection.tsx) hides ALL
-  // "jargon" — including the whole "Process Sandbox" panel — behind a
-  // single collapsed <AdvancedDisclosure title="Advanced / technical
-  // details"> (src/components/shared/AdvancedDisclosure.tsx). That
-  // component defaults to closed (defaultOpen=false, not overridden here)
-  // and — by design ("Children are NOT mounted until the disclosure is
-  // expanded (conditional render, not CSS visibility)") — does not put its
-  // children in the DOM at all while collapsed. SandboxSection, and its
-  // "Process Sandbox" <h3>, therefore never exist in the DOM until this
-  // trigger is clicked. This was never an auth or navigation-timing
-  // problem (both were already fine) — the probe was simply waiting on a
-  // heading that had not been mounted yet. The trigger carries a stable,
-  // already-shipped selector (data-testid="advanced-disclosure-trigger")
-  // and is the only AdvancedDisclosure instance reachable from the
-  // Security tab, so it is unambiguous here. ---
-  const advancedTrigger = page.getByTestId('advanced-disclosure-trigger')
-  try {
-    await advancedTrigger.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS })
-    if ((await advancedTrigger.getAttribute('aria-expanded')) !== 'true') {
-      await advancedTrigger.click()
-    }
-  } catch {
-    // Trigger itself never appeared — fall through; the heading wait below
-    // will also fail and this correctly resolves to a real N/A rather than
-    // masking the failure.
-  }
-
-  // SandboxSection renders an <h3> "Process Sandbox" unconditionally as
-  // soon as it mounts (see the JSX in SandboxSection.tsx — the heading is
-  // not gated on the status query's loading state, only the body below it
-  // is). Give it a real chance to appear now that the Advanced disclosure
-  // has been expanded, but don't hang forever if the SPA never surfaces it.
+  // SandboxSection renders its <h3> "Process Sandbox" once both of its reads
+  // (sandbox status and sandbox config) have answered; until then the
+  // section shows its loading frame (FR-065, SandboxSection.tsx). Give the
+  // heading a real chance to appear, but don't hang forever if the SPA
+  // never surfaces it.
   //
   // Use a role-based locator (heading), NOT a plain text match. A plain
   // `getByText('Process Sandbox', {exact:false})` also matches the static
@@ -157,7 +144,7 @@ async function loginAndOpenSandboxPanel(page, browser, screenshotPath, truth) {
 
   if (!sectionFound) {
     await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {})
-    console.log(`S.4 N/A: the SPA does not surface sandbox state (Settings > Security > "Process Sandbox" panel never appeared) — ${truth}`)
+    console.log(`S.4 N/A: the SPA does not surface sandbox state (Settings > Sandbox & network > "Process Sandbox" panel never appeared) — ${truth}`)
     await browser.close()
     process.exit(0)
     return
