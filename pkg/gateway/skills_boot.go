@@ -303,11 +303,14 @@ func removeGrantInMemory(a *config.AgentConfig, key string) bool {
 }
 
 // healSkillPolicyMaps runs the C-2 skill-map self-heal and adds the healed
-// keys to the in-memory config. It never stops the gateway: a failure is
-// logged at error level and the heal runs again at the next start (its
-// record of known built-ins is only grown after config.json is written).
+// keys to the in-memory config. Like the load and turn-start heals it waits
+// for the C-19 upgrade (spec line 154): before the upgrade is done it writes
+// nothing, so a key it stored could not later pass for a person's change.
+// It never stops the gateway: a failure is logged at error level and the
+// heal runs again at the next start (its record of known built-ins is only
+// grown after config.json is written).
 func healSkillPolicyMaps(cfg *config.Config, homePath, configPath string) {
-	policies, visibility, _, err := skillperm.SelfHeal(homePath, configPath, skills.DefaultSkillNames())
+	policies, visibility, _, err := skillperm.HealIfUpgradedIn(homePath, configPath, skills.DefaultSkillNames())
 	if err != nil {
 		slog.Error("gateway: skill permission self-heal did not finish; it runs again at the next start", "error", err)
 		return

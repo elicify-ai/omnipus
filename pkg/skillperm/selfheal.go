@@ -54,6 +54,14 @@ func init() {
 // it does nothing: the upgrade runs first and gives the existing skills
 // their keys.
 func HealIfUpgraded(configPath string) (policies, visibility map[string]string, written []byte, err error) {
+	return HealIfUpgradedIn(filepath.Dir(configPath), configPath, skills.DefaultSkillNames())
+}
+
+// HealIfUpgradedIn is HealIfUpgraded for a home and built-in list named by
+// the caller (the gateway start). Before the C-19 upgrade is done it returns
+// nil maps and writes nothing (spec line 154: the heal runs after the
+// one-time migrations).
+func HealIfUpgradedIn(home, configPath string, builtins []string) (policies, visibility map[string]string, written []byte, err error) {
 	raw, err := readJSONMap(configPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("skillperm: self-heal: %w", err)
@@ -61,7 +69,7 @@ func HealIfUpgraded(configPath string) (policies, visibility map[string]string, 
 	if childMap(childMap(raw, "sandbox"), "migrations")[MigrationName] != stateDone {
 		return nil, nil, nil, nil
 	}
-	return SelfHeal(filepath.Dir(configPath), configPath, skills.DefaultSkillNames())
+	return SelfHeal(home, configPath, builtins)
 }
 
 // SelfHeal runs the C-2 self-heal over the skills of home and writes the
