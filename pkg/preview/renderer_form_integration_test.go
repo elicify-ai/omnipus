@@ -15,46 +15,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// T-49 / B-32. A form field whose value is FORM-42 is visible: its appearance
-// paints green across the widget, and draws that same value. The negative
-// control is the same widget with an empty value and a white appearance.
-// The two renders must differ in the field, and only there.
+// T-49 / B-32. A form field whose value is FORM-42 is visible against the same
+// widget with an empty value. The two PDFs share the widget (same rectangle,
+// same flags, no appearance stream). They differ only in /V.
 //
-// Geometry is not taken from a rendered PNG. The page is 200 x 100 pt, the
-// same box as officepreview.PDF. omnipus_pdfium.c::emit_page starts at scale
-// 2 and shrinks only when the long edge would pass MaxLongEdge (2000).
-// 200*2 = 400, so the PNG is 400 x 200.
+// A static appearance does not prove the value. omnipus_pdfium.c::emit_page
+// always paints annotations (FPDF_ANNOT) and, when the render flag bit 0 is
+// set, also calls FPDF_FFLDraw. A shared /AP is painted for any /V, so the
+// pixels would match. These fixtures have no /AP and NeedAppearances true, so
+// the ink in the field is the value pdfium generates. The empty system-font
+// provider still draws the standard Helvetica face named in /DA.
 //
-// The sampled window is inset from the widget and sits above the 10 pt text
-// drawn at appearance y 4, so glyph antialiasing is not the oracle. The value
-// is still in /V and in the appearance's text operator.
+// Geometry is not taken from a rendered PNG. The page is 200 x 100 pt.
+// omnipus_pdfium.c::emit_page starts at scale 2 and shrinks only when the long
+// edge would pass MaxLongEdge (2000). 200*2 = 400, so the PNG is 400 x 200.
+// The field window is the whole widget, because the value is drawn as glyphs
+// inside it rather than as a solid fill.
 
 const (
 	formPageW = 200
 	formPageH = 100
 	formScale = 2
-	// Widget /Rect [20 40 120 80], appearance BBox [0 0 100 40].
+	// Widget /Rect [20 40 120 80].
 	formWidgetX = 20
 	formWidgetY = 40
-	// Appearance-space sample: x [10, 90), y [18, 36).
-	formSampleX0 = 10
-	formSampleX1 = 90
-	formSampleY0 = 18
-	formSampleY1 = 36
-	formValue    = "FORM-42"
+	formWidgetW = 100
+	formWidgetH = 40
+	formValue   = "FORM-42"
 )
 
-const formFilledAppearance = "0 1 0 rg\n0 0 100 40 re f\nBT /Helv 10 Tf 0 0 0 rg 4 4 Td (FORM-42) Tj ET\n"
-const formEmptyAppearance = "1 1 1 rg\n0 0 100 40 re f\n"
-
 func TestPreviewRenderer_FilledFormValueIsVisibleAgainstEmptyField(t *testing.T) {
-	filled := acroFormPDF(t, formValue, formFilledAppearance)
-	empty := acroFormPDF(t, "", formEmptyAppearance)
-	require.Equal(t, 2, bytes.Count(filled, []byte("("+formValue+")")), "the value must be both /V and the appearance text")
+	filled := acroFormPDF(t, formValue)
+	empty := acroFormPDF(t, "")
+	require.Equal(t, 1, bytes.Count(filled, []byte("("+formValue+")")), "the value is the field's /V and nothing else")
 	require.False(t, bytes.Contains(empty, []byte(formValue)), "the empty control must not carry the value")
-	require.True(t, bytes.Contains(filled, []byte("0 1 0 rg")), "the filled appearance must paint green")
-	require.False(t, bytes.Contains(empty, []byte("0 1 0 rg")), "the empty appearance must not paint green")
+	require.False(t, bytes.Contains(filled, []byte("/AP")), "a static appearance would paint the same pixels for any /V")
+	require.False(t, bytes.Contains(empty, []byte("/AP")))
 	require.True(t, bytes.Contains(filled, []byte("/Rect [20 40 120 80]")))
+	require.True(t, bytes.Contains(empty, []byte("/Rect [20 40 120 80]")))
 
 	svc := officepreview.Service(t, false, true)
 	adm, err := svc.Admit(context.Background(), false)
@@ -64,22 +62,22 @@ func TestPreviewRenderer_FilledFormValueIsVisibleAgainstEmptyField(t *testing.T)
 	filledImg := renderFormPage(t, svc, adm, "filled-form.pdf", filled)
 	emptyImg := renderFormPage(t, svc, adm, "empty-form.pdf", empty)
 
-	// PDF y is bottom-up; PNG y is top-down. These four numbers are the
-	// sample window in PNG pixels: x [60, 220), y [48, 84).
-	pngX0 := (formWidgetX + formSampleX0) * formScale
-	pngX1 := (formWidgetX + formSampleX1) * formScale
-	pngY0 := (formPageH - (formWidgetY + formSampleY1)) * formScale
-	pngY1 := (formPageH - (formWidgetY + formSampleY0)) * formScale
-	require.Equal(t, 60, pngX0)
-	require.Equal(t, 220, pngX1)
-	require.Equal(t, 48, pngY0)
-	require.Equal(t, 84, pngY1)
+	// PDF y is bottom-up; PNG y is top-down. Widget [20 40 120 80] on a
+	// 100 pt page at scale 2 is PNG x [40, 240), y [40, 120).
+	pngX0 := formWidgetX * formScale
+	pngX1 := (formWidgetX + formWidgetW) * formScale
+	pngY0 := (formPageH - (formWidgetY + formWidgetH)) * formScale
+	pngY1 := (formPageH - formWidgetY) * formScale
+	require.Equal(t, 40, pngX0)
+	require.Equal(t, 240, pngX1)
+	require.Equal(t, 40, pngY0)
+	require.Equal(t, 120, pngY1)
 
-	green := color.RGBA{G: 255, A: 255}                 // appearance "0 1 0 rg"
-	white := color.RGBA{R: 255, G: 255, B: 255, A: 255} // page and empty appearance "1 1 1 rg"
-	assertRegion(t, filledImg, pngX0, pngY0, pngX1, pngY1, green, "filled field shows the value appearance")
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255} // page fill "1 1 1 rg"
 	assertRegion(t, emptyImg, pngX0, pngY0, pngX1, pngY1, white, "empty field shows no value")
-	require.NotEqual(t, filledImg.At(pngX0, pngY0), emptyImg.At(pngX0, pngY0), "T-49: negative control must differ in the field region")
+	filledInk := countOther(filledImg, pngX0, pngY0, pngX1, pngY1, white)
+	require.Positive(t, filledInk, "filled field shows the value FORM-42")
+	require.NotEqual(t, filledInk, 0, "T-49: the value and the empty field must differ in the field region")
 
 	// A corner outside the widget stays the page white on both, so the
 	// difference is the field and not a full-page tint. pdf (10, 10).
@@ -114,38 +112,38 @@ func renderFormPage(t *testing.T, svc *preview.Service, adm *preview.Admission, 
 
 func assertRegion(t *testing.T, im image.Image, x0, y0, x1, y1 int, want color.RGBA, label string) {
 	t.Helper()
+	mismatches := countOther(im, x0, y0, x1, y1, want)
+	require.Zero(t, mismatches, "%s: %d pixels differ from %#v", label, mismatches, want)
+}
+
+func countOther(im image.Image, x0, y0, x1, y1 int, want color.RGBA) int {
 	mismatches := 0
-	var sample color.Color
+	wr, wg, wb, wa := want.RGBA()
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {
 			r, g, b, a := im.At(x, y).RGBA()
-			wr, wg, wb, wa := want.RGBA()
 			if r != wr || g != wg || b != wb || a != wa {
 				mismatches++
-				if sample == nil {
-					sample = im.At(x, y)
-				}
 			}
 		}
 	}
-	require.Zero(t, mismatches, "%s: %d pixels differ from %#v, example %v", label, mismatches, want, sample)
+	return mismatches
 }
 
-func acroFormPDF(t *testing.T, value, appearance string) []byte {
+func acroFormPDF(t *testing.T, value string) []byte {
 	t.Helper()
 	if strings.ContainsAny(value, "()\\") {
 		t.Fatalf("fixture value %q is not a plain PDF literal", value)
 	}
 	content := "1 1 1 rg 0 0 200 100 re f\n"
 	objects := []string{
-		"<< /Type /Catalog /Pages 2 0 R /AcroForm 8 0 R >>",
+		"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>",
 		"<< /Type /Pages /Count 1 /Kids [4 0 R] >>",
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
 		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R /Annots [6 0 R] >>",
 		pdfStream(content),
-		fmt.Sprintf("<< /Type /Annot /Subtype /Widget /FT /Tx /T (amount) /V (%s) /Rect [20 40 120 80] /F 4 /BS << /W 0 >> /DA (/Helv 10 Tf 0 0 0 rg) /AP << /N 7 0 R >> /P 4 0 R >>", value),
-		fmt.Sprintf("<< /Type /XObject /Subtype /Form /FormType 1 /BBox [0 0 100 40] /Resources << /Font << /Helv 3 0 R >> >> /Length %d >>\nstream\n%sendstream", len(appearance), appearance),
-		"<< /Fields [6 0 R] /NeedAppearances false /DA (/Helv 10 Tf 0 0 0 rg) /DR << /Font << /Helv 3 0 R >> >> >>",
+		fmt.Sprintf("<< /Type /Annot /Subtype /Widget /FT /Tx /T (amount) /V (%s) /Rect [20 40 120 80] /F 4 /DA (/Helv 18 Tf 0 0 0 rg) /P 4 0 R >>", value),
+		"<< /Fields [6 0 R] /NeedAppearances true /DA (/Helv 18 Tf 0 0 0 rg) /DR << /Font << /Helv 3 0 R >> >> >>",
 	}
 	return pdfDocument(objects)
 }

@@ -10,7 +10,7 @@
 // group is re-rendered with that frame.
 
 import { act } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api-error'
@@ -77,10 +77,29 @@ async function finishStart(resolveRetry: () => void) {
   })
 }
 
+// Only the failure tests install this. A passing Retry must not hide warnings.
+let retryWarn: ReturnType<typeof vi.spyOn> | undefined
+
+function watchRetryWarning() {
+  retryWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+}
+
+function expectRetryFailureWasReported(times: number) {
+  expect(retryWarn).toHaveBeenCalledTimes(times)
+  expect(retryWarn).toHaveBeenCalledWith(
+    '[PreviewUnavailableCard] preview retry failed',
+    expect.objectContaining({ toolCallId: CALL }),
+  )
+}
+
 beforeEach(() => {
   retrySessionPreview.mockReset()
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
   useSessionStore.setState({ activeSessionId: SESSION, activeAgentId: null, activeAgentType: null })
+})
+
+afterEach(() => {
+  retryWarn?.mockRestore()
+  retryWarn = undefined
 })
 
 describe('Preview unavailable card, interactive Retry (§5.3)', () => {
@@ -161,6 +180,7 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
 
   it('shows "The file changed — ask the agent to preview again." and removes Retry', async () => {
     const user = userEvent.setup()
+    watchRetryWarning()
     retrySessionPreview.mockRejectedValue(
       new ApiError(409, 'server said something else', { code: 'preview_source_changed' }),
     )
@@ -171,10 +191,12 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
     expect(await screen.findByText('The file changed — ask the agent to preview again.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByText('server said something else')).toBeNull()
+    expectRetryFailureWasReported(1)
   })
 
-  it('shows "Retry failed: the PDF renderer is not available." and still offers Retry', async () => {
+  it('shows "Retry failed: the PDF renderer is not available." and a second Retry runs again', async () => {
     const user = userEvent.setup()
+    watchRetryWarning()
     retrySessionPreview.mockRejectedValue(
       new ApiError(503, 'renderer down', { code: 'preview_renderer_unavailable' }),
     )
@@ -185,10 +207,20 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
     expect(await screen.findByText('Retry failed: the PDF renderer is not available.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
     expect(screen.queryByText('renderer down')).toBeNull()
+    expect(retrySessionPreview).toHaveBeenCalledTimes(1)
+
+    // docs/documents.md: "You can try again" after "Retry failed: …".
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(retrySessionPreview).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('Retry failed: the PDF renderer is not available.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    expectRetryFailureWasReported(2)
   })
 
   it('shows the Library refusal and removes Retry when the file is outside the Library', async () => {
     const user = userEvent.setup()
+    watchRetryWarning()
     retrySessionPreview.mockRejectedValue(
       new ApiError(403, 'nope', { code: 'preview_source_not_in_library' }),
     )
@@ -200,10 +232,12 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
       "This file is outside the workspace Library, so its previews can't be retried here. Ask the agent to preview it again.",
     )).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expectRetryFailureWasReported(1)
   })
 
   it('shows "This preview is no longer available." and removes Retry', async () => {
     const user = userEvent.setup()
+    watchRetryWarning()
     retrySessionPreview.mockRejectedValue(new ApiError(404, 'missing preview'))
     renderCard('storage_failed')
 
@@ -212,6 +246,7 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
     expect(await screen.findByText('This preview is no longer available.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByText('missing preview')).toBeNull()
+    expectRetryFailureWasReported(1)
   })
 
   it('replaces the card with the saved page images after Retry is running', async () => {
@@ -232,25 +267,30 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
         unavailable_reason: 'renderer_failed',
       },
     }
+    // One saved page. The card does not swap itself for images: "started" only
+    // means the retry is running (docs: the page images replace the card when
+    // saving succeeds). That replacement is a new group prop from the parent.
+    // A single page is the whole frame, so hiding groups of one page would
+    // leave the card up.
     const saved: PreviewGroup = {
       key: CALL,
       toolCallId: CALL,
-      pages: [1, 2, 3, 4].map((pageNumber) => ({
+      pages: [{
         type: 'image' as const,
         url: PIXEL,
-        filename: `page-${pageNumber}.png`,
+        filename: 'page-12.png',
         contentType: 'image/gif',
-        caption: `report.docx · page ${pageNumber} of 4`,
-        pageNumber,
+        caption: 'report.docx · page 12 of 30',
+        pageNumber: 12,
         toolCallId: CALL,
         presentation: 'page_thumbnails' as const,
-      })),
+      }],
       preview: {
         source_name: 'report.docx',
         source_version: 'a1b2c3d4e5f6',
-        page_count: 4,
-        first_page: 1,
-        last_page: 4,
+        page_count: 30,
+        first_page: 12,
+        last_page: 12,
         outcome: 'complete',
       },
     }
@@ -259,16 +299,15 @@ describe('Preview unavailable card, interactive Retry (§5.3)', () => {
     expect(await screen.findByText(RETRYING)).toBeInTheDocument()
     await finishStart(resolveRetry)
     await waitFor(() => expect(retrySessionPreview).toHaveBeenCalledWith(SESSION, CALL))
+    expect(screen.getByTestId('preview-unavailable-card')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'report.docx · page 12 of 30' })).toBeNull()
 
     view.rerender(<PreviewThumbnailGroup group={saved} />)
 
     expect(screen.queryByTestId('preview-unavailable-card')).toBeNull()
     expect(screen.queryByText(RETRYING)).toBeNull()
     expect(screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
-      'report.docx · page 1 of 4',
-      'report.docx · page 2 of 4',
-      'report.docx · page 3 of 4',
-      'report.docx · page 4 of 4',
+      'report.docx · page 12 of 30',
     ])
   })
 })

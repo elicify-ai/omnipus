@@ -228,19 +228,30 @@ describe('PreviewPageViewer (§5.4, docs/documents.md)', () => {
     }
   })
 
-  it('shows "Page n could not be loaded." when that page fails, and Right still opens the next page', async () => {
+  it('shows "Page n could not be loaded." when that page fails, Retry loads it again, and Right still opens the next page', async () => {
     const user = userEvent.setup()
-    const viewer = await openViewer(content(1, [1, 2, 3, 4]))
-    fireEvent.error(screen.getByRole('img', { name: `${DOC} · page 2 of 4` }))
+    // Not a batch that starts at page 1: page 12 is index 1, so an error that
+    // used the index would say "Page 2" (docs: "Page n could not be loaded.").
+    const pageCount = 30
+    const failed = `${DOC} · page 12 of ${pageCount}`
+    const viewer = await openViewer(content(1, [11, 12, 13], pageCount))
+    fireEvent.error(screen.getByRole('img', { name: failed }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Page 2 could not be loaded.')
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Page 12 could not be loaded.')
+    expect(screen.queryByRole('img', { name: failed })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    // Retry re-fetches this page: the error panel goes and the image is back.
+    // A Retry that does nothing leaves the error up.
+    expect(screen.queryByText('Page 12 could not be loaded.')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('img', { name: failed })).toBeInTheDocument()
 
     await user.keyboard('{ArrowRight}')
 
     expect(screen.getByTestId('preview-page-viewer')).toBe(viewer)
-    expect(indicator()).toHaveTextContent('Page 3 of 4')
-    expect(screen.queryByText('Page 2 could not be loaded.')).toBeNull()
-    expect(screen.getByRole('img', { name: `${DOC} · page 3 of 4` })).toBeInTheDocument()
+    expect(indicator()).toHaveTextContent('Page 13 of 30')
+    expect(screen.getByRole('img', { name: `${DOC} · page 13 of 30` })).toBeInTheDocument()
   })
 })
