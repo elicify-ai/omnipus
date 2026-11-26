@@ -55,6 +55,9 @@ const (
 	s102ProjectKey            = "project:d10/notes-helper"
 	s102Mia                   = "test-agent"
 	s102Ray                   = "peer-agent"
+	// W1 as seedS102ProjectSkill writes it: the refusal may name the workspace by either.
+	s102WorkspaceID   = "d10"
+	s102WorkspaceName = "D10 project"
 )
 
 func TestProjectSkillKeys(t *testing.T) {
@@ -92,12 +95,22 @@ func TestProjectSkillKeys(t *testing.T) {
 		run := beginNativeD10(t, h, "load", "chat", s102Ray, "project")
 		seen, results := s102Turn(t, h, run)
 		require.Len(t, results, 1, "the model received exactly one Skill result")
-		// Spec line 260 (C-12): "A Deny anywhere ... refuses before either check: no card, and the refusal
-		// names the setting". S-102 adds that the Deny named is the project skill's. The sentence
-		// itself is not pinned by the spec, so this asserts what is: the refusal names the Deny and
-		// the skill, and nothing of either skill's instructions reaches the model.
+		// S-102 (Then): "Ray's load is refused naming the Deny of the project skill `notes` in W1".
+		// Spec line 260 (C-12) adds "A Deny anywhere ... refuses before either check: no card, and
+		// the refusal names the setting". Team-lead ruling, Part I Q1 A: assert exactly what S-102
+		// states and no exact wording beyond it (the sentence is a spec gap, Part H finding 15): the
+		// refusal names (1) the Deny, (2) that it is the project skill, (3) the skill's name and
+		// (4) the workspace. W1 is named by id or by display name, since the spec writes only "W1".
+		// The refusal is read as the model received it, so a JSON-escaped character such as the
+		// ampersand of "Skills & Tools" is never matched literally.
+		refusal := strings.ToLower(results[0])
 		assert.Contains(t, results[0], "Deny", "S-102: Ray's refusal names the Deny setting; got %q", results[0])
-		assert.Contains(t, results[0], s102InstalledKey, "S-102: Ray's refusal names the skill; got %q", results[0])
+		assert.Contains(t, refusal, "project skill",
+			"S-102: Ray's refusal says it is the project skill that is at Deny, not the installed one; got %q", results[0])
+		assert.Contains(t, results[0], s102InstalledKey, "S-102: Ray's refusal names the skill `notes` (fixture name %q); got %q", s102InstalledKey, results[0])
+		assert.True(t,
+			strings.Contains(refusal, strings.ToLower(s102WorkspaceID)) || strings.Contains(refusal, strings.ToLower(s102WorkspaceName)),
+			"S-102: Ray's refusal names workspace W1 (fixture id %q or name %q); got %q", s102WorkspaceID, s102WorkspaceName, results[0])
 		assert.NotContains(t, seen, s102InstalledInstructions,
 			"S-102: the installed skill is not Ray's (not granted), so its instructions never reach him")
 		assert.NotContains(t, seen, s102ProjectInstructions,
