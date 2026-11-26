@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useBlocker } from '@tanstack/react-router'
+import { Link, useBlocker, useRouter } from '@tanstack/react-router'
 import { ArrowClockwise, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { Button } from '@/components/ui/button'
@@ -72,35 +72,82 @@ function restoreWillMove(): boolean | undefined {
   return typeof canGoForward === 'boolean' ? canGoForward : undefined
 }
 
+/** Router index the history keeps in an entry's state; typed entries have none. */
+function routerIndex(state: unknown): number | undefined {
+  if (state === null || typeof state !== 'object') return undefined
+  const index: unknown = Reflect.get(state, '__TSR_index')
+  return typeof index === 'number' ? index : undefined
+}
+
+/** The browser's own Navigation API object, when it has one. */
+function navigationApi(): object | undefined {
+  const nav: unknown = Reflect.get(window, 'navigation')
+  return nav !== null && typeof nav === 'object' ? nav : undefined
+}
+
+/** The browser's key for the current entry (Navigation API), if any. */
+function currentEntryKey(): string | undefined {
+  const entry: unknown = Reflect.get(navigationApi() ?? {}, 'currentEntry')
+  if (entry === null || typeof entry !== 'object') return undefined
+  const key: unknown = Reflect.get(entry, 'key')
+  return typeof key === 'string' ? key : undefined
+}
+
 /**
- * U5-1: the router's history counts the step to undo from its own index in
- * each entry's state. Entries typed or pasted into the address bar carry no
- * router state, so two of them both read as index 0 and the undo becomes
- * `history.go(0)`: a reload, followed by the browser's own leave question.
- * For this one undo only, a step of 0 becomes one step forward, back to the
- * entry the move left. The Stay path still checks the address afterwards.
+ * Exact steps from the current entry to the entry with `key`, from the
+ * browser's own entry list (Navigation API). Undefined when the browser has
+ * no Navigation API or the entry is gone.
  */
-function guardZeroStepUndo(): void {
+function stepsToEntry(key: string | undefined): number | undefined {
+  const nav = navigationApi()
+  if (key === undefined || nav === undefined) return undefined
+  const current: unknown = Reflect.get(nav, 'currentEntry')
+  const entries: unknown = Reflect.get(nav, 'entries')
+  if (current === null || typeof current !== 'object' || typeof entries !== 'function') return undefined
+  const list: unknown = Reflect.apply(entries, nav, [])
+  if (!Array.isArray(list)) return undefined
+  const home: unknown = list.find(
+    (entry: unknown) => entry !== null && typeof entry === 'object' && Reflect.get(entry, 'key') === key,
+  )
+  const from: unknown = Reflect.get(current, 'index')
+  const to: unknown = home !== null && typeof home === 'object' ? Reflect.get(home, 'index') : undefined
+  return typeof from === 'number' && typeof to === 'number' ? to - from : undefined
+}
+
+/**
+ * U5-1: the router's history undoes a blocked browser move with
+ * `history.go(-delta)`, where delta is the difference of the router index in
+ * the two entries' state. An entry typed or pasted into the address bar has
+ * no router state and reads as index 0, so that count can be wrong: 0 reloads
+ * the page (and the browser asks its own leave question), and any other count
+ * can land on the wrong entry. For this one undo, `step` replaces the router's
+ * count. The replacement removes itself on the undo call or on the router
+ * history's next notification (it notifies right after its undo), so no timer
+ * decides when it ends; the returned function also removes it.
+ */
+function replaceUndoStep(step: number, subscribe: (listener: () => void) => () => void): () => void {
   const history = window.history
   const own = Object.getOwnPropertyDescriptor(history, 'go')
   const original = history.go
-  let restored = false
-  const restore = () => {
-    if (restored) return
-    restored = true
+  let released = false
+  let unsubscribe = () => {}
+  const release = () => {
+    if (released) return
+    released = true
+    unsubscribe()
     if (own) Object.defineProperty(history, 'go', own)
     else Reflect.deleteProperty(history, 'go')
   }
   Object.defineProperty(history, 'go', {
     configurable: true,
     writable: true,
-    value: (delta?: number) => {
-      restore()
-      original.call(history, delta === undefined || delta === 0 ? 1 : delta)
+    value: () => {
+      release()
+      original.call(history, step)
     },
   })
-  // The undo runs in the same task as Stay; never leave the guard behind.
-  setTimeout(restore, STAY_RESTORE_WAIT_MS)
+  unsubscribe = subscribe(release)
+  return release
 }
 
 export function SettingsScreen({
@@ -200,12 +247,24 @@ export function SettingsScreen({
 
   // ── Leave guard inside the app (FR-014) ────────────────────────────────
   // US-2 AS6 / FR-014: Stay keeps the section, its changes and the address.
-  // The router's history undoes a blocked move by going one entry forward.
-  // That restores a Back onto an older entry, but not an address typed or
-  // pasted into the bar: that entry is the newest, so the step forward does
-  // nothing. Stay therefore lets that restore settle and steps back off the
-  // blocked entry only when the address has not moved (U1-9, U2-4, U4-1).
-  // Whether the entry was typed is never guessed up front.
+  // The router's history undoes a blocked browser move by stepping the same
+  // count back. Its count is wrong when an entry was typed or pasted into the
+  // address bar (no router state), so Stay picks the step itself (U5-1):
+  //   1. the browser's own entry list (Navigation API): the exact step back
+  //      to this Settings entry, however far the move went;
+  //   2. otherwise the router's count, when both entries carry router state;
+  //   3. otherwise one step forward, which undoes one Back.
+  // An address typed into the bar is the newest entry, so a step forward does
+  // nothing; Stay then steps back off it only when the address has not moved
+  // (U1-9, U2-4, U4-1).
+  // Known limits, only in browsers without the Navigation API:
+  //   - a jump of several entries at once through the browser's history menu
+  //     from or to a typed entry can end on the wrong entry (step 3 assumes
+  //     one step);
+  //   - Stay waits STAY_RESTORE_WAIT_MS (300 ms) for that step forward. If a
+  //     slow device delivers it later, Stay also steps back, the two moves
+  //     cancel out and the leave question can appear a second time.
+  const router = useRouter()
   const blocker = useBlocker({
     shouldBlockFn: () => draftCount > 0,
     withResolver: true,
@@ -214,12 +273,22 @@ export function SettingsScreen({
   })
   // The address this section was last shown at, outside the leave question.
   const settledHref = useRef<string | null>(null)
+  // The same entry's router index and browser key, to make Stay's undo exact.
+  const settledIndex = useRef<number | undefined>(undefined)
+  const settledKey = useRef<string | undefined>(undefined)
+  // Removes a pending undo-step replacement if this screen goes away first.
+  const releaseUndo = useRef<(() => void) | undefined>(undefined)
   // True from Stay until the history is back on this section; the question
   // stays on screen meanwhile, so the other address never flashes by.
   const [restoring, setRestoring] = useState(false)
   useEffect(() => {
-    if (blocker.status !== 'blocked' && !restoring) settledHref.current = window.location.href
+    if (blocker.status !== 'blocked' && !restoring) {
+      settledHref.current = window.location.href
+      settledIndex.current = routerIndex(window.history.state)
+      settledKey.current = currentEntryKey()
+    }
   })
+  useEffect(() => () => releaseUndo.current?.(), [])
 
   // ── Phone: list first (FR-008) ─────────────────────────────────────────
   const [phoneShowsSection, setPhoneShowsSection] = useState(
@@ -592,10 +661,14 @@ export function SettingsScreen({
               // Stay: nothing moves; focus goes back to the control used.
               const blockedHref = window.location.href
               const homeHref = settledHref.current
-              const willMove = restoreWillMove()
-              // A move between two entries without router state is a GO of
-              // 0; its undo must not reload the page (U5-1).
-              if (blocker.action === 'GO') guardZeroStepUndo()
+              // U5-1: a browser move (not an in-app link) is undone by the
+              // router's history; make its step land on this exact entry.
+              const browserMove = blocker.action === 'BACK' || blocker.action === 'FORWARD' || blocker.action === 'GO'
+              const exactStep = browserMove ? stepsToEntry(settledKey.current) : undefined
+              const countsKnown = routerIndex(window.history.state) !== undefined && settledIndex.current !== undefined
+              const step = exactStep !== undefined && exactStep !== 0 ? exactStep : browserMove && !countsKnown ? 1 : undefined
+              if (step !== undefined) releaseUndo.current = replaceUndoStep(step, (listener) => router.history.subscribe(listener))
+              const willMove = exactStep !== undefined && exactStep !== 0 ? true : restoreWillMove()
               blocker.reset()
               navIntent.current = null
               const back = stayFocus.current
