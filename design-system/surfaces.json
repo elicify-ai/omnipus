@@ -5272,6 +5272,176 @@
       }
     },
     {
+      "id": "src/components/skills/SkillsToolsPage.tsx#tab:skills",
+      "kind": "tab",
+      "source": "src/components/skills/SkillsToolsPage.tsx",
+      "symbol": "tab:skills",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-skills:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-skills.test.tsx",
+          "test": "Skills tab surface unit contract S-57 US-6 AS2 US-7 AS7: skills are grouped by category with counts, and an empty category is not listed",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-skills:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-skills.interaction.test.tsx",
+          "test": "Skills tab surface interaction contract US-2 AS1 C-2: a click on Deny changes that one skill, sends a write naming only it and shows Saved",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-skills:browser",
+          "kind": "browser",
+          "file": "tests/e2e/skills-tools-surfaces.spec.ts",
+          "test": "Skills tab surface: categories start collapsed with their counts and Deny on one skill is saved alone and survives a reload",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillsToolsPage.tsx#tab:skills"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillsToolsPage.tsx#tab:tools",
+      "kind": "tab",
+      "source": "src/components/skills/SkillsToolsPage.tsx",
+      "symbol": "tab:tools",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-tools:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-tools.test.tsx",
+          "test": "Omnipus tools tab surface unit contract US-6 AS2 S-65: groups start collapsed and the spec-named groups are Browser, Shell and Web & Search",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-tools:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-tools.interaction.test.tsx",
+          "test": "Omnipus tools tab surface interaction contract US-1 AS1 C-2: a click on Deny shows Deny, saves only that tool and shows Saved",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-tools:browser",
+          "kind": "browser",
+          "file": "tests/e2e/skills-tools-surfaces.spec.ts",
+          "test": "Omnipus tools tab surface: groups start collapsed and Deny on bash is saved alone and survives a reload",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillsToolsPage.tsx#tab:tools"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillsToolsPage.tsx#tab:external",
+      "kind": "tab",
+      "source": "src/components/skills/SkillsToolsPage.tsx",
+      "symbol": "tab:external",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-external:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-external.test.tsx",
+          "test": "External tools tab surface unit contract US-8 AS2: each service header carries the on/off switch, Test, Edit and Remove, and the switch shows the stored state",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-external:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-tab-external.interaction.test.tsx",
+          "test": "External tools tab surface interaction contract S-60 US-8 AS2: turning the switch of github off sends one update {enabled: false} naming only it, shows it off and asks nothing more",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-tab-external:browser",
+          "kind": "browser",
+          "file": "tests/e2e/skills-tools-surfaces.spec.ts",
+          "test": "External tools tab surface: the service header carries the switch Test Edit and Remove and Test reaches the service",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillsToolsPage.tsx#tab:external"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillsToolsPage.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/skills/SkillsToolsPage.tsx",
+      "symbol": "overlay:1",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-overlay-1.test.tsx",
+          "test": "Web & Search side panel surface unit contract US-9 AS1 S-64: pressing Settings opens a side panel named Web & Search with the Default search and Fallback cards",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-skills-skillstoolspage-tsx-overlay-1.interaction.test.tsx",
+          "test": "Web & Search side panel surface interaction contract US-9 AS1: Enter on Settings opens the panel with focus on a button inside it, and Escape closes it",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillstoolspage-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/e2e/skills-tools-surfaces.spec.ts",
+          "test": "Web & Search side panel surface: Settings opens the panel with both cards and Escape closes it without a save",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillsToolsPage.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillRowActions.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/skills/SkillRowActions.tsx",
+      "symbol": "overlay:1",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillrowactions-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillrowactions-tsx-overlay-1.test.tsx",
+          "test": "Choose a category dialog surface unit contract S-104: until Choose category is chosen no dialog is open, and choosing it opens one without writing anything",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillrowactions-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-skills-skillrowactions-tsx-overlay-1.interaction.test.tsx",
+          "test": "Choose a category dialog surface interaction contract S-104 US-7 AS8: choosing Lifestyle and saving makes one write naming trip-notes with lifestyle, and the skill is then listed under Lifestyle",
+          "status": "executed"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillrowactions-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/e2e/skills-tools-surfaces.spec.ts",
+          "test": "Choose a category dialog surface: choosing Lifestyle saves the category once and a later change is refused with the server sentence",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillRowActions.tsx#overlay:1"
+      }
+    },
+    {
       "id": "src/components/workspaces/ConfirmActionModal.tsx#ConfirmActionModal",
       "kind": "modal",
       "source": "src/components/workspaces/ConfirmActionModal.tsx",
