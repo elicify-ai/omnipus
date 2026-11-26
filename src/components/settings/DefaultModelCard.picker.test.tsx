@@ -6,7 +6,8 @@
 //    "No models found") while the catalog's first read is in flight.
 //  - U6-1 / FR-070: on a coarse pointer the virtualiser lays rows out at the
 //    44 px touch minimum (no overlap); a mouse keeps the 32 px slot.
-// jsdom has no layout: physical row sizes stay a browser check.
+//  - U6-6: a row with the recommended badge still shows its model name.
+// jsdom has no layout: physical row sizes and widths stay a browser check.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -112,5 +113,36 @@ describe('U6-1 the virtualised model list sizes its row slots to the pointer', (
     pointer(false)
     const rows = await virtualSlots()
     expect(new Set(rows.map((row) => row.style.height))).toEqual(new Set(['32px']))
+  })
+})
+
+describe('U6-6 a recommended row still shows its model name', () => {
+  // jsdom has no layout, so the 0 px name the tester measured cannot be shown
+  // here. What jsdom can show is the cause and the guards: the popup's width
+  // class must be a real CSS width (Tailwind v4 compiles `w-[--x]` to the
+  // invalid `width: --x`, so the popup fell back to its narrow 18rem default),
+  // the name keeps a floor of the row so the badge cannot take its place, and
+  // the full name is on the row for hover and for assistive technology.
+  it('the popup takes the trigger width, the name keeps its floor and its full text', async () => {
+    pointer(false)
+    await openPicker()
+    const list = document.querySelector('[cmdk-list]') as HTMLElement
+    const popup = list.closest('[data-radix-popper-content-wrapper] > *') as HTMLElement
+    expect(popup.className).toContain('w-[var(--radix-popover-trigger-width)]')
+    expect(popup.className).not.toMatch(/w-\[--/)
+    const recommended = [...document.querySelectorAll<HTMLElement>('[cmdk-item][data-recommended]')]
+    expect(recommended.length).toBeGreaterThan(0)
+    for (const row of recommended) {
+      const id = row.getAttribute('data-model') ?? ''
+      const spans = [...row.querySelectorAll('span')]
+      const name = spans.find((span) => span.textContent === id)
+      const badge = spans.find((span) => span !== name && /recommended/i.test(span.textContent ?? ''))
+      expect(name, `${id} has its name`).toBeDefined()
+      expect(badge, `${id} has its badge`).toBeDefined()
+      expect(name?.title).toBe(id)
+      expect(name?.className).toContain('min-w-[50%]')
+      expect(badge?.className, 'the badge gives way before the name does').not.toContain('shrink-0')
+      expect(badge?.className).toContain('truncate')
+    }
   })
 })

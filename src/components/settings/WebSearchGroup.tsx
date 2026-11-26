@@ -308,7 +308,8 @@ function SearchRoleCard({
               <CaretUpDown size={14} className="shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0" aria-label={label}>
+          {/* U6-9: `w-[--x]` compiles to the invalid `width: --x` in Tailwind v4. */}
+          <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0" aria-label={label}>
             <Command>
               <CommandList>
                 {allowNone && (

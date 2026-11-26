@@ -802,10 +802,13 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
           className="mr-[var(--space-2)] shrink-0"
           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
         />
-        <span className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
+        {/* U6-6: the name keeps at least half the row and the badge gives way
+            first (it truncates), so a recommended row is never badge-only.
+            The title carries the full name when it is cut short. */}
+        <span title={row.model.id} className="min-w-[50%] flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
         {row.recommended && (
           <span
-            className="ml-[var(--space-2)] shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
+            className="ml-[var(--space-2)] min-w-0 truncate rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
             style={{
               backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
               color: 'var(--color-accent)',
@@ -920,7 +923,9 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[--radix-popover-trigger-width] p-0"
+        // U6-6: Tailwind v4 compiles `w-[--x]` to the invalid `width: --x`,
+        // which left this popup at the primitive's narrow default width.
+        className="w-[var(--radix-popover-trigger-width)] p-0"
         align="start"
         // WAI-ARIA Combobox Pattern 1.2 (WCAG 1.3.1, 2.4.6, 4.1.2):
         // the trigger above carries `role="combobox"` + `aria-expanded`
