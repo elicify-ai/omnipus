@@ -323,10 +323,10 @@ export function RemoveProviderDialog({
           <AlertDialogTitle data-testid="remove-provider-title">
             Remove {displayName}? Its key will be deleted.
           </AlertDialogTitle>
+          {/* U6-4: the only-provider sentence is said once, in the warning
+              below; the description always states what removal deletes. */}
           <AlertDialogDescription data-testid="remove-provider-description">
-            {onlyProvider
-              ? ONLY_PROVIDER_COPY
-              : 'The stored API key is deleted with the provider. This cannot be reversed — you would have to add the key again.'}
+            The stored API key is deleted with the provider. This cannot be reversed — you would have to add the key again.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
