@@ -557,7 +557,7 @@ test.describe('US-9 — accessibility and states (FR-068, FR-069, FR-065, FR-075
       { section: 'System agents', tab: 'system-agents', reads: ['**/api/v1/agents'] },
       { section: 'Third-party agents', tab: 'third-party-agents', reads: ['**/api/v1/settings/third-party-agents'] },
       { section: 'Limits', tab: 'limits', reads: ['**/api/v1/settings/context', '**/api/v1/performance'] },
-      { section: 'Protection', tab: 'protection', reads: ['**/api/v1/gateway/god-mode', '**/api/v1/security/tool-policies', '**/api/v1/security/rate-limits', '**/api/v1/security/prompt-guard'] },
+      { section: 'Protection', tab: 'protection', reads: ['**/api/v1/gateway/god-mode', '**/api/v1/security/sandbox-config', '**/api/v1/security/rate-limits', '**/api/v1/security/prompt-guard'] },
       { section: 'Sandbox & network', tab: 'sandbox', reads: ['**/api/v1/security/sandbox-status', '**/api/v1/security/sandbox-config'] },
       { section: 'Keys & secrets', tab: 'keys', reads: ['**/api/v1/credentials'] },
       { section: 'Gateway', tab: 'gateway', reads: ['**/api/v1/config', '**/api/v1/status'] },

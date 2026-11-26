@@ -75,7 +75,6 @@ export function transportG1() {
     '/security/prompt-guard': { level: 'medium', requires_restart: false },
     '/gateway/god-mode': { enabled: false, persisted: false, available: true, supported: true },
     '/security/exec-proxy-status': { enabled: false, running: false },
-    '/security/skill-trust': { level: 'warn_unverified' }, '/security/tool-policies': { policies: {} },
     '/credentials': [], '/storage/stats': { workspace_size_bytes: 10, session_count: 3, memory_entry_count: 5, warnings: [] },
     '/status': { daily_cost: 0, uptime_seconds: 3600 }, '/doctor': null, '/tools': [],
     '/audit-log': { entries: [], chain_status: 'unknown' },
