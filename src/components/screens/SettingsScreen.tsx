@@ -56,6 +56,12 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
 // arrive before deciding nothing moved. Only used where the browser has no
 // Navigation API to answer the question up front.
 const STAY_RESTORE_WAIT_MS = 300
+// U6-5: when the history's own undo is exact (the Navigation API says it moves,
+// or both entries carry router state), Stay never steps back itself; it waits
+// for that undo's address change. This is only a safety net so the question
+// cannot stay open if the change never arrives: it closes the question and
+// moves nothing. Generous, because a slow device has been seen taking ~3.5 s.
+const STAY_ROUTER_UNDO_SAFETY_MS = 5000
 
 /**
  * After Stay, will the history's own restore bring the address back? The
@@ -261,9 +267,12 @@ export function SettingsScreen({
   //   - a jump of several entries at once through the browser's history menu
   //     from or to a typed entry can end on the wrong entry (step 3 assumes
   //     one step);
-  //   - Stay waits STAY_RESTORE_WAIT_MS (300 ms) for that step forward. If a
-  //     slow device delivers it later, Stay also steps back, the two moves
-  //     cancel out and the leave question can appear a second time.
+  //   - when a typed entry (no router state) is involved, Stay waits
+  //     STAY_RESTORE_WAIT_MS (300 ms) for that step forward. If a slow device
+  //     delivers it later, Stay also steps back, the two moves cancel out and
+  //     the leave question can appear a second time. Between two router
+  //     entries Stay never steps back itself; it waits for the router's exact
+  //     undo however late it comes (U6-5).
   const router = useRouter()
   const blocker = useBlocker({
     shouldBlockFn: () => draftCount > 0,
@@ -677,10 +686,29 @@ export function SettingsScreen({
                 setRestoring(false)
                 if (back) setTimeout(() => back.focus(), 0)
               }
-              if (homeHref === null || blockedHref === homeHref || willMove === true) {
-                // An in-app move never left the address, and a Back is put
-                // right by the history's own step forward.
+              // U6-5: the history's own undo is exact when the browser says
+              // it moves (willMove) or when both entries carry router state.
+              const undoIsExact = willMove === true || (willMove === undefined && browserMove && countsKnown && step === undefined)
+              if (homeHref === null || blockedHref === homeHref) {
+                // An in-app move never left the address.
                 done()
+              } else if (undoIsExact) {
+                // Wait for that undo however late it comes, and never add a
+                // step back of our own: a late undo plus our step back used to
+                // end one entry off, with a second question. Staying in the
+                // restoring state until it lands also keeps the blocked entry
+                // from being recorded as this section's home (U6-8: a second
+                // Stay took its exact step from that wrong home).
+                setRestoring(true)
+                let finished = false
+                const finish = () => {
+                  if (finished) return
+                  finished = true
+                  window.removeEventListener('popstate', finish)
+                  done()
+                }
+                window.addEventListener('popstate', finish)
+                setTimeout(finish, STAY_ROUTER_UNDO_SAFETY_MS)
               } else {
                 setRestoring(true)
                 // The history ignores the next address change after a Stay;
