@@ -2357,13 +2357,14 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
 	if tu.patch.Prompt != nil || tu.patch.Description != nil || tu.patch.Title != nil ||
 		tu.criteriaProvided || tu.dodProvided ||
-		tu.patch.Trigger != nil || tu.patch.AgentID != nil {
+		tu.patch.Trigger != nil || tu.patch.AgentID != nil || tu.patch.MaxAttempts != nil {
 		// FR-041 / S-111: an agent change to the task's instructions —
-		// prompt, description, title, criteria, DoD, trigger (when it runs)
-		// or agent_id (who runs it) — joins its turn's provenance in the
-		// same write (an unresolved turn joins an empty set: fail closed).
-		// applyTriggerField and applyReassignment set those two patch
-		// fields only on an accepted change.
+		// prompt, description, title, criteria, DoD, max_attempts (set or
+		// clear: the retry limit is in task.GroupDefinition), trigger (when
+		// it runs) or agent_id (who runs it) — joins its turn's provenance
+		// in the same write (an unresolved turn joins an empty set: fail
+		// closed). applyTriggerField, applyReassignment and applyRetryLimit
+		// set those patch fields only on an accepted change.
 		joined := provenanceStrings(ToolTurnProvenance(tu.ctx))
 		tu.patch.JoinProvenance = &joined
 	}

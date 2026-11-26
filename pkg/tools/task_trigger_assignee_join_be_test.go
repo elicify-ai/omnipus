@@ -31,6 +31,10 @@ func TestUpdateTask_TriggerOrAssigneeOnlyEditJoinsTheTurnsProvenance(t *testing.
 		{"assignee-only edit from a Telegram turn", map[string]any{"agent_id": "ray"}, telegram, []string{"connector:telegram", "web"}},
 		{"trigger-only edit from an unresolved turn", map[string]any{"trigger": futureOnce}, bus.UnresolvedProvenance(), nil},
 		{"assignee-only edit from an unresolved turn", map[string]any{"agent_id": "ray"}, bus.UnresolvedProvenance(), nil},
+		// F9: the retry limit is in task.GroupDefinition; set and clear both join.
+		{"max_attempts-only set from a Telegram turn", map[string]any{"max_attempts": float64(2)}, telegram, []string{"connector:telegram", "web"}},
+		{"max_attempts-only clear from a Telegram turn", map[string]any{"clear_max_attempts": true}, telegram, []string{"connector:telegram", "web"}},
+		{"max_attempts-only set from an unresolved turn", map[string]any{"max_attempts": float64(2)}, bus.UnresolvedProvenance(), nil},
 		{"control: priority-only edit from a Telegram turn joins nothing", map[string]any{"priority": float64(1)}, telegram, []string{"web"}},
 	}
 	for _, row := range rows {
@@ -42,7 +46,7 @@ func TestUpdateTask_TriggerOrAssigneeOnlyEditJoinsTheTurnsProvenance(t *testing.
 			webTurn.AddProvenance(bus.NewProvenance(bus.OriginWeb))
 			created := newProvenanceTool(t, store).Execute(WithTurnOrigin(ctx, webTurn), map[string]any{
 				"title": "S-111 trigger/assignee task", "prompt": "do the work", "agent_id": "jim",
-				"criteria": validCriteriaArg(), "dod": validDoDArg(),
+				"criteria": validCriteriaArg(), "dod": validDoDArg(), "max_attempts": float64(3),
 			})
 			if created.IsError {
 				t.Fatalf("create_task failed: %s", created.ForLLM)
@@ -80,6 +84,12 @@ func TestUpdateTask_TriggerOrAssigneeOnlyEditJoinsTheTurnsProvenance(t *testing.
 			}
 			if _, ok := row.args["trigger"]; ok && (got.Trigger == nil || got.Trigger.Type != task.TriggerOnce) {
 				t.Fatalf("instrument: trigger not changed, got %+v", got.Trigger)
+			}
+			if _, ok := row.args["max_attempts"]; ok && (got.MaxAttempts == nil || *got.MaxAttempts != 2) {
+				t.Fatalf("instrument: max_attempts not set, got %v", got.MaxAttempts)
+			}
+			if _, ok := row.args["clear_max_attempts"]; ok && got.MaxAttempts != nil {
+				t.Fatalf("instrument: max_attempts not cleared, got %d", *got.MaxAttempts)
 			}
 			if !reflect.DeepEqual(got.Provenance, row.want) {
 				t.Fatalf("task provenance after the edit = %v, want %v", got.Provenance, row.want)
