@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -23,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // errProjectSkillGated is the class of a C-25 refusal.
@@ -83,12 +85,21 @@ func projectSkillGates(home, agentID, workspaceID string, mountRoots []string) [
 			if d.Outcome == SkillOutcomeAskPending {
 				gate.Outcome, gate.Reason = fspolicy.ProjectSkillGateAsk, ProjectSkillAskText(ps.ID)
 			} else {
-				gate.Reason = SkillRefusalText(ps.ID, d.Reason)
+				gate.Reason = ProjectSkillRefusalText(ps.ID, WorkspaceLabel(home, workspaceID), d.Reason)
 			}
 			gates = append(gates, gate)
 		}
 	}
 	return gates
+}
+
+// WorkspaceLabel is the name a person knows workspace id by: its record's
+// name, or the id itself when the record is unreadable or has no name.
+func WorkspaceLabel(home, id string) string {
+	if name, _, ok := workspace.LoadTitle(home, id); ok && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return id
 }
 
 // projectSkillDecision is C-11 for one project skill: granted by the
