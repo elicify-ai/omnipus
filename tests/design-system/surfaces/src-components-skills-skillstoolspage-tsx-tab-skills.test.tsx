@@ -111,7 +111,7 @@ describe('Skills tab surface unit contract', () => {
     expect(screen.queryByRole('button', { name: /^blockchain/i })).toBeNull()
   })
 
-  // Part H (rulings F5, F6; team-lead's wording pin). The spec's Assumptions (line 3326 at b27c64109) write
+  // Part H (architect ruling F5; team-lead's wording pin). The spec's Assumptions (line 3326 at b27c64109) write
   // the categories of the built-in skills as "Tools", "Business", "Research", "Testing & Security" and
   // "Content & Media"; US-7 AS7 and S-104 write "Uncategorised". S-57 prints its group headers in capitals
   // (RESEARCH 1, TOOLS 12, UNCATEGORISED 31): that is the look, and the capitals come from CSS (ruling F5), so
