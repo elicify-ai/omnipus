@@ -27,6 +27,8 @@ async function assertMotion(state: string, requireMoving = false) {
   const rows = await motionSweepU4(state)
   if (requireMoving) expect(rows.filter((row) => !isStaticU4(row.normal)).length,
     `${state}: reach a real normal-motion loading animation, not only static row markers`).toBeGreaterThan(0)
+  expect.soft(rows.filter((row) => !row.normalPass),
+    `${state}/FR-075: EACH unprefixed non-none animate-* loading site must move normally; a moving sibling is not credit`).toEqual([])
   expect.soft(rows.filter((row) => !row.pass), `${state}/FR-075: every rendered animate-* candidate must stop under reduced motion`).toEqual([])
 }
 

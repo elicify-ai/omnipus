@@ -1,5 +1,8 @@
 // T4-5 / U4-2 — FR-070, US-9 AS5, SC-009. Rendered-control inventory, not geometry.
 // jsdom cannot prove 14px-root arithmetic, 44x44 hit boxes or 390px clipping; browser UAT must.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parse } from 'postcss'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -26,6 +29,11 @@ async function assertSweep(state: string, nonempty = true) {
 
 it.each(SECTIONS)('T4-5 — every visible control in loaded $section (including expanded groups)', async ({ section, path }) => {
   const t = transportG1()
+  if (section === 'sandbox') {
+    t.on('GET', '/security/sandbox-config', () => jsonG1({
+      ...t.defaults['/security/sandbox-config'] as object, workspace_path_guard: true,
+    }))
+  }
   const { client } = sectionG1(section)
   await waitFor(() => expect(t.calls.some((call) => call.path === path)).toBe(true))
   await waitFor(() => expect(client.isFetching()).toBe(0))
@@ -43,7 +51,19 @@ it.each(SECTIONS)('T4-5 — every visible control in loaded $section (including 
   }
   await waitFor(() => expect(client.isFetching()).toBe(0))
   if (section === 'providers') expect(screen.getByRole('combobox', { name: 'Active transcriber' })).toBeVisible()
-  await assertSweep(`loaded:${section}`)
+  const inventory = await assertSweep(`loaded:${section}`)
+  if (section === 'sandbox') {
+    const ids = ['sandbox-workspace-limit-on', 'sandbox-workspace-limit-off']
+    for (const id of ids) {
+      const radio = screen.getByTestId(id) as HTMLInputElement
+      expect(radio).toBeVisible()
+      expect(radio).toHaveAttribute('type', 'radio')
+      expect(radio.labels, 'U4-C4: the real radio must have its clickable label').toHaveLength(1)
+      expect(radio.labels![0]).toBeVisible()
+    }
+    expect(inventory.filter((row) => ids.includes(row.id)).map(({ id, labelTarget }) => ({ id, labelPass: labelTarget?.pass })),
+      'U4-C4: both Shell workspace limit labels must actually be swept and have their own touch contract').toEqual(ids.map((id) => ({ id, labelPass: true })))
+  }
   expect(t.writes()).toEqual([])
 })
 
@@ -77,6 +97,61 @@ it('U4-2 / T4-5 — all controls in the actual Connect Custom endpoint form carr
 // Popular company and a disabled option. Exact inputs prevent an empty/partial
 // virtual list or a Custom-endpoint-only sweep from passing as provider coverage.
 const PICKER_COMPANIES = ['Other cloud', 'R40 Alpha', 'R40 Beta', 'R40 Blocked', 'R40 Prime']
+
+function touchMinimumU42() {
+  const css = parse(readFileSync(resolve('src/styles/tokens.generated.css'), 'utf8'))
+  const values: string[] = []
+  css.walkDecls('--target-touch-minimum', (declaration) => { values.push(declaration.value.trim()) })
+  expect(values, 'FR-070 / US-9 AS5: read the registered spec token, never a picker constant').toHaveLength(1)
+  expect(values[0]).toMatch(/^\d+(?:\.\d+)?px$/)
+  return Number.parseFloat(values[0])
+}
+
+it.each([true, false])('U4-C3 / FR-070 — Connect row slots respect the touch token on coarse=%s, fine is the increasing-origin control', async (coarse) => {
+  const minimum = touchMinimumU42()
+  const t = transportG1()
+  // Install AFTER transportG1, which otherwise overwrites this browser input.
+  vi.stubGlobal('matchMedia', (media: string) => ({
+    matches: media === '(pointer: coarse)' ? coarse : media === '(pointer: fine)' ? !coarse : false,
+    media, onchange: null,
+    addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
+    dispatchEvent: () => false,
+  }))
+  expect(window.matchMedia('(pointer: coarse)').matches, 'instrument: coarse pointer answer reaches the page').toBe(coarse)
+  expect(window.matchMedia('(pointer: fine)').matches, 'instrument: fine pointer answer reaches the page').toBe(!coarse)
+  const nativeHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')?.get
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    // Virtual viewport input only; NEVER substitute a row's size/origin.
+    return this.dataset.testid === 'picker-virtual-viewport' ? 480 : nativeHeight?.call(this) ?? 0
+  })
+  t.on('GET', '/providers/catalog', () => jsonG1({ ...catalogG1, providers: PICKER_COMPANIES.map((company) => ({
+    ...catalogG1.providers[0], id: company.toLowerCase().replaceAll(' ', '-'), name: company, company,
+    tier: company === 'R40 Prime' ? 'popular' : company === 'R40 Blocked' ? 'unsupported' : 'standard',
+    aliases: [], ...(company === 'R40 Blocked' ? { unsupported_reason: 'cloud-iam' } : {}),
+  })) }))
+  const { client } = sectionG1('providers')
+  await userEvent.click(await screen.findByRole('button', { name: 'Connect a provider' }))
+  await waitFor(() => expect(client.isFetching()).toBe(0))
+  const sheet = screen.getByRole('dialog', { name: 'Connect a provider' })
+  await userEvent.click(within(sheet).getByTestId('picker-all-toggle'))
+  const ids = PICKER_COMPANIES.map((name) => `picker-row-${name}`)
+  await waitFor(() => expect(within(sheet).getAllByTestId(/^picker-row-/).map((row) => row.dataset.testid)).toEqual(ids))
+  const rows = within(sheet).getAllByTestId(/^picker-row-/).map((row) => ({
+    id: row.dataset.testid,
+    y: Number.parseFloat(/translateY\(([-\d.]+)px\)/.exec(row.style.transform)?.[1] ?? 'NaN'),
+    height: Number.parseFloat(row.style.height),
+  }))
+  const gaps = rows.slice(1).map((row, i) => row.y - rows[i].y)
+  console.info('R42_SLOT ' + JSON.stringify({ coarse, minimum, rows, gaps }))
+  expect(rows.filter((row) => !Number.isFinite(row.y) || !Number.isFinite(row.height)), 'instrument: real inline origins and heights').toEqual([])
+  expect(gaps.filter((gap) => gap <= 0), 'control: every real row origin increases, including the fine arm').toEqual([])
+  expect(rows.filter((row) => row.height <= 0), 'control: every real inline row height is positive').toEqual([])
+  if (coarse) {
+    expect.soft(gaps.filter((gap) => gap < minimum), 'FR-070: coarse row slots, not only painted minimum heights, must stay the touch minimum apart').toEqual([])
+    expect.soft(rows.filter((row) => row.height < minimum), 'FR-070: each coarse row height must reach the registered touch minimum').toEqual([])
+  }
+  expect(t.writes()).toEqual([])
+})
 it.each(['expanded', 'search'] as const)('T4-8 / T4-5 — every provider row in the %s Connect list has the coarse touch minimum', async (state) => {
   const t = transportG1()
   const nativeHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')?.get
