@@ -152,8 +152,14 @@ func TestProgramSave_BusyStore(t *testing.T) {
 		require.Contains(t, w.Body.String(), "The credential store is busy. Try again.",
 			"the busy message (S-146)")
 		admissionMu.Lock()
-		require.NotEmpty(t, admissions, "instrument: the paste's own transaction asked for admission")
-		storeWaitStart := admissions[len(admissions)-1]
+		// The hook was installed after the holder was already inside its
+		// transaction, so every admission it saw belongs to this paste. The
+		// paste asks the store once: a second admission would be a retry after
+		// ErrStoreBusy, which waits another 5 s inside one request. Anchoring on
+		// the FIRST admission keeps such a retry inside the measured window, so
+		// it fails the upper bound below (CHECK round 6, F10).
+		require.Len(t, admissions, 1, "instrument: the paste's own transaction asked for admission exactly once, a retry after ErrStoreBusy would wait the bound again")
+		storeWaitStart := admissions[0]
 		admissionMu.Unlock()
 		storeWait := end.Sub(storeWaitStart)
 		require.GreaterOrEqual(t, elapsed, 4500*time.Millisecond, "the paste waited the 5 s bound")
