@@ -1573,3 +1573,35 @@ describe('ModelSelector — H6 R2 visible check mark (not only the data-chosen m
     expect(rowCheckOpacity(rows[1])).toBe('0')
   })
 })
+
+// =====================================================================
+// U7-1: grouped and flat rows (the agent form's list) cut a long name
+// short with an ellipsis instead of wrapping or running past the popup,
+// and keep the full name on the row. jsdom has no layout: classes only.
+// =====================================================================
+
+describe('ModelSelector — U7-1 long names in grouped and flat rows', () => {
+  const LONG = 'upstage/solar-pro-4-contributor-preview-long-name'
+  it('grouped rows: the name truncates and carries its full text', () => {
+    const groups: ModelGroup[] = [
+      { providerName: 'OpenRouter', providerId: 'openrouter', models: [LONG, 'upstage/solar-mini4'] },
+      { providerName: 'OpenAI', providerId: 'openai', models: ['gpt-4o'] },
+    ]
+    renderSelector(groups.flatMap((g) => g.models), '', vi.fn(), groups)
+    for (const model of [LONG, 'upstage/solar-mini4', 'gpt-4o']) {
+      const name = screen.getByText(model, { selector: '[cmdk-item] span' })
+      expect(name.title, model).toBe(model)
+      expect(name.className, model).toContain('truncate')
+      expect(name.className, model).toContain('min-w-0')
+    }
+  })
+
+  it('flat rows: the name truncates and carries its full text', () => {
+    renderSelector([LONG, 'gpt-4o'], '', vi.fn())
+    for (const model of [LONG, 'gpt-4o']) {
+      const name = screen.getByText(model, { selector: '[cmdk-item] span' })
+      expect(name.title, model).toBe(model)
+      expect(name.className, model).toContain('truncate')
+    }
+  })
+})

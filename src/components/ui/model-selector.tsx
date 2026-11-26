@@ -786,6 +786,10 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
         value={`${row.providerId}:${row.model.id}`}
         onSelect={() => handleSelect(row.model.id, row.providerId)}
         data-model={row.model.id}
+        // U7-2: a virtual row fills its slot exactly and clips anything taller
+        // (a recommended badge made a row 33.19 px in a 32 px slot, so its
+        // bottom edge picked the next model).
+        className={virtualiseCatalog ? 'h-full overflow-hidden' : undefined}
         // FR-029: "chosen" is the operator's pick. cmdk's own aria-selected
         // tracks the keyboard cursor, which lands on the first row the moment
         // the list opens — it can never answer "did the user choose one?".
@@ -925,7 +929,9 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
       <PopoverContent
         // U6-6: Tailwind v4 compiles `w-[--x]` to the invalid `width: --x`,
         // which left this popup at the primitive's narrow default width.
-        className="w-[var(--radix-popover-trigger-width)] p-0"
+        // U7-1: at least 18rem (the agent form's trigger is ~110 px at 390),
+        // the trigger width if wider, capped at the free viewport width.
+        className="w-[max(18rem,var(--radix-popover-trigger-width))] max-w-[var(--radix-popover-content-available-width)] p-0"
         align="start"
         // WAI-ARIA Combobox Pattern 1.2 (WCAG 1.3.1, 2.4.6, 4.1.2):
         // the trigger above carries `role="combobox"` + `aria-expanded`
@@ -1014,7 +1020,8 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                             className="mr-[var(--space-2)] shrink-0"
                             style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                           />
-                          <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                          {/* U7-1: a long name is cut short with an ellipsis; the full name stays on the row. */}
+                          <span title={model} className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                           {isAgentDefaultRow(model, group.providerId) && renderDefaultChip()}
                         </CommandItem>
                       )
@@ -1053,7 +1060,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                           className="mr-[var(--space-2)] shrink-0"
                           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                         />
-                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                        <span title={model} className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                         {isAgentDefaultRow(model, undefined) && renderDefaultChip()}
                       </CommandItem>
                     )

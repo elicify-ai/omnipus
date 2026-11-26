@@ -123,12 +123,14 @@ describe('U6-6 a recommended row still shows its model name', () => {
   // invalid `width: --x`, so the popup fell back to its narrow 18rem default),
   // the name keeps a floor of the row so the badge cannot take its place, and
   // the full name is on the row for hover and for assistive technology.
-  it('the popup takes the trigger width, the name keeps its floor and its full text', async () => {
+  // (U7-1 narrowed "takes the trigger width" to "at least 18rem or the trigger
+  // if wider"; the exact width contract is pinned in the U7-1 case below.)
+  it('the popup has a real CSS width, the name keeps its floor and its full text', async () => {
     pointer(false)
     await openPicker()
     const list = document.querySelector('[cmdk-list]') as HTMLElement
     const popup = list.closest('[data-radix-popper-content-wrapper] > *') as HTMLElement
-    expect(popup.className).toContain('w-[var(--radix-popover-trigger-width)]')
+    expect(popup.className).toContain('var(--radix-popover-trigger-width)')
     expect(popup.className).not.toMatch(/w-\[--/)
     const recommended = [...document.querySelectorAll<HTMLElement>('[cmdk-item][data-recommended]')]
     expect(recommended.length).toBeGreaterThan(0)
@@ -145,4 +147,41 @@ describe('U6-6 a recommended row still shows its model name', () => {
       expect(badge?.className).toContain('truncate')
     }
   })
+})
+
+describe('U7-1 the model popup is readable even on a narrow trigger', () => {
+  // The agent form's trigger is about 110 px wide at 390 coarse; a popup that
+  // only takes the trigger width clips every name. jsdom has no layout: this
+  // pins the width contract (at least 18rem, the trigger if wider, capped at
+  // the free viewport width); the physical width stays a browser check.
+  it('sizes to max(18rem, trigger width), capped at the free viewport width', async () => {
+    pointer(true)
+    await openPicker()
+    const list = document.querySelector('[cmdk-list]') as HTMLElement
+    const popup = list.closest('[data-radix-popper-content-wrapper] > *') as HTMLElement
+    const classes = popup.className.split(/\s+/)
+    expect(classes).toContain('w-[max(18rem,var(--radix-popover-trigger-width))]')
+    expect(classes).toContain('max-w-[var(--radix-popover-content-available-width)]')
+    expect(classes).not.toContain('w-[var(--radix-popover-trigger-width)]')
+  })
+})
+
+describe('U7-2 no row is taller than its virtual slot', () => {
+  // A recommended row measured 33.19 px in a 32 px slot at 1280 fine, so its
+  // bottom edge picked the next model. Each row fills its slot exactly and
+  // clips anything taller. jsdom has no layout: this pins the classes.
+  for (const coarse of [false, true]) {
+    it(`${coarse ? 'coarse' : 'fine'} pointer: every row fills its slot and clips overflow`, async () => {
+      pointer(coarse)
+      const rows = await virtualSlots()
+      const recommended = rows.filter((slot) => slot.querySelector('[cmdk-item][data-recommended]'))
+      expect(recommended.length).toBeGreaterThan(0)
+      for (const slot of rows) {
+        const item = slot.querySelector('[cmdk-item]')
+        if (!item) continue
+        expect(item.className, item.getAttribute('data-model') ?? '').toContain('h-full')
+        expect(item.className, item.getAttribute('data-model') ?? '').toContain('overflow-hidden')
+      }
+    })
+  }
 })
