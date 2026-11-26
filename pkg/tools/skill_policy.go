@@ -100,6 +100,27 @@ func ResolveSkillDecision(in SkillDecisionInput) SkillDecision {
 	return d
 }
 
+// SkillOutcomeOf is ResolveSkillDecision over the stored vocabulary of one
+// skill's inputs (C-11, Dataset D1): grant, global value, the agent's own
+// value, trust ("" = no entry), verification and God Mode, with no trust
+// approval recorded. It returns the outcome (deny, ask_pending or allow)
+// and, when the grant gate refused, the refusal "not granted"; any other
+// deny names its setting at the entry point (SkillRefusalText).
+func SkillOutcomeOf(granted bool, global, agentValue, trust string, verified, godMode bool) (outcome, refusal string) {
+	d := ResolveSkillDecision(SkillDecisionInput{
+		Granted:  granted,
+		Global:   config.ToolPolicy(global),
+		Agent:    config.ToolPolicy(agentValue),
+		Trust:    config.SkillTrustLevel(trust),
+		Verified: verified,
+		GodMode:  godMode,
+	})
+	if d.Reason == SkillDenyNotGranted {
+		refusal = "not granted"
+	}
+	return string(d.Outcome), refusal
+}
+
 // SkillRefusalText words a deny for the person and the model (C-3, C-11).
 func SkillRefusalText(skill string, reason SkillDenyReason) string {
 	switch reason {
