@@ -110,7 +110,9 @@ export function DeleteAgentControl({ agentId, agentName, revision }: DeleteAgent
         variant="destructive"
         data-testid="delete-agent-button"
         onClick={() => setStep(1)}
-        className="ml-auto"
+        // U7-3 / FR-070: beside the long autosave note the footer row shrank
+        // this button below its label; the note wraps instead.
+        className="ml-auto shrink-0"
       >
         <Trash size={13} className="mr-[var(--space-1)]" />
         Delete agent
