@@ -367,7 +367,7 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("opencode", opts.CLIArgs)
 	logDroppedCLIArgs("runner/opencode", "opencode", opts.RunID, dropped)
 	args = append(args, kept...)
-	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
+	args = append(args, presetArgsForBuild("runner/opencode", "opencode", opts)...) // r17 §3.7 after the agent args; only a model option is dropped (#1880)
 	// ADR-032 fix N-1: the literal "--" end-of-options separator forces
 	// everything after it to be treated as positional message content,
 	// regardless of what it looks like — see the buildArgs doc comment above.
@@ -682,44 +682,109 @@ func undecodableOpencodeEvent(runID, kind string, err error) RunEvent {
 	}
 }
 
-// parseOpencodeError handles the "error" event. opencode ≥ 2.x nests the
-// payload: error.message carries the diagnostic and error.type its kind; the
-// ≥ 0.1.0 vocabulary carried the message at the top level, and that shape
-// stays supported. The provider's own diagnostic is surfaced VERBATIM as a
-// fatal error — it must reach the user, never collapse into a generic
-// message — and the kind is logged so it is not silently dropped.
+// parseOpencodeError handles the "error" event. The provider's own diagnostic
+// is surfaced as a fatal error — it must reach the operator, never collapse
+// into a generic message — and the error kind is logged so it is not silently
+// dropped. Three payload shapes are read (opencodeErrorDiagnostic):
+//
+//   - opencode ≥ 2.x: error.message carries the diagnostic, error.type its kind;
+//     surfaced verbatim.
+//   - opencode 1.x (captured from 1.18.18): error.name carries the kind and
+//     error.data the diagnostic, with data.message and a data.ref the CLI's
+//     own server log is keyed by; surfaced as "<name>: <message> (ref <ref>)".
+//   - the ≥ 0.1.0 vocabulary: the message at the top level; surfaced verbatim.
 func parseOpencodeError(raw []byte, runID string) []RunEvent {
-	var ev struct {
-		Message string `json:"message"`
-		Error   struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	var msg, errType string
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		// Shape mismatch (the line is valid JSON — rawJSONField already matched
-		// its "type" — but error is not the expected object): fall back to the
-		// ≥ 0.1.0 top-level extraction rather than dropping the event.
-		msg, _ = rawJSONField(raw, "message")
-	} else {
-		msg = ev.Error.Message
-		if msg == "" {
-			msg = ev.Message
-		}
-		errType = ev.Error.Type
-	}
+	msg, errKind := opencodeErrorDiagnostic(raw)
 	if msg == "" {
 		msg = "unknown opencode error"
 	}
-	if errType != "" {
-		slog.Warn("runner/opencode: stream error", "run_id", runID, "error_type", errType, "message", msg)
+	if errKind != "" {
+		slog.Warn("runner/opencode: stream error", "run_id", runID, "error_type", errKind, "message", msg)
 	}
 	return []RunEvent{{
 		Kind:  EventKindError,
 		RunID: runID,
-		Err:   &ErrorEvent{Message: msg, Fatal: true, Type: errType},
+		// Type is the structured error.type alone (#1857), the classifier's
+		// input; the 1.x error name only names the error in msg and the log.
+		Err: &ErrorEvent{Message: msg, Fatal: true, Type: rawJSONString(rawJSONObject(raw, "error"), "type")},
 	}}
+}
+
+// opencodeErrorDiagnostic extracts an "error" event's diagnostic text and its
+// kind (error.type, else error.name). Each field is read on its own, so one
+// field of an unexpected type never discards the others: an error that is not
+// an object (or a data that is not one) leaves the remaining fields readable.
+// Precedence: error.message (verbatim), then error.data.message with the
+// error's name and data.ref kept, then the top-level message, then the name
+// and reference alone. An empty result means nothing readable was sent.
+func opencodeErrorDiagnostic(raw []byte) (msg, kind string) {
+	top, _ := rawJSONField(raw, "message")
+	errObj := rawJSONObject(raw, "error")
+	errType := rawJSONString(errObj, "type")
+	name := rawJSONString(errObj, "name")
+	kind = errType
+	if kind == "" {
+		kind = name
+	}
+	if typed := rawJSONString(errObj, "message"); typed != "" {
+		return typed, kind
+	}
+	data := rawJSONObject(errObj["data"], "")
+	dataMsg := rawJSONString(data, "message")
+	ref := rawJSONString(data, "ref")
+	switch {
+	case dataMsg != "":
+		msg = dataMsg
+		if name != "" && !strings.Contains(dataMsg, name) {
+			msg = name + ": " + dataMsg
+		}
+	case top != "":
+		return top, kind
+	default:
+		msg = name
+	}
+	if ref != "" {
+		if msg == "" {
+			msg = "ref " + ref
+		} else {
+			msg += " (ref " + ref + ")"
+		}
+	}
+	return msg, kind
+}
+
+// rawJSONObject decodes field of the JSON object data (or data itself when
+// field is empty) as an object of raw members. Anything that is not an
+// object yields nil, which rawJSONString reads as "no value".
+func rawJSONObject(data []byte, field string) map[string]json.RawMessage {
+	if field != "" {
+		var outer map[string]json.RawMessage
+		if json.Unmarshal(data, &outer) != nil {
+			return nil
+		}
+		data = outer[field]
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) != nil {
+		return nil
+	}
+	return obj
+}
+
+// rawJSONString returns obj[field] when it is a JSON string, else "".
+func rawJSONString(obj map[string]json.RawMessage, field string) string {
+	raw, ok := obj[field]
+	if !ok {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // Decide routes a permission decision (FR-5.1).
@@ -781,6 +846,15 @@ func (d *OpencodeDriver) Resume(ctx context.Context, runID string, instruction .
 	// delivers nothing and never replays the original prompt.
 	opts.Input = resumeInstruction(instruction)
 	return d.ResumeWith(ctx, opts)
+}
+
+// HasNativeConversation reports whether the current or most recent run has
+// announced its opencode session id, so an interrupt can be followed by a
+// Resume of the same conversation (#1899; see NativeConversationReporter).
+func (d *OpencodeDriver) HasNativeConversation() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.nativeID != ""
 }
 
 // ResumeWith continues the same native session under opts, not the prior

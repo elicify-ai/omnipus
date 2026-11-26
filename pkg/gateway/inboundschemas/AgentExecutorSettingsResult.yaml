@@ -44,7 +44,7 @@ properties:
         description: The stored cli_args after tokenisation, in order.
       dropped_at_run:
         type: array
-        description: Tokens the safety filter will drop at run time, with its reason.
+        description: Tokens of the stored cli_args the run filter will drop at run time, with its reason. The run filter is the safety filter plus any model option, which is dropped because the worker's model field sets the model.
         items:
           type: object
           additionalProperties: false

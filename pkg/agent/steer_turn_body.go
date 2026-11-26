@@ -178,9 +178,29 @@ func runtimeLabel(is3P bool) string {
 // cancel racing its tail registers a finish callback that can never fire.
 // Same shape as the task-mode external dispatch
 // (task_executor_run.go::processTaskDirectExternalCLI).
-func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (turnResult, error) {
+//
+// Live view (#1895): like runTurn's deferred finalizeStreamer, the turn's live
+// view is finished between clearActiveTurn and Finish — each CLI text segment
+// went live under its saved row's id (externalLiveOutput), and the tail sends
+// one error frame for a failure nothing announced yet, then exactly one done.
+func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (result turnResult, runErr error) {
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
+	defer func() {
+		if al.deferExternalLiveDoneForResume(ts, rec.SessionID, runErr) {
+			return
+		}
+		if liveErr := al.finishExternalLiveView(ctx, ts, runErr); liveErr != nil {
+			// A done that could not be finalized is a failed turn, as on the
+			// native path (#1178); never only a log line.
+			runErr = errors.Join(runErr, liveErr)
+			result.status, result.turnFailed = TurnEndStatusError, true
+			if result.finalContent == "" {
+				result.finalContent = liveErr.Error()
+			}
+		}
+	}()
 	defer al.clearActiveTurn(ts)
+	ts.externalLiveOutput = true
 
 	// runExternalCLISubTurn reads agent.Model unlocked (transcript attribution
 	// + RunOptions.Model). The reconstructed turn's agent is the shared
@@ -192,27 +212,27 @@ func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session
 	ts.agent = ts.agent.snapshotForExternalDispatch()
 
 	input := composeDelegateInput(al, steeredExternalCLIInput(ts), "", ts.agent.ID)
-	result, runErr := runExternalCLISubTurn(ctx, al, ts, input)
-	if result == nil {
+	toolResult, dispatchErr := runExternalCLISubTurn(ctx, al, ts, input)
+	if toolResult == nil {
 		// runExternalCLISubTurn's two return shapes are (nil, err) and
 		// (result, result.Err). A nil result with a nil error is a broken
 		// invariant; fail loudly rather than reporting an empty success, the
 		// same choice processTaskDirectExternalCLI made for its dead branch.
-		if runErr == nil {
-			runErr = errExternalDispatchNilResult
+		if dispatchErr == nil {
+			dispatchErr = errExternalDispatchNilResult
 		}
-		return turnResult{status: TurnEndStatusError, finalContent: runErr.Error(), turnFailed: true}, runErr
+		return turnResult{status: TurnEndStatusError, finalContent: dispatchErr.Error(), turnFailed: true}, dispatchErr
 	}
 
-	answer := strings.TrimSpace(result.ForUser)
+	answer := strings.TrimSpace(toolResult.ForUser)
 	if answer == "" {
-		answer = strings.TrimSpace(result.ForLLM)
+		answer = strings.TrimSpace(toolResult.ForLLM)
 	}
 	status := TurnEndStatusCompleted
-	if runErr != nil {
+	if dispatchErr != nil {
 		status = TurnEndStatusError
 	}
-	return turnResult{status: status, finalContent: answer, turnFailed: runErr != nil}, runErr
+	return turnResult{status: status, finalContent: answer, turnFailed: dispatchErr != nil}, dispatchErr
 }
 
 // errExternalDispatchNilResult is the invariant violation named above — a

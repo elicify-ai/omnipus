@@ -375,8 +375,7 @@ func (t *DelegateTool) steerExternalCLI(ctx context.Context, args map[string]any
 			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 		}
 		requestedCorrelationID, _ := stringArg(args, "correlation_id")
-		resolved, derr := deliverer.DeliverExternalCLIInstruction(
-			ctx, sessionID, rec.AgentID,
+		resolved, interrupted, derr := deliverExternalCLI(ctx, deliverer, sessionID, rec.AgentID,
 			providers.Message{Role: "user", Content: text}, requestedCorrelationID)
 		if derr != nil {
 			// Truthful visible refusal: no live conversation, or the
@@ -388,10 +387,7 @@ func (t *DelegateTool) steerExternalCLI(ctx context.Context, args map[string]any
 			}
 			return controlFailure("steer", fmt.Sprintf("not_steerable: the live instruction for session %s could not be delivered right now; retry shortly", sessionID), derr)
 		}
-		return NewToolResult(fmt.Sprintf(
-			"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
-			sessionID, resolved,
-		))
+		return NewToolResult(externalSteerResultText(sessionID, resolved, interrupted))
 	}
 	return ErrorResult(fmt.Sprintf(
 		"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
@@ -460,6 +456,61 @@ type steerReviver interface {
 // exist for the native path.
 type steerExternalCLIDeliverer interface {
 	DeliverExternalCLIInstruction(ctx context.Context, sessionID, agentID string, msg providers.Message, correlationID string) (string, error)
+}
+
+// steerExternalCLIDeliveryReporter is the optional capability that also says
+// how the instruction reached the run (A1): interrupted (the run was stopped
+// and the same conversation continues with it now) or queued without an
+// interrupt (delivered to the same conversation when the current run ends).
+// The production *agent.AgentLoop implements it.
+type steerExternalCLIDeliveryReporter interface {
+	DeliverExternalCLIInstructionReporting(ctx context.Context, sessionID, agentID string, msg providers.Message, correlationID string) (resolved string, interrupted bool, err error)
+}
+
+// externalDelivery is how an instruction reached an external CLI run.
+// externalDeliveryUnknown is a sink that cannot say whether the run was
+// interrupted; the result text then claims neither case.
+type externalDelivery int
+
+const (
+	externalDeliveryUnknown externalDelivery = iota
+	externalDeliveryQueued
+	externalDeliveryInterrupted
+)
+
+// deliverExternalCLI delivers through the reporting capability when the sink
+// has it, so the result text can state what happened.
+func deliverExternalCLI(ctx context.Context, d steerExternalCLIDeliverer, sessionID, agentID string,
+	msg providers.Message, correlationID string,
+) (string, externalDelivery, error) {
+	if r, ok := d.(steerExternalCLIDeliveryReporter); ok {
+		resolved, interrupted, err := r.DeliverExternalCLIInstructionReporting(ctx, sessionID, agentID, msg, correlationID)
+		if interrupted {
+			return resolved, externalDeliveryInterrupted, err
+		}
+		return resolved, externalDeliveryQueued, err
+	}
+	resolved, err := d.DeliverExternalCLIInstruction(ctx, sessionID, agentID, msg, correlationID)
+	return resolved, externalDeliveryUnknown, err
+}
+
+// externalSteerResultText is the steer result the parent agent reads: a plain
+// statement of what happened to the instruction.
+func externalSteerResultText(sessionID, correlationID string, how externalDelivery) string {
+	switch how {
+	case externalDeliveryInterrupted:
+		return fmt.Sprintf(
+			"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
+			sessionID, correlationID)
+	case externalDeliveryQueued:
+		return fmt.Sprintf(
+			"Steering message queued for external CLI session %s (correlation_id=%s); it reaches the same conversation after the current run ends.",
+			sessionID, correlationID)
+	default:
+		return fmt.Sprintf(
+			"Steering message delivered to external CLI session %s (correlation_id=%s); it will reach the same conversation.",
+			sessionID, correlationID)
+	}
 }
 
 // steerSinkWithEnqueueStatus is satisfied by agent's delegateSteeringSink

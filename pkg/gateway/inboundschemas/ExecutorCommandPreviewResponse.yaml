@@ -3,11 +3,14 @@ description: >
   The REAL, computed command Omnipus would run for the previewed executor
   settings — argv sourced from the same buildArgs() each driver uses at real
   dispatch time, not a hand-maintained description. Purely informational;
-  nothing here is persisted. cli_args tokens the safety filter would strip at
-  real dispatch time are surfaced in dropped_args rather than silently
-  omitted, so the operator can see and fix a mistyped or disallowed argument
-  before saving instead of discovering later (via a server log line they
-  never see) that it was ignored.
+  nothing here is persisted. Every token a real run would drop is surfaced
+  in dropped_args rather than silently omitted: cli_args tokens the run
+  filter strips (the safety filter, plus any model option, because the
+  worker's model field sets the model), and a model option in the saved
+  standard parameters when Omnipus passes the worker's own model. The
+  operator can see and fix a mistyped or disallowed argument before saving
+  instead of discovering later (via a server log line they never see) that
+  it was ignored.
 required:
   - binary
   - argv
@@ -31,9 +34,11 @@ properties:
     description: >
       The exact, ordered argument list that would be passed to the binary,
       already reflecting the previewed model/cli_args/
-      max_tool_iterations and with any denylisted cli_args tokens already
-      removed (see dropped_args for what was removed and why), followed by
-      the person's saved standard parameters, which are not filtered. Does not
+      max_tool_iterations and with the cli_args tokens the run filter drops
+      already removed (see dropped_args for what was removed and why),
+      followed by the person's saved standard parameters. From those only a
+      model option is removed, and only when Omnipus passes the worker's own
+      model; nothing else in them is filtered. Does not
       include a token for the task prompt itself for claude-code or codex
       (delivered via stdin, not argv — see prompt_delivery); for opencode the
       literal placeholder "<prompt>" appears in the position the real task
@@ -74,9 +79,12 @@ properties:
   dropped_args:
     type: array
     description: >
-      Every token from the previewed cli_args that the safety filter
-      (argsafety.go) removed before it reached argv, with why. Empty when
-      cli_args was empty or every token was kept.
+      Every token removed before it reached argv, with why. First the
+      previewed cli_args tokens the run filter (argsafety.go) removed: the
+      safety filter's tokens and any model option, which is always dropped
+      because the worker's model field sets the model. Then any model option
+      from the saved standard parameters, dropped because Omnipus passes the
+      worker's own model. Empty when nothing was dropped.
     items:
       type: object
       required:
@@ -86,7 +94,7 @@ properties:
       properties:
         flag:
           type: string
-          description: The exact cli_args token (or flag=value pair) that was dropped.
+          description: The exact token (or flag=value pair) that was dropped, from cli_args or the standard parameters.
         reason:
           type: string
           description: Why this token is not permitted for this CLI.

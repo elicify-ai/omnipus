@@ -178,25 +178,29 @@ type runExternalCLISubTurnState struct {
 // it. Emitting the catalogue frame AND appending the classified error is
 // what makes the refusal visible in the child's own view and as a status
 // line in the parent's side panel.
+//
+// The frame addresses the run's OWN session (emitExternalErrorFrame), like every
+// native terminal error: for a steered helper that is the helper's chat, not the
+// cascade root's (#1895, ADR-091 D1).
 func (ed *runExternalCLISubTurnState) reportWorkspaceRefusal(wsErr error) error {
 	llm := TranslateTurnError(wsErr)
-	chatID := ed.childTS.chatID
-	if chatID == "" {
-		chatID = ed.childTS.opts.ChatID
-	}
-	ed.al.emitEvent(
-		EventKindError,
-		ed.childTS.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "workspace",
-			ChatID:    chatID,
-			SessionID: string(ed.childTS.routingSessionID),
-			Code:      string(llm.Code),
-			Message:   llm.Message,
-		},
-	)
+	ed.al.emitExternalErrorFrame(ed.childTS, "workspace", llm, "")
 	ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
 	return fmt.Errorf("external-cli dispatch: %w", wsErr)
+}
+
+// resumeUnavailableResult is the dispatch's B16a refusal (§13.8.5):
+// delegation_not_resumable for every surface. The returned error carries the
+// chat form for the helper's own view (finishExternalLiveView announces and
+// saves it); the result carries the code and the neutral form for the parent,
+// a surface outside the chat, as a classified run failure does. Both keep
+// errExternalResumeUnavailable's identity.
+func resumeUnavailableResult(cli string, cause error) (*tools.ToolResult, error) {
+	refusal := newResumeUnavailableRefusal(cli, cause)
+	return &tools.ToolResult{
+		Err:    refusal,
+		ForLLM: "(" + string(refusal.code) + ") " + refusal.neutral,
+	}, refusal
 }
 
 func runExternalCLISubTurn(
@@ -218,6 +222,19 @@ func runExternalCLISubTurn(
 	if cli == "" {
 		return nil, newExternalCLIRefusal(CodeExternalCLIInvalidConfig, cliVariantNoProgram, "",
 			fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)"))
+	}
+
+	// #1857 B16a first: a later entry whose CLI conversation is gone can never
+	// continue, whatever its program or workspace (externalResumeMissing).
+	// NEW-3: an unreadable session record refuses before any driver exists;
+	// it must never fall through to a fresh, unmarked run.
+	sessionKey := externalRunSessionKey(ed.childTS)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
+	if al.externalResumeMissing(sessionKey, ed.childTS, resumeOnly) {
+		return resumeUnavailableResult(cli, fmt.Errorf("external-cli dispatch: %w", errExternalResumeUnavailable))
 	}
 
 	ed.runID = ed.childTS.turnID
@@ -362,17 +379,14 @@ func runExternalCLISubTurn(
 	//    fake/stub driver. cancel is the run's own cancel func, retained on the
 	//    holder so a steer delivery interrupts THIS run (N2). resumeOnly is true
 	//    for a steered (non-task) session, whose every post-launch entry must
-	//    resume-or-refuse.
-	sessionKey := externalRunSessionKey(ed.childTS)
-	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
-	if resumeOnlyErr != nil {
-		// NEW-3: an unreadable session record refuses before any driver exists;
-		// it must never fall through to a fresh, unmarked run.
-		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
-	}
+	//    resume-or-refuse (read at the top, with the B16a check).
 	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
 	if beginErr != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
+		wrapped := fmt.Errorf("external-cli dispatch: %w", beginErr)
+		if errors.Is(beginErr, errExternalResumeUnavailable) {
+			return resumeUnavailableResult(cli, wrapped)
+		}
+		return nil, wrapped
 	}
 	defer al.finishExternalRun(sess, sessionKey)
 
@@ -434,8 +448,7 @@ func runExternalCLISubTurn(
 	if driverErr != nil {
 		wrapped := fmt.Errorf("external-cli dispatch: %w", driverErr)
 		if errors.Is(driverErr, errExternalResumeUnavailable) {
-			// B16a (resume unavailable) is a separate class, not this round.
-			return nil, wrapped
+			return resumeUnavailableResult(cli, wrapped)
 		}
 		// #1857 B16-config: the driver could not be built (selected by error
 		// identity, not call site — §13.8.5).
@@ -701,7 +714,7 @@ func drainExternalRun(
 			case runner.EventKindOutput:
 				if ev.Output != nil && ev.Output.Text != "" {
 					sb.WriteString(ev.Output.Text)
-					childTS.appendIntermediateAssistantTranscript(ev.Output.Text, transcriptModelFor(childTS.agent))
+					childTS.recordExternalOutput(al, ev.Output.Text, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
@@ -1255,35 +1268,25 @@ func emitExternalCLIErrorEvent(
 	if runnerErr == nil {
 		return
 	}
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage: "external_cli",
-			// FIX 4: ChatID was never set here, unlike every other
-			// ErrorPayload construction site (ts.opts.ChatID) — the WS
-			// forwarder's matchesChatID gate (pkg/gateway/websocket.go)
-			// never matches an empty ChatID, so this event was silently
-			// dropped for every live subscriber. External-CLI errors
-			// (claude-code/codex/opencode sub-turns) were invisible live,
-			// appearing only after a page reload replayed the transcript.
-			ChatID:    ts.opts.ChatID,
-			SessionID: string(ts.routingSessionID),
-			// FIX 3: SanitizeRunnerError already computed the classifier
-			// code (sanitized.Code) alongside sanitized.AssistantText —
-			// thread it through so the WS forwarder (FIX 2) can use the
-			// already-computed code/message pair instead of re-translating.
-			Code:    string(sanitized.Code),
-			Message: sanitized.AssistantText,
-			Detail:  sanitized.technicalDetail,
-		},
-	)
-	// Mirror to the JSONL transcript via the write choke point. The raw
-	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
-	// transcript gets the generic copy.
-	ts.appendClassifiedError(EventKindError.String(), "external_cli", LLMError{
+	llm := LLMError{
+		// FIX 3: SanitizeRunnerError already computed the classifier code
+		// (sanitized.Code) alongside sanitized.AssistantText — the frame and
+		// the transcript use that pair instead of re-translating.
 		Code:      sanitized.Code,
 		Message:   sanitized.AssistantText,
 		Retryable: isRetryable(sanitized.Code),
-	})
+	}
+	// The frame addresses the run's OWN session, like every native terminal
+	// error: for a steered helper that is the helper's chat, where its viewers
+	// are subscribed. It used to stamp the cascade root's routing id, so a
+	// helper's CLI failure never reached the helper's own chat live (#1895,
+	// ADR-091 D1). FIX 4 stands: ChatID is set (emitExternalErrorFrame).
+	// #1857: only the live frame carries the safe technical details (CLI
+	// display name, exit status, kind); the transcript keeps the code and
+	// the rendered sentence, as before.
+	al.emitExternalErrorFrame(ts, "external_cli", llm, sanitized.technicalDetail)
+	// Mirror to the JSONL transcript via the write choke point. The raw
+	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
+	// transcript gets the generic copy.
+	ts.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 }

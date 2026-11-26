@@ -1,0 +1,270 @@
+id: scheduled-work
+title: 'How background work starts on its own: heartbeats, Calendar tasks, chat loops and the task queue'
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'Nothing in Omnipus runs on a single shared timetable. Five primary background-work producers start work (this is not a count of every timer in the server): three copies of the same schedule engine
+  (pkg/cron), one for heartbeats, one for Calendar tasks and one for /loop chat loops, plus a one-minute poller for queued tasks and the plan engine''s 30-second tick. None of these go through the message
+  bus or the "which agent answers" routing. Each one calls the agent turn engine directly as the owning agent. Heartbeats and chat loops use a fixed chat; a task run derives its mode and starts a fresh
+  task conversation (a child of the assignee''s main chat when it has one, otherwise an isolated one). Nobody is there to approve, so an "ask" that Auto, a command rule or a saved grant does not settle
+  is refused straight away. A heartbeat missed while Omnipus was down is skipped without any record. A missed Calendar run is recorded as "missed" and is not run again; the one exception is a one-time task
+  whose run had already started when the process died, which runs again (at-least-once, so it can repeat effects).
+
+  '
+participants:
+- id: gwcron
+  label: Heartbeat timer (schedule engine copy 1)
+  kind: server
+  ref: pkg/gateway/gateway_boot.go::setupCronTool
+- id: trig
+  label: Calendar timer (schedule engine copy 2)
+  kind: server
+  ref: pkg/agent/task_trigger.go::NewTaskTriggerScheduler
+- id: loopcron
+  label: Chat-loop timer (schedule engine copy 3)
+  kind: server
+  ref: pkg/agent/loop_scheduler.go::NewLoopScheduler
+- id: drain
+  label: Task queue poller (every 1 min)
+  kind: server
+  ref: pkg/heartbeat/task_drain.go::NewTaskDrainService
+- id: runner
+  label: Heartbeat runner
+  kind: server
+  ref: pkg/gateway/schedules.go::scheduledRunner.RunScheduled
+- id: exec
+  label: Task executor
+  kind: server
+  ref: pkg/agent/task_executor.go::TaskExecutor
+- id: turn
+  label: Agent turn engine
+  kind: server
+  ref: pkg/agent/loop.go::runAgentLoopBody
+- id: store
+  label: Files on disk
+  kind: store
+- id: person
+  label: Person (chat, Calendar, notifications)
+  kind: person
+steps:
+- phase: 0 · At start-up
+- from: gwcron
+  to: store
+  label: load cron/jobs.json, clear stale 'running' flags, next fire = now + interval
+  kind: store
+  ref: pkg/cron/service.go::initRunStateReplayingUnsafe, recomputeNextRuns
+  verified: true
+- over: gwcron
+  note: 'Heartbeats missed while down are not caught up and not recorded: the countdown simply restarts from boot time'
+  ref: pkg/cron/service.go::computeNextRun ('every' = now + EveryMS)
+  verified: true
+- from: trig
+  to: store
+  label: record each Calendar fire that came due while down as a 'missed' run; never replay it
+  kind: store
+  ref: pkg/agent/task_trigger.go::recordMissed -> pkg/task/run_store.go::RecordMissedOccurrence
+  verified: true
+- over: trig
+  note: 'Exception: a one-time task whose run had started when the process died is run again (at-least-once)'
+  ref: pkg/cron/service.go::interruptedOneTimeFire; pkg/agent/task_trigger_boot_hold.go::holdFire
+  verified: true
+- from: loopcron
+  to: store
+  label: load loops/jobs.json with a plain Start (not the crash-recovery start)
+  kind: store
+  ref: pkg/agent/loop_scheduler.go::Start -> cron.Start (physicalBoot=false)
+  verified: true
+- phase: 1 · A heartbeat fires
+- from: gwcron
+  to: gwcron
+  label: timer wakes; collect due jobs, clear their next-fire, save
+  kind: self
+  ref: pkg/cron/service.go::runLoop, RunDueJobs
+  verified: true
+- over: gwcron
+  note: Each engine copy runs at most 8 jobs at once; a job whose previous run is still going is skipped
+  ref: pkg/cron/service.go::dispatch, executeJobByID (overlap guard)
+  verified: true
+- from: gwcron
+  to: runner
+  label: RunScheduled(job)  [owner agent, prompt]
+  kind: call
+  ref: pkg/cron/service.go::invokeRun
+  verified: true
+- over: runner
+  note: Refuses if the owner agent is gone or is a worker; never falls back to another agent
+  ref: pkg/gateway/schedules.go::scheduledRunner.RunScheduled
+  verified: true
+- from: runner
+  to: turn
+  label: 'ProcessScheduled(owner, main-chat session, prompt): direct Go call, no message bus, no routing'
+  kind: call
+  ref: pkg/agent/loop.go::ProcessScheduled -> runScheduledTurnWithAdmission -> runAgentLoop
+  verified: true
+- from: turn
+  to: store
+  label: save the prompt to the chat transcript before the turn
+  kind: store
+  ref: pkg/agent/loop.go::ProcessScheduled (AppendTranscript)
+  verified: true
+- over: turn
+  note: Runs unattended (AutoDenyAsk). An ask that is still unresolved after the Auto, rule and saved-grant checks is refused, with no human wait; the run does not send its final answer anywhere (SendResponse=false); viewers of that chat see it stream live
+  ref: pkg/agent/loop.go::ProcessScheduled (processOptions)
+  verified: true
+- from: turn
+  to: runner
+  label: reply text (discarded) or error
+  kind: return
+  ref: pkg/gateway/schedules.go::RunScheduled (`_ = reply`)
+  verified: true
+- alt: if the run failed
+- from: runner
+  to: person
+  label: '''schedule failed'' notification + alert on the agent''s default channel'
+  kind: async
+  ref: pkg/gateway/schedules.go::scheduledRunner.onFailure
+  verified: true
+- over: gwcron
+  note: Rate-limit / network / 5xx errors retry after 1, 2, then 5 minutes
+  ref: pkg/cron/service.go::scheduleNextRunUnsafe; schedules.go::isTransientRunError
+  verified: true
+- end: true
+- from: gwcron
+  to: store
+  label: save outcome, last 20 runs, next fire
+  kind: store
+  ref: pkg/cron/service.go::executeJobByID
+  verified: true
+- phase: 2 · A Calendar task fires
+- from: trig
+  to: trig
+  label: 'due job: check the task still exists and still has this occurrence; reset it to ''next'''
+  kind: self
+  ref: pkg/agent/task_trigger.go::RunScheduled -> runScheduledFire -> prepareFire
+  verified: true
+- from: trig
+  to: exec
+  label: SpawnTriggeredRun(task, occurrence), unattended (unresolved asks refused; no human wait)
+  kind: call
+  ref: pkg/agent/task_trigger.go::runScheduledFire -> task_executor.go::SpawnTriggeredRun -> ExecuteTask
+  verified: true
+- over: exec
+  note: Refuses if the task's plan is not running or a dependency is not done. A MAIN-mode run goes to the launcher (executeMainTask) before the slot limit is checked; only other runs need a free slot of
+    the task dispatch limit and are refused when all slots are busy
+  ref: pkg/agent/task_executor.go::executeTask (requirePlanExecuting, BlockedBy, executeMainTask before dispatchSema.TryAcquire)
+  verified: true
+- from: exec
+  to: store
+  label: claim task next -> in_progress; create its fresh task conversation; open a run record
+  kind: store
+  ref: pkg/task/claim.go::ClaimForRun; task_executor.go::createTaskSessionSyncAs; task_executor_run.go::openRun
+  verified: true
+- from: exec
+  to: turn
+  label: 'processTaskDirect(assignee, prompt): direct call in its own goroutine'
+  kind: async
+  ref: pkg/agent/task_executor_run.go::runTask -> task_executor.go::processTaskDirect -> runAgentLoop
+  verified: true
+- over: exec
+  note: If the assignee has a main chat in the workspace (and the task is not forced isolated), the run is started instead as a fresh child conversation of that main chat through the delegation launcher.
+    This path is taken before the task slot limit; the launcher's own admission applies. Otherwise a fresh parentless isolated task conversation is used
+  ref: pkg/agent/task_executor.go::executeMainTask; task_run_mode.go::deriveTaskRunMode
+  verified: true
+- over: trig
+  note: 'Repeating task: the next occurrence is armed now as a new one-time job. One-time task: the job is kept until the run ends'
+  ref: pkg/agent/task_trigger.go::rearmRrule, handOffOnceRun (ErrRunHandedOff)
+  verified: true
+- from: exec
+  to: person
+  label: 'when the run ends: ''Task run done/failed'' notice into the starter''s chat'
+  kind: async
+  ref: pkg/agent/task_executor_judge.go::deliverTaskCompletionUpward, notifySourceChannel
+  verified: true
+- phase: 3 · Queued tasks and chat loops
+- from: drain
+  to: exec
+  label: 'every minute: CheckQueuedTasks, at most one ''next'' task per agent per pass, unattended (unresolved asks refused; no human wait)'
+  kind: call
+  ref: pkg/heartbeat/task_drain.go; pkg/agent/task_executor.go::CheckQueuedTasks
+  verified: true
+- from: loopcron
+  to: turn
+  label: '/loop fire: ProcessScheduled(owner, that chat, loop prompt)'
+  kind: call
+  ref: pkg/agent/loop_scheduler.go::RunScheduled
+  verified: true
+- from: turn
+  to: loopcron
+  label: 'reply; self-paced mode reads ''LOOP_NEXT: <delay>'' and books the next one-time job (15 min if missing)'
+  kind: return
+  ref: pkg/agent/loop_scheduler.go::RunScheduled (parseLoopNextMarker, AddOneShot)
+  verified: true
+- from: loopcron
+  to: store
+  label: run count and next job id into the chat's session meta; stop at the run cap (100)
+  kind: store
+  ref: pkg/agent/loop_scheduler.go::RunScheduled (SetMeta, stopLoop)
+  verified: true
+stores:
+- what: Heartbeat jobs (one per workspace member with a heartbeat)
+  where: <agents.defaults.workspace>/cron/jobs.json (default ~/.omnipus/workspace/cron/jobs.json)
+  when: on every workspace change (reconcile) and after every fire
+  ref: pkg/gateway/gateway_boot.go::setupCronTool; pkg/gateway/heartbeat_schedule.go::computeDesiredHeartbeats
+- what: Calendar trigger jobs (one per scheduled task, rebuilt from the tasks)
+  where: ~/.omnipus/tasks_triggers/jobs.json
+  when: on task create/edit and after every fire
+  ref: pkg/gateway/gateway_boot.go::prepareTaskTrigger
+- what: Chat-loop jobs
+  where: ~/.omnipus/loops/jobs.json, plus loop state in the chat's session meta
+  when: on /loop and after every fire
+  ref: pkg/gateway/gateway_boot.go (loopSchedStorePath); pkg/agent/loop_scheduler.go::RunScheduled
+- what: Task record and run history
+  where: ~/.omnipus/tasks/<id>.json and tasks/<id>/runs/<day>.jsonl
+  when: claim, run open, run close, missed/skipped records
+  ref: pkg/agent/loop_construct.go (task.New); pkg/task/run_store.go
+failures:
+- case: Omnipus down when a heartbeat was due
+  effect: Skipped, nothing recorded; the next heartbeat is a full interval after start-up
+  ref: pkg/cron/service.go::recomputeNextRuns, computeNextRun
+- case: Omnipus down when a Calendar run was due
+  effect: Recorded as a 'missed' run on the Calendar; not replayed
+  ref: pkg/agent/task_trigger.go::recordMissed
+- case: Process killed while a one-time Calendar task was running
+  effect: Run again at the next boot (at-least-once)
+  ref: pkg/cron/service.go::interruptedOneTimeFire
+- case: Process killed while a chat loop was running
+  effect: 'INFERRED: the loop engine uses the plain Start, which keeps the dead run''s ''running'' flag, so every later fire is skipped as an overlap; a self-paced loop whose next time passed while down
+    gets no next fire at all. The loop looks active but never runs again'
+  ref: pkg/agent/loop_scheduler.go::Start; pkg/cron/service.go::initRunStateReplayingUnsafe (Running cleared only when physicalBoot), executeJobByID, rescheduleSkippedUnsafe, computeNextRun
+  verified: false
+- case: A scheduled turn needs a tool set to 'ask'
+  effect: If Auto, a command rule or a saved grant settles it, it runs. Otherwise it is refused immediately and audited with the schedule's id; nobody is asked
+  ref: pkg/agent/loop.go::ProcessScheduled (AutoDenyAsk); pkg/agent/task_trigger.go::runScheduledFire (WithAutoDenyAsk); pkg/agent/loop_run_turn_tools.go::resolveAskPolicy
+- case: Heartbeat owner deleted or turned into a worker
+  effect: Run fails with 'owner unavailable', notification raised; no other agent runs it
+  ref: pkg/gateway/schedules.go::RunScheduled
+- case: All task slots busy at a Calendar fire (non-MAIN run)
+  effect: Dispatch refused with ErrDispatchCapReached; a repeating task re-arms its next occurrence with no retry of this one. A MAIN-mode run does not use this slot limit
+  ref: pkg/agent/task_executor.go::executeTask; pkg/agent/task_trigger.go::runScheduledFire
+facts:
+- fact: 'Calendar fires, queued tasks (the poller), Run-now and plans go through the task executor. Heartbeats and chat loops call the turn engine directly (ProcessScheduled). None of the timer-driven producers goes
+    through the message bus or routing: the owner agent is fixed in the job.'
+  ref: pkg/gateway/schedules.go::RunScheduled; pkg/agent/loop_scheduler.go::RunScheduled; pkg/agent/loop.go::ProcessScheduled; pkg/agent/task_executor.go::executeTask
+- fact: The bus carries web chat, chat apps and async follow-ups (AsyncNotifier, goal follow-ups). Schedules and task runs call runAgentLoop directly.
+  ref: pkg/agent/scheduled_execution_admission.go::runScheduledTurnWithAdmission; pkg/agent/task_executor.go::processTaskDirect; pkg/agent/async_notifier.go (PublishInbound)
+- fact: The schedule engine (pkg/cron) is shared plumbing with three separate copies. Heartbeats live in the gateway's own copy and never appear on the Calendar.
+  ref: pkg/gateway/gateway_boot.go::setupCronTool vs ::prepareTaskTrigger
+- fact: Chat loops use a third copy of the engine (loops/jobs.json) and never touch the Calendar or tasks.
+  ref: pkg/agent/loop_scheduler.go::NewLoopScheduler
+- fact: Heartbeat jobs are run by the heartbeat runner in pkg/gateway, which is not part of the Calendar.
+  ref: pkg/gateway/schedules.go::scheduledRunner
+- fact: 'A task run derives its mode (deriveTaskRunMode) and always starts a fresh real task session: a child of the assignee''s main chat through the delegation launcher in MAIN mode, otherwise an isolated
+    parentless session. It is not a reuse of one fixed conversation.'
+  ref: pkg/agent/task_run_mode.go::deriveTaskRunMode; pkg/agent/task_executor.go::executeTask, executeMainTask
+- fact: 'Five primary background-work producers: 3 schedule-engine copies, the 1-minute task poller and the 30-second plan tick, plus a 5-minute task-trigger recovery sweep. This is not a complete timer
+    census: approval timeouts, worker retirement and idle-recap timers are other lifetimes.'
+  ref: pkg/heartbeat/task_drain.go (defaultTaskDrainInterval); pkg/agent/plan_engine.go (defaultPlanEngineTickInterval); pkg/agent/task_trigger.go (recoverySweepInterval); pkg/agent/session_worker.go::newSessionWorker
+- fact: Task slot admission has two paths. MAIN-mode runs go to executeMainTask (launcher admission) before dispatchSema.TryAcquire; all other runs take a slot of the shared dispatch limit. The atomic claim
+    (next -> in_progress) is common to both.
+  ref: pkg/agent/task_executor.go::executeTask; pkg/agent/task_run_mode.go::deriveTaskRunMode
+- fact: 'Scheduled fires do not wait in the message bus. A Calendar fire that comes due before the task executor''s session plane is wired is held inside the executor and released once the plane is ready.
+    For heartbeats and chat loops in that early window: not verified.'
+  ref: pkg/agent/task_trigger_boot_hold.go::holdFire; pkg/agent/loop.go::ProcessScheduled

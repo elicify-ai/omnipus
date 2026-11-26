@@ -263,6 +263,11 @@ type streamerIOStatsSetter interface {
 // (excluding caller-supplied success DefaultResponse strings such as the
 // heartbeat path's "Background task completed."), or (4) any return path that
 // left turnStatus == TurnEndStatusError, including the LLM-error early returns.
+// It is also called with true when the turn's transcript could not be saved
+// (#1178): finalizeStreamer passes failed || accountingErr != nil, so a latched
+// or flushed call-accounting save failure sets the flag even when a real model
+// response was delivered. The gateway streamer reports a late final-transcript
+// write failure on the same done-frame field.
 // The done frame carries DoneStats.TurnFailed=true. CLI/automation clients
 // read this field to exit non-zero on a failed turn.
 type streamerFailedSetter interface {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -63,8 +64,8 @@ func TestNoSavedPath_RunRefusedWithRepairMessage(t *testing.T) {
 
 func TestSavedPath_RunUsesSettingsNotLegacyPath(t *testing.T) {
 	f := t8RunFixture(t)
-	program := l11274Executable(t, f.home, "codex", true)
-	legacy := l11274Executable(t, f.home, "codex", true)
+	program := opencodeTrustedProgram(t, "codex")
+	legacy := opencodeTrustedProgram(t, "codex")
 	f.setProgram(t, "codex", program)
 	t8SetPreset(t, f, "codex", "--max-turns 40")
 	t11bSeedCodexWorker(t, f, "t11b-saved-path", "", legacy)
@@ -79,18 +80,25 @@ func TestSavedPath_RunUsesSettingsNotLegacyPath(t *testing.T) {
 
 func TestPresetParams_AppliedLastUnfiltered_AgentFlagsFiltered(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const bypass = "--dangerously-bypass-approvals-and-sandbox"
 	t8SetPreset(t, f, "codex", bypass+" --model gpt-5-codex")
 	t11bSeedCodexWorker(t, f, "t11b-preset-order", bypass+" --add-dir /allowed-extra", "")
 
 	opts := t11bDispatchOptions(t, f, "t11b-preset-order")
 	argv := runner.BuildCodexArgs(opts) // actual dispatched options, not a test-side assembler
-	// T11 run order plus CliPreset.preset_args: presets come AFTER agent args
-	// but BEFORE the prompt hand-off. Codex uses trailing '-' for stdin.
-	wantTail := []string{"--add-dir", "/allowed-extra", bypass, "--model", "gpt-5-codex", "-"}
+	// Q-OC1=A (2026-11-19) excepts preset model conflicts from T11's
+	// unfiltered-preset rule. The independently seeded worker model is
+	// l11274Model; the rest of the saved preset remains last before stdin.
+	require.Equal(t, l11274Model, opts.Model, "fixture: dispatch uses the worker's explicitly seeded own model")
+	modelAt := slices.Index(argv, "-m")
+	require.GreaterOrEqual(t, modelAt, 0, "the configured model option remains in the actual command: %v", argv)
+	require.Greater(t, len(argv), modelAt+1)
+	require.Equal(t, l11274Model, argv[modelAt+1], "the configured model value remains unchanged")
+	require.NotContains(t, argv, "gpt-5-codex", "Q-OC1=A: remove the conflicting preset model")
+	wantTail := []string{"--add-dir", "/allowed-extra", bypass, "-"}
 	require.Greater(t, len(argv), len(wantTail), "driver flags must precede the agent and preset blocks")
-	require.Equal(t, wantTail, argv[len(argv)-len(wantTail):], "driver -> filtered agent -> unfiltered preset -> prompt")
+	require.Equal(t, wantTail, argv[len(argv)-len(wantTail):], "driver -> filtered agent -> surviving non-model preset -> prompt")
 	count := 0
 	for _, arg := range argv {
 		if arg == bypass {
@@ -130,7 +138,7 @@ func t11bReadRunAudit(t *testing.T, logger *audit.Logger, path string) []audit.R
 
 func TestPresetAudit_RecordsPresetUse(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const secret = "t11b-registered-sensitive-value"
 	t8SetPreset(t, f, "codex", "--api-key "+secret+" --model gpt-5-codex")
 	f.al.GetConfig().RegisterSensitiveValues([]string{secret})
@@ -170,7 +178,7 @@ func TestPresetAudit_RecordsPresetUse(t *testing.T) {
 
 func TestPresetAudit_NoPresetProducesNoPresetNote(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	// Positive control uses the SAME writer/reader. A missing preset-note
 	// implementation cannot make the negative assertion pass vacuously.
 	t8SetPreset(t, f, "codex", "--model gpt-5-codex")
