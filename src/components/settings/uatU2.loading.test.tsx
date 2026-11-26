@@ -6,15 +6,13 @@ import { cleanup, screen, waitFor } from '@testing-library/react'
 import { heldG1, jsonG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 import { reducedMotionU2 } from '../../../tests/helpers/settings-u2-css'
 
-function preferReducedMotionU2() {
-  vi.stubGlobal('matchMedia', (media: string) => ({
-    matches: media === '(prefers-reduced-motion: reduce)', media, onchange: null,
-    addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {},
-    dispatchEvent: () => false,
-  }))
-}
+import { animationU4, isStaticU4, motionCssU4 } from '../../../tests/helpers/settings-u4-motion'
 
 async function expectNoLoadingMotionU2(indicator: Element, name: string) {
+  if ([...indicator.classList].some((token) => token.startsWith('animate-') && token !== 'animate-none')) {
+    const normal = animationU4(await motionCssU4([indicator]), indicator, false)
+    expect(isStaticU4(normal), `U4-C7/FR-075: ${name} must move normally, not freeze under motion-safe`).toBe(false)
+  }
   expect(await reducedMotionU2(indicator),
     `U2-3/US-9: ${name} must be static or ship a reduced-motion animation stop; classes=${indicator.getAttribute('class')}`).toBe(true)
 }
@@ -25,7 +23,6 @@ it('U2-3 — reduced motion stops the Providers default-model loading bar', asyn
   const t = transportG1()
   const pending = heldG1()
   t.on('GET', '/providers/default-model', () => pending.promise)
-  preferReducedMotionU2()
   sectionG1('providers')
   try {
     const bar = await screen.findByTestId('default-model-loading')
@@ -41,7 +38,6 @@ it('U2-3 — reduced motion stops the Sandbox Bash HTTP Proxy refresh spinner', 
   const t = transportG1()
   const pending = heldG1()
   t.on('GET', '/security/exec-proxy-status', () => pending.promise)
-  preferReducedMotionU2()
   sectionG1('sandbox')
   try {
     await screen.findByText('Bash HTTP Proxy')
