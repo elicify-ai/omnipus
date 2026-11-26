@@ -10,6 +10,9 @@ const DropdownMenuPortal = DropdownMenuPrimitive.Portal
 const DropdownMenuSub = DropdownMenuPrimitive.Sub
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup
 
+// U6-1 / FR-070: on a coarse pointer a menu item (plain, checkbox, radio or submenu) is at least the 44 px touch
+// minimum high (the SegmentedControlItem pattern, design-system rule 12); a
+// mouse keeps the compact row.
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & {
@@ -19,7 +22,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      'flex cursor-default select-none items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none focus:bg-[var(--color-surface-3)] data-[state=open]:bg-[var(--color-surface-3)]',
+      'flex cursor-default select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none focus:bg-[var(--color-surface-3)] data-[state=open]:bg-[var(--color-surface-3)]',
       inset ? 'pl-[var(--space-5)]' : undefined,
       className
     )}
@@ -75,7 +78,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex cursor-default select-none items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex cursor-default select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       inset ? 'pl-[var(--space-5)]' : undefined,
       className
     )}
@@ -91,7 +94,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
   <DropdownMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      'relative flex cursor-default select-none items-center rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex cursor-default select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className
     )}
     checked={checked}
@@ -114,7 +117,7 @@ const DropdownMenuRadioItem = React.forwardRef<
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      'relative flex cursor-default select-none items-center rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex cursor-default select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className
     )}
     {...props}

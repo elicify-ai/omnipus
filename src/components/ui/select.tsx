@@ -133,6 +133,9 @@ const SelectLabel = React.forwardRef<
 ))
 SelectLabel.displayName = SelectPrimitive.Label.displayName
 
+// U6-1 / FR-070: on a coarse pointer a select option is at least the 44 px touch
+// minimum high (the SegmentedControlItem pattern, design-system rule 12); a
+// mouse keeps the compact row.
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
@@ -140,7 +143,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-default select-none items-center rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] outline-none focus:bg-[var(--color-surface-3)] focus:text-[var(--color-secondary)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex w-full cursor-default select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] outline-none focus:bg-[var(--color-surface-3)] focus:text-[var(--color-secondary)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className
     )}
     {...props}

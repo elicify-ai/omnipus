@@ -7,6 +7,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 import {
   RECOMMENDED_CHIP_LABEL,
@@ -224,6 +225,12 @@ type CatalogRow =
 
 /** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
 const CATALOG_ROW_HEIGHT = 32
+/**
+ * Row slot on a coarse pointer, in px: the 44 px `--target-touch-minimum`
+ * that CommandItem grows to there (FR-070, U6-1). The virtual list places rows
+ * absolutely, so the slot must grow with the row or 44 px rows would overlap.
+ */
+const CATALOG_TOUCH_ROW_HEIGHT = 44
 
 export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders, defaultModel, defaultProvider }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
@@ -374,13 +381,24 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
 
   // FR-030: 100 renders whole, 101 does not.
   const virtualiseCatalog = catalogMode && shouldVirtualiseModelList(visibleCatalogModelCount)
-  const catalogListRef = React.useRef<HTMLDivElement | null>(null)
+  // U6-3: the list is held in state, not a ref. The popover mounts its
+  // content one render after it opens (the portal waits for its own mount), so
+  // a ref filled then never re-renders this component: the virtualiser kept no
+  // scroll element, showed zero rows and the list said "No models found" until
+  // something unrelated re-rendered. Setting state on attach re-renders once
+  // and the virtualiser measures the list on the first open.
+  const [catalogListElement, setCatalogListElement] = React.useState<HTMLDivElement | null>(null)
+  const coarsePointer = useMediaQuery('(pointer: coarse)')
+  const catalogRowHeight = coarsePointer ? CATALOG_TOUCH_ROW_HEIGHT : CATALOG_ROW_HEIGHT
   const catalogVirtualizer = useVirtualizer({
     count: virtualiseCatalog ? visibleCatalogRows.length : 0,
-    getScrollElement: () => catalogListRef.current,
-    estimateSize: () => CATALOG_ROW_HEIGHT,
+    getScrollElement: () => catalogListElement,
+    estimateSize: () => catalogRowHeight,
     overscan: 10,
   })
+  // A pointer change (a tablet's keyboard cover) changes the slot size; the
+  // virtualiser caches row sizes, so it re-measures.
+  React.useEffect(() => { catalogVirtualizer.measure() }, [catalogRowHeight, catalogVirtualizer])
 
   // Loading / error catalogue states pre-empt every other render path below.
   // A providers fetch that is still in flight, or has failed outright, must
@@ -938,7 +956,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList ref={catalogListRef} style={{ maxHeight: 300 }}>
+          <CommandList ref={setCatalogListElement} style={{ maxHeight: 300 }}>
             {catalogStatus === 'loading' ? (
               <div
                 className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)]"

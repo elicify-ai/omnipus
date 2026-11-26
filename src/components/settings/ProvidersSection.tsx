@@ -1321,6 +1321,7 @@ export function ProvidersSection() {
         defaultModel={shownDefault}
         providers={providers}
         catalog={catalogDoc}
+        catalogLoading={catalogLoading}
         status={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
         filterToProviderId={defaultFilterId}
         changing={changingDefault}
