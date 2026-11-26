@@ -77,13 +77,16 @@ const CommandSeparator = React.forwardRef<
 ))
 CommandSeparator.displayName = CommandPrimitive.Separator.displayName
 
+// U6-1 / FR-070: on a coarse pointer a list option is at least the 44 px touch
+// minimum high (the SegmentedControlItem pattern, design-system rule 12); a
+// mouse keeps the compact row.
 const CommandItem = React.forwardRef<
   React.ComponentRef<typeof CommandPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Item
     ref={ref}
-    className={clsx("relative flex cursor-pointer select-none items-center rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] outline-none transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
+    className={clsx("relative flex cursor-pointer select-none items-center pointer-coarse:min-h-[var(--target-touch-minimum)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] outline-none transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
     style={{ color: 'var(--color-secondary)' }}
     {...props}
   />

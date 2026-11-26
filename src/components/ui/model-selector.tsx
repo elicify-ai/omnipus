@@ -7,6 +7,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 import {
   RECOMMENDED_CHIP_LABEL,
@@ -224,6 +225,12 @@ type CatalogRow =
 
 /** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
 const CATALOG_ROW_HEIGHT = 32
+/**
+ * Row slot on a coarse pointer, in px: the 44 px `--target-touch-minimum`
+ * that CommandItem grows to there (FR-070, U6-1). The virtual list places rows
+ * absolutely, so the slot must grow with the row or 44 px rows would overlap.
+ */
+const CATALOG_TOUCH_ROW_HEIGHT = 44
 
 export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders, defaultModel, defaultProvider }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
@@ -381,12 +388,17 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
   // something unrelated re-rendered. Setting state on attach re-renders once
   // and the virtualiser measures the list on the first open.
   const [catalogListElement, setCatalogListElement] = React.useState<HTMLDivElement | null>(null)
+  const coarsePointer = useMediaQuery('(pointer: coarse)')
+  const catalogRowHeight = coarsePointer ? CATALOG_TOUCH_ROW_HEIGHT : CATALOG_ROW_HEIGHT
   const catalogVirtualizer = useVirtualizer({
     count: virtualiseCatalog ? visibleCatalogRows.length : 0,
     getScrollElement: () => catalogListElement,
-    estimateSize: () => CATALOG_ROW_HEIGHT,
+    estimateSize: () => catalogRowHeight,
     overscan: 10,
   })
+  // A pointer change (a tablet's keyboard cover) changes the slot size; the
+  // virtualiser caches row sizes, so it re-measures.
+  React.useEffect(() => { catalogVirtualizer.measure() }, [catalogRowHeight, catalogVirtualizer])
 
   // Loading / error catalogue states pre-empt every other render path below.
   // A providers fetch that is still in flight, or has failed outright, must

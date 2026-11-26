@@ -4,6 +4,8 @@
 //  - U6-3: the popover mounts its content one render late; the list must
 //    still show rows on the first open, and say it is loading (never
 //    "No models found") while the catalog's first read is in flight.
+//  - U6-1 / FR-070: on a coarse pointer the virtualiser lays rows out at the
+//    44 px touch minimum (no overlap); a mouse keeps the 32 px slot.
 // jsdom has no layout: physical row sizes stay a browser check.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
@@ -29,7 +31,7 @@ beforeAll(() => {
   })
 })
 
-afterEach(() => { cleanup() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 const openrouter = PROVIDERS_CATALOG.providers.find((entry) => entry.id === 'openrouter')!
 const template = openrouter.models[0]
@@ -45,6 +47,13 @@ const providers = [{
   auth_method: 'api_key', dependents: [], backs_default: true, models: [],
 }] as unknown as Provider[]
 const defaultModel = { provider: 'openrouter', model: 'acme/model-000', context_window: 1, window_unknown: false } as DefaultModel
+
+function pointer(coarse: boolean) {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: coarse && query.includes('pointer: coarse'), media: query, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  }))
+}
 
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
 const listState = () => ({ options: screen.queryAllByRole('option').length, empty: screen.queryByText('No models found.') !== null })
@@ -80,5 +89,28 @@ describe('U6-3 default-model picker first open', () => {
     await settle()
     expect(listState().empty).toBe(false)
     expect(listState().options).toBeGreaterThan(0)
+  })
+})
+
+async function virtualSlots() {
+  await openPicker()
+  const rows = [...screen.getByTestId('model-selector-virtual-list').children] as HTMLElement[]
+  expect(rows.length).toBeGreaterThan(0)
+  return rows
+}
+
+describe('U6-1 the virtualised model list sizes its row slots to the pointer', () => {
+  it('coarse pointer: every slot is 44 px and the rows do not overlap', async () => {
+    pointer(true)
+    const rows = await virtualSlots()
+    expect(new Set(rows.map((row) => row.style.height))).toEqual(new Set(['44px']))
+    const starts = rows.map((row) => Number(/translateY\((\d+)px\)/.exec(row.style.transform)?.[1]))
+    starts.slice(1).forEach((start, i) => expect(start - starts[i]).toBe(44))
+  })
+
+  it('fine pointer: the slot stays 32 px (no change for mouse users)', async () => {
+    pointer(false)
+    const rows = await virtualSlots()
+    expect(new Set(rows.map((row) => row.style.height))).toEqual(new Set(['32px']))
   })
 })
