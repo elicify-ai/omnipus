@@ -144,7 +144,7 @@ func TestGhostDiscordRunningAdapterReconnectsAndHandlesMessages(t *testing.T) {
 // constructor that assigns a new closure still looks unchanged. The func value
 // itself is a pointer to that closure. installDiscordgoLogger writes it once
 // per process; a later assignment is a different closure.
-func discordgoLoggerValue(fn func(msgL, caller int, format string, a ...interface{})) uintptr {
+func discordgoLoggerValue(fn func(msgL, caller int, format string, a ...any)) uintptr {
 	return *(*uintptr)(unsafe.Pointer(&fn))
 }
 
@@ -158,8 +158,8 @@ func TestGhostDiscordLoggerSurvivesFixtureTeardown(t *testing.T) {
 	for _, name := range []string{"initial-fixtures", "later-fixtures"} {
 		// Hold the closures, not only their addresses, so a replacement cannot
 		// reuse the address of a collected function value.
-		var installed func(msgL, caller int, format string, a ...interface{})
-		var afterSecond func(msgL, caller int, format string, a ...interface{})
+		var installed func(msgL, caller int, format string, a ...any)
+		var afterSecond func(msgL, caller int, format string, a ...any)
 		t.Run(name, func(t *testing.T) {
 			ctx := ghostTestContext(t)
 			newGhostDiscordFixture(t, ctx)
