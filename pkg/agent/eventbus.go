@@ -305,13 +305,18 @@ func eventDropDetails(evt Event) map[string]any {
 //     only live notice that a Judge conclusion could not be saved or
 //     delivered — by definition its durable copy may be missing, so losing
 //     the notice too would make the failure silent.
+//   - EventKindError marked RefusedInput: the refusal of a person's message
+//     with no turn to carry it, and the notice that such a refusal could not
+//     be saved (SFH-R5-1) — when its saved copy is missing, the live frame is
+//     the only place the person learns of it.
 func mustNotDropEvent(evt Event) bool {
 	switch evt.Kind {
 	case EventKindSubTurnSpawn, EventKindSubTurnEnd:
 		return true
 	case EventKindError:
 		payload, ok := evt.Payload.(ErrorPayload)
-		return ok && (payload.Code == string(CodeDelegatedTaskLimit) || payload.Code == string(CodeJudgeConclusionFailed))
+		return ok && (payload.Code == string(CodeDelegatedTaskLimit) || payload.Code == string(CodeJudgeConclusionFailed) ||
+			payload.RefusedInput)
 	default:
 		return false
 	}

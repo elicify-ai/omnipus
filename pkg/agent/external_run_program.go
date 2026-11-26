@@ -74,21 +74,10 @@ func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
 func (ed *runExternalCLISubTurnState) reportProgramRefusal(cli, text string) error {
 	refusal := newExternalCLIRefusal(CodeExternalCLINotFound, "", cli, &curatedTurnError{text: text})
 	llm := TranslateTurnError(refusal)
-	chatID := ed.childTS.chatID
-	if chatID == "" {
-		chatID = ed.childTS.opts.ChatID
-	}
-	ed.al.emitEvent(
-		EventKindError,
-		ed.childTS.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "external_cli",
-			ChatID:    chatID,
-			SessionID: string(ed.childTS.routingSessionID),
-			Code:      string(llm.Code),
-			Message:   llm.Message,
-		},
-	)
+	// The frame carries the same rendered C8 sentence the transcript saves
+	// (gate finding sfh F1, above) and addresses the run's OWN session, as
+	// reportWorkspaceRefusal does (#1895, ADR-091 D1).
+	ed.al.emitExternalErrorFrame(ed.childTS, "external_cli", llm, "")
 	ed.childTS.appendClassifiedError(EventKindError.String(), "external_cli", llm)
 	return refusal
 }
@@ -96,9 +85,12 @@ func (ed *runExternalCLISubTurnState) reportProgramRefusal(cli, text string) err
 // auditRunSpawn writes the external_cli.run audit entry for one spawn
 // (r17 §3.10): agent, CLI, entered and resolved program, the agent flags the
 // filter drops, the preset through thirdpartycli.PresetAuditFilter and
-// thirdpartycli.PresetUseNote when set, and filter_bypassed_by_person_preset with the
+// thirdpartycli.PresetUseNote when set, preset_flags_dropped (through the same
+// filter) when the preset's model option is dropped because the driver passes
+// the worker's own model (#1880), and filter_bypassed_by_person_preset with the
 // filter's reasons, through the same filter, whenever
-// a preset token is one the filter would drop from an agent. Write failures
+// a preset token is one the safety denylist would drop from an agent (a model
+// option is not a safety bypass, #1880). Write failures
 // are logged by audit.Emit.
 func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli string) {
 	key := runner.FilterKey(cli)
@@ -118,7 +110,18 @@ func (ed *runExternalCLISubTurnState) auditRunSpawn(ctx context.Context, cli str
 		filter := thirdpartycli.PresetAuditFilter(ed.al.GetConfig())
 		fields["preset_args"] = filter(ed.presetText)
 		fields["note"] = thirdpartycli.PresetUseNote
-		if _, bypassed := runner.FilterDangerousCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
+		// The preset's model option, dropped when the driver passes the
+		// worker's own model (#1880) — the same decision as buildArgs.
+		if droppedPreset := runner.PresetArgsDroppedAtRun(key, ed.agentModel, ed.presetArgs); len(droppedPreset) > 0 {
+			presetFlags := make([]string, 0, len(droppedPreset))
+			for _, d := range droppedPreset {
+				presetFlags = append(presetFlags, filter(d.Flag))
+			}
+			fields["preset_flags_dropped"] = presetFlags
+		}
+		// The safety denylist only: a preset model option is not a safety
+		// bypass (#1880 model precedence applies to Additional CLI arguments).
+		if _, bypassed := runner.SafetyCLIArgsDetailed(key, ed.presetArgs); len(bypassed) > 0 {
 			reasons := make([]string, 0, len(bypassed))
 			for _, d := range bypassed {
 				reasons = append(reasons, filter(d.Flag+": "+d.Reason))

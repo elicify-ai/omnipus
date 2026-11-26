@@ -70,7 +70,13 @@ has no `{cli}` slot. One case still falls back to the generic sentence:
   `tool_assembly_duplicate` (`mcp` / the code sentence).
 - **W12 is not wired.** `provider_error` uses the generic sentence; W12 needs `{provider}` and
   `{host}` facts that are a later work package.
-- **W8, W9, W10, W14, W15, W16** belong to later work packages; nothing here uses them.
+- **W8, W9, W10, W15, W16** belong to later work packages; nothing here uses them.
+- **W14 form 1 is wired (OpenCode fixes, 2026-11-23).** `delegation_not_resumable` carries the
+  resume-unavailable chat and neutral sentences and the no-fact chat form (variant `no_cli`). Its
+  neutral no-fact form (`neutral_variants.no_cli`, "This delegation could not continue: its previous
+  conversation can't be resumed. Start a new delegation.") applies W14's clause drop to the neutral
+  sentence and is approved (Prometheus, 2026-11-23). W14 form 2 (workspace changed,
+  B16b) is not wired.
 
 ## Known limits (chief, 2026-11-18; not lost, revisited after the founder's W answer)
 

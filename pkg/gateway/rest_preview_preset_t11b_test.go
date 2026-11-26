@@ -2,7 +2,9 @@ package gateway
 
 // Founder Q12 A / S6; FR-10 and the preview response contract: the displayed
 // argv is the actual ordered command, including unfiltered person parameters.
-// Expected suffix is derived from that order, not runner.Build*Args output.
+// Q-OC1=A (2026-11-19) excepts preset model options when Omnipus emits its
+// configured model; #1880 also removes worker model options unconditionally.
+// Expected suffix is derived from those rules, not runner.Build*Args output.
 
 import (
 	"net/http"
@@ -33,16 +35,26 @@ func TestPostAgentsExecutorPreview_SavedBypassPresetAppearsLast_S6(t *testing.T)
 	})
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, program, resp.Binary, "contract: display the path exactly as saved")
-	wantSuffix := []string{"--model", "agent-model", "--dangerously-bypass-approvals-and-sandbox", "--model", "person model", "-"}
+	assert.Equal(t, []string{model}, opencodeFix1880PreviewModels(t, resp.Argv), "Q-OC1=A: only Omnipus's configured model is passed")
+	assert.NotContains(t, resp.Argv, "agent-model", "#1880: worker arguments cannot replace the configured model")
+	assert.NotContains(t, resp.Argv, "person model", "Q-OC1=A: a conflicting preset model is removed too")
+	wantSuffix := []string{"--dangerously-bypass-approvals-and-sandbox", "-"}
 	require.GreaterOrEqual(t, len(resp.Argv), len(wantSuffix))
 	assert.Equal(t, wantSuffix, resp.Argv[len(resp.Argv)-len(wantSuffix):],
-		"FR-10: filtered agent args, unfiltered person preset last, then the documented stdin marker")
+		"FR-10/Q-OC1=A: the rest of the person preset remains unfiltered and last, before the stdin marker")
 	assert.Equal(t, 1, strings.Count(strings.Join(resp.Argv, "\x00"), "--dangerously-bypass-approvals-and-sandbox"),
 		"the agent's bypass is dropped, but the person's saved bypass is displayed")
-	require.Len(t, resp.DroppedArgs, 1)
-	assert.Equal(t, "--dangerously-bypass-approvals-and-sandbox", resp.DroppedArgs[0].Flag)
-	assert.NotEmpty(t, resp.DroppedArgs[0].Reason)
+	require.Len(t, resp.DroppedArgs, 3)
+	dropped := make([]string, 0, len(resp.DroppedArgs))
+	for _, drop := range resp.DroppedArgs {
+		dropped = append(dropped, drop.Flag)
+		assert.NotEmpty(t, drop.Reason)
+	}
+	assert.Equal(t, []string{"--model agent-model", "--dangerously-bypass-approvals-and-sandbox", "--model person model"}, dropped,
+		"S6/Q-OC1=A: disclose worker model, worker bypass and conflicting preset model in input order")
 	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
-	assert.True(t, strings.HasSuffix(resp.CommandLine, " --model agent-model --dangerously-bypass-approvals-and-sandbox --model 'person model' -"),
-		"S6: the copyable command must show the same quoted person-preset suffix: %s", resp.CommandLine)
+	assert.True(t, strings.HasSuffix(resp.CommandLine, " --dangerously-bypass-approvals-and-sandbox -"),
+		"S6: the copyable command must show the same surviving person-preset suffix: %s", resp.CommandLine)
+	assert.NotContains(t, resp.CommandLine, "agent-model")
+	assert.NotContains(t, resp.CommandLine, "person model")
 }

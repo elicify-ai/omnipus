@@ -91,6 +91,8 @@ const ALL_CODES: LLMErrorCode[] = [
   'goal_state_unavailable',
   'external_cli_not_found',
   'external_cli_invalid_config',
+  // R4 D3 / W14: a lost external conversation is a distinct refusal.
+  'delegation_not_resumable',
   'unknown',
 ]
 

@@ -33,6 +33,19 @@
 // the queued instruction and resumes the SAME native conversation inside the one
 // task turn, so the claim, attempts and result rules are untouched. A Stop does
 // not set the mark and supersedes the queue, so it still ends the run.
+//
+// Starting CLI (#1899, founder decision 2026-11-18). Until the CLI has
+// announced its own native conversation id (runner.CanResumeAfterInterrupt), an
+// interrupt would kill the original work and leave nothing to resume. The
+// instruction is then queued WITHOUT interrupting: the run continues to its
+// natural end, and the same consumer (post-turn drain, or the task loop through
+// the steerInterrupt mark) resumes the conversation the run announced and
+// delivers the instruction to it.
+//
+// Two intakes (#1894). An agent's delegate(steer) records the D4 steer receipt
+// (EnqueueSteeringMessageWithStatus) and its exact-text instruction row; a
+// person's message was already saved by the gateway, so it is queued through
+// the ordinary inbound intake with that saved row id and no receipt row.
 package agent
 
 import (
@@ -40,6 +53,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -63,6 +78,21 @@ func (al *AgentLoop) DeliverExternalCLIInstruction(
 	return al.deliverExternalCLIInstruction(ctx, sessionID, agentID, msg, correlationID, executionClaim{})
 }
 
+// DeliverExternalCLIInstructionReporting is DeliverExternalCLIInstruction that
+// also reports how the instruction reached the run (A1): interrupted is true
+// when the live run was interrupted so the same conversation continues with
+// the instruction now, and false when the instruction was queued without an
+// interrupt (the tool had not announced its conversation yet, or the run had
+// already ended) and is delivered to the same conversation when the run ends.
+func (al *AgentLoop) DeliverExternalCLIInstructionReporting(
+	_ context.Context,
+	sessionID, agentID string,
+	msg providers.Message,
+	correlationID string,
+) (resolved string, interrupted bool, err error) {
+	return al.deliverExternalCLIInput(sessionID, executionClaim{}, al.delegateSteerEnqueue(sessionID, agentID, msg, correlationID))
+}
+
 // deliverExternalCLIInstruction is DeliverExternalCLIInstruction's body with an
 // optional expected claim. A non-zero expected claim binds the delivery to a
 // specific selected execution: if the in-flight run's claim no longer matches,
@@ -70,14 +100,55 @@ func (al *AgentLoop) DeliverExternalCLIInstruction(
 // zero value (no pre-read expected claim); the lock alone closes the race for
 // it, and this seam makes supersession deterministically testable.
 func (al *AgentLoop) deliverExternalCLIInstruction(
-	ctx context.Context,
+	_ context.Context,
 	sessionID, agentID string,
 	msg providers.Message,
 	correlationID string,
 	expected executionClaim,
 ) (string, error) {
+	resolved, _, err := al.deliverExternalCLIInput(sessionID, expected, al.delegateSteerEnqueue(sessionID, agentID, msg, correlationID))
+	return resolved, err
+}
+
+// delegateSteerEnqueue queues a delegate steer as a real accepted steer: the
+// D4 steer receipt (enqueueDelegateSteer) makes a later supersede/abandon
+// truthful rather than a silent drop.
+func (al *AgentLoop) delegateSteerEnqueue(sessionID, agentID string, msg providers.Message, correlationID string) func() (string, error) {
+	return func() (string, error) {
+		resolved, _, err := al.EnqueueSteeringMessageWithStatus(sessionID, agentID, msg, correlationID)
+		return resolved, err
+	}
+}
+
+// deliverHumanExternalCLIInput delivers a person's message to the live
+// external-CLI run of msg.SessionID (a steered helper or an external task run)
+// with the same check-run, binding and interrupt rules as
+// deliverExternalCLIInstruction. The gateway has already saved the person's
+// row, so the message is queued through the ordinary inbound intake with that
+// row id (msg.TranscriptEntryID) and the person's origin: no delegate steer
+// receipt, no second transcript row (#1894).
+func (al *AgentLoop) deliverHumanExternalCLIInput(msg bus.InboundMessage, agentID string) error {
+	_, _, err := al.deliverExternalCLIInput(msg.SessionID, executionClaim{}, func() (string, error) {
+		resolved, _, err := al.enqueueInboundSteeringMessage(msg.SessionID, agentID, providers.Message{
+			Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...),
+		}, msg.TranscriptEntryID, inboundInputOrigin(msg))
+		return resolved, err
+	})
+	return err
+}
+
+// deliverExternalCLIInput is the shared delivery body: check the live run under
+// the holder's lock, queue the input through enqueue, then interrupt the
+// selected run when its CLI conversation can be resumed (#1899). interrupted
+// reports whether that interrupt fired; false means the input waits in the
+// queue for the run to end (A1).
+func (al *AgentLoop) deliverExternalCLIInput(
+	sessionID string,
+	expected executionClaim,
+	enqueue func() (string, error),
+) (resolved string, interrupted bool, err error) {
 	if sessionID == "" {
-		return "", fmt.Errorf("external-cli steer: empty session id")
+		return "", false, fmt.Errorf("external-cli steer: empty session id")
 	}
 	// A task-origin external run is steerable too (FR-032): the task loop
 	// (task_executor_run.go::processTaskDirectExternalCLI) consumes the queued
@@ -88,14 +159,14 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	// rather than interrupting a run whose resume path it cannot determine.
 	taskOrigin, originErr := al.externalRunIsTaskOrigin(sessionID)
 	if originErr != nil {
-		return "", &authoredRefusalError{text: fmt.Sprintf(
+		return "", false, &authoredRefusalError{text: fmt.Sprintf(
 			"external-cli steer: could not read the lifecycle record of session %s; the instruction was not delivered",
 			sessionID)}
 	}
 
 	sess := al.externalRunSessionIfPresent(sessionID)
 	if sess == nil {
-		return "", al.noLiveExternalConversationErr(sessionID)
+		return "", false, al.noLiveExternalConversationErr(sessionID)
 	}
 	// Check-run → capture-claim under the holder's lock (N2): beginExternalRun
 	// and finishExternalRun take this lock too, so the run cannot end or be
@@ -107,12 +178,12 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	sess.mu.Lock()
 	if !sess.running || sess.driver == nil {
 		sess.mu.Unlock()
-		return "", al.noLiveExternalConversationErr(sessionID)
+		return "", false, al.noLiveExternalConversationErr(sessionID)
 	}
 	if expected.Generation != 0 &&
 		(expected.SessionID != sess.claim.SessionID || expected.Generation != sess.claim.Generation) {
 		sess.mu.Unlock()
-		return "", &authoredRefusalError{text: fmt.Sprintf(
+		return "", false, &authoredRefusalError{text: fmt.Sprintf(
 			"external-cli steer: the selected execution for session %s was superseded; the instruction was not delivered",
 			sessionID)}
 	}
@@ -120,12 +191,10 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	sess.mu.Unlock()
 
 	// Queue FIRST, so the instruction is present before the run ends: the
-	// post-turn drain sees it and re-enters the external-CLI body with it. The
-	// D4 steer receipt (enqueueDelegateSteer) records it as a real accepted
-	// steer, so a later supersede/abandon is truthful rather than a silent drop.
-	resolved, _, err := al.EnqueueSteeringMessageWithStatus(sessionID, agentID, msg, correlationID)
+	// post-turn drain sees it and re-enters the external-CLI body with it.
+	resolved, err = enqueue()
 	if err != nil {
-		return "", fmt.Errorf("external-cli steer: enqueue instruction for %s: %w", sessionID, err)
+		return "", false, fmt.Errorf("external-cli steer: enqueue instruction for %s: %w", sessionID, err)
 	}
 
 	// Interrupt THIS run via its own cancel func (N2) - never
@@ -138,14 +207,22 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.running && sess.claim == selected {
+		// The task loop resumes only a run marked here, interrupted or not, so
+		// the queued instruction always has its consumer.
 		if taskOrigin {
 			sess.steerInterrupt = true
 		}
-		if sess.cancelRun != nil {
+		// #1899: a CLI that has not announced its native conversation id yet
+		// cannot be resumed after an interrupt. Leave it running; the queued
+		// instruction is delivered to the conversation it announces, after the
+		// run ends. Readiness is read here, at the decision point, so an id
+		// announced while the instruction was being queued is honoured.
+		if sess.cancelRun != nil && sess.driver != nil && runner.CanResumeAfterInterrupt(sess.driver) {
 			sess.cancelRun()
+			interrupted = true
 		}
 	}
-	return resolved, nil
+	return resolved, interrupted, nil
 }
 
 // externalRunIsTaskOrigin reports whether sessionID's durable lifecycle record
@@ -169,9 +246,9 @@ func (al *AgentLoop) externalRunIsTaskOrigin(sessionID string) (bool, error) {
 // noLiveExternalConversationErr is the shared BDD-05.6 refusal for "there is no
 // live external CLI conversation to deliver to".
 func (al *AgentLoop) noLiveExternalConversationErr(sessionID string) error {
-	return &authoredRefusalError{text: fmt.Sprintf(
+	return &noLiveConversationError{authoredRefusalError{text: fmt.Sprintf(
 		"external-cli steer: session %s has no live external CLI conversation to deliver to (FR-043); the instruction was not delivered",
-		sessionID)}
+		sessionID)}}
 }
 
 // loadLifecycleRecord loads sessionID's durable lifecycle record, or (nil, err)

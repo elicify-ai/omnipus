@@ -113,7 +113,7 @@ func t8SetPreset(t *testing.T, f *l11274Fixture, cli, preset string) {
 // 6.7: get_agent reports the Settings program, no warning, no soul.
 func TestGetAgent_ExternalWorker_SettingsProgram_6_7(t *testing.T) {
 	f := t8RunFixture(t)
-	program := l11274Executable(t, f.home, "codex", true)
+	program := opencodeTrustedProgram(t, "codex")
 	f.setProgram(t, "codex", program)
 	id, _ := t8CreateCodexWorker(t, f)
 
@@ -146,7 +146,7 @@ func TestGetAgent_ExternalWorker_NoSettingsPath_6_8_9_14(t *testing.T) {
 // path yields a runnable worker, no soul, env names only.
 func TestCreateAgent_ExternalWorkerWithEnvAndArgs_8_14(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	args := l11274CreateArgs("Env W", "codex")
 	args["env_overrides"] = map[string]any{"T8_ENV_NAME": "t8-secret-value-0001"}
 	args["cli_args"] = "--model gpt-x"
@@ -176,9 +176,9 @@ func mustJSON(t *testing.T, v any) string {
 // the check and the exec, so the swap itself is not exercised.)
 func TestSpawn_ResolveCheckExec_NoFallback_Retarget_9_9(t *testing.T) {
 	f := t8RunFixture(t)
-	v1 := l11274Executable(t, f.home, "codex", true)
-	v2 := l11274Executable(t, f.home, "codex", true)
-	link := filepath.Join(t.TempDir(), "codex-link")
+	v1 := opencodeTrustedProgram(t, "codex")
+	v2 := opencodeTrustedProgram(t, "codex")
+	link := filepath.Join(filepath.Dir(v1), "codex-link")
 	t8Symlink(t, link, v1)
 	f.setProgram(t, "codex", link)
 	id, _ := t8CreateCodexWorker(t, f)
@@ -253,7 +253,7 @@ func TestSpawn_ResolveCheckExec_NoFallback_ParentGetsRefusal_9_13(t *testing.T) 
 // driver to filter; the external_cli.run audit records the bypass.
 func TestSpawn_PresetUnfiltered_AuditBypass_9_17(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const bypass = "--dangerously-bypass-approvals-and-sandbox"
 	t8SetPreset(t, f, "codex", bypass)
 	auditDir := t.TempDir()
@@ -287,7 +287,7 @@ func TestSpawn_PresetUnfiltered_AuditBypass_9_17(t *testing.T) {
 // in CLIArgs and the preset in PresetArgs (which every driver appends last).
 func TestSpawn_PresetAfterAgentArgs_9_18(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	t8SetPreset(t, f, "codex", "--model a")
 	l11274SeedWorker(t, f, t8ProgramWorker, &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex", CLIArgs: "--model b"})
 
@@ -299,7 +299,7 @@ func TestSpawn_PresetAfterAgentArgs_9_18(t *testing.T) {
 // 9.19: the preset is tokenised exactly as cli_args is.
 func TestSpawn_PresetTokenisedLikeCLIArgs_9_19(t *testing.T) {
 	f := t8RunFixture(t)
-	f.setProgram(t, "codex", l11274Executable(t, f.home, "codex", true))
+	f.setProgram(t, "codex", opencodeTrustedProgram(t, "codex"))
 	const raw = `--flag "two words"`
 	t8SetPreset(t, f, "codex", raw)
 	l11274SeedWorker(t, f, t8ProgramWorker, &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex", CLIArgs: raw})

@@ -387,6 +387,10 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if errSID == "" {
 		return
 	}
+	if p.RefusedInput {
+		h.hubRefusedInput(errSID, p)
+		return
+	}
 	// MAJ-001: the agent assembles sentence + facts + flag at WireLLMError;
 	// the hub is a thin translator and forwards them untouched (D1: the
 	// detail stays the BuildDetail residual).
