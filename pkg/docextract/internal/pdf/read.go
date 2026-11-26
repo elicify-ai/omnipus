@@ -70,6 +70,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"unicode/utf8"
@@ -312,15 +313,16 @@ func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xre
 	}
 	buf := make([]byte, wtotal)
 	data := v.Reader()
-	for len(index) > 0 {
+	for len(index) >= 2 { // even length, checked above
 		start, ok1 := index[0].(int64)
 		n, ok2 := index[1].(int64)
 		if !ok1 || !ok2 {
 			return nil, fmt.Errorf("malformed Index pair %v %v %T %T", objfmt(index[0]), objfmt(index[1]), index[0], index[1])
 		}
 		index = index[2:]
-		// Compared without adding: start+n can wrap past MaxInt64.
-		if start < 0 || n < 0 || start > size || n > size-start {
+		// Compared without adding: start+n can wrap past MaxInt64. size is at
+		// most maxXrefEntries; the constant bound states it for start and n.
+		if start < 0 || n < 0 || start > size || n > size-start || start > maxXrefEntries || n > maxXrefEntries {
 			return nil, fmt.Errorf("%w: xref Index section %d+%d outside Size %d", ErrStructureLimit, start, n, size)
 		}
 		for i := 0; i < int(n); i++ {
@@ -344,9 +346,16 @@ func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xre
 			case 0:
 				table[x] = xref{ptr: objptr{0, 65535}}
 			case 1:
-				table[x] = xref{ptr: objptr{uint32(x), uint16(v3)}, offset: int64(v2)}
+				// A generation outside uint16 is malformed and the row is
+				// skipped like one of unknown type, instead of wrapping.
+				if v3 <= math.MaxUint16 {
+					table[x] = xref{ptr: objptr{uint32(x), uint16(v3)}, offset: int64(v2)}
+				}
 			case 2:
-				table[x] = xref{ptr: objptr{uint32(x), 0}, inStream: true, stream: objptr{uint32(v2), 0}, offset: int64(v3)}
+				// Likewise an object stream number outside uint32.
+				if v2 <= math.MaxUint32 {
+					table[x] = xref{ptr: objptr{uint32(x), 0}, inStream: true, stream: objptr{uint32(v2), 0}, offset: int64(v3)}
+				}
 			default:
 			}
 		}
@@ -354,10 +363,12 @@ func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xre
 	return table, nil
 }
 
-func decodeInt(b []byte) int {
-	x := 0
+// decodeInt decodes a big-endian xref stream field of at most
+// maxXrefFieldWidth (8) bytes; uint64 holds it exactly on every platform.
+func decodeInt(b []byte) uint64 {
+	var x uint64
 	for _, c := range b {
-		x = x<<8 | int(c)
+		x = x<<8 | uint64(c)
 	}
 	return x
 }
@@ -425,7 +436,7 @@ func readXrefTableData(b *buffer, table []xref) ([]xref, error) {
 			return nil, fmt.Errorf("malformed xref table")
 		}
 		// Compared without adding: start+n can wrap past MaxInt64.
-		if start < 0 || n < 0 || start > maxXrefEntries || n > maxXrefEntries-start {
+		if start < 0 || n < 0 || start > maxXrefEntries || n > maxXrefEntries-start || n > maxXrefEntries {
 			return nil, fmt.Errorf("%w: xref table section %d+%d over %d entries", ErrStructureLimit, start, n, maxXrefEntries)
 		}
 		for i := 0; i < int(n); i++ {
@@ -433,7 +444,9 @@ func readXrefTableData(b *buffer, table []xref) ([]xref, error) {
 			off, ok1 := b.readToken().(int64)
 			gen, ok2 := b.readToken().(int64)
 			alloc, ok3 := b.readToken().(keyword)
-			if !ok1 || !ok2 || !ok3 || alloc != keyword("f") && alloc != keyword("n") {
+			// A generation outside uint16 is malformed like a non-integer one,
+			// instead of wrapping into another object's generation.
+			if !ok1 || !ok2 || !ok3 || alloc != keyword("f") && alloc != keyword("n") || gen < 0 || gen > math.MaxUint16 {
 				return nil, fmt.Errorf("malformed xref table")
 			}
 			x := int(start) + i
@@ -824,20 +837,20 @@ func (r *Reader) resolve(parent objptr, x any) Value {
 				if strm.Key("Type").Name() != "ObjStm" {
 					panic("not an object stream")
 				}
-				n := int(strm.Key("N").Int64())
+				n := strm.Key("N").Int64() // int64: an int could wrap on 32-bit builds
 				first := strm.Key("First").Int64()
 				if first == 0 {
 					panic("missing First")
 				}
 				b := newBuffer(strm.Reader(), 0, r)
 				b.allowEOF = true
-				for i := 0; i < n; i++ {
+				for i := int64(0); i < n; i++ {
 					id, ok1 := b.readToken().(int64)
 					off, ok2 := b.readToken().(int64)
 					if !ok1 || !ok2 {
 						break // the header ended before N pairs
 					}
-					if uint32(id) == ptr.id {
+					if id == int64(ptr.id) { // as lexed, not modulo 2^32
 						b.seekForward(first + off)
 						x = b.readObject()
 						break Search

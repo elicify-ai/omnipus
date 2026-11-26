@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 )
 
@@ -456,9 +457,9 @@ func (b *buffer) readObject() object {
 		return tok
 	}
 
-	if t1, ok := tok.(int64); ok && int64(uint32(t1)) == t1 {
+	if t1, ok := tok.(int64); ok && t1 >= 0 && t1 <= math.MaxUint32 {
 		tok2 := b.readToken()
-		if t2, ok := tok2.(int64); ok && int64(uint16(t2)) == t2 {
+		if t2, ok := tok2.(int64); ok && t2 >= 0 && t2 <= math.MaxUint16 {
 			tok3 := b.readToken()
 			switch tok3 {
 			case keyword("R"):

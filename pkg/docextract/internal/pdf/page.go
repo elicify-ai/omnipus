@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"sort"
 	"strings"
@@ -156,12 +157,23 @@ func (f Font) BaseFont() string {
 
 // FirstChar returns the code point of the first character in the font.
 func (f Font) FirstChar() int {
-	return int(f.V.Key("FirstChar").Int64())
+	return int32Value(f.V.Key("FirstChar"))
 }
 
 // LastChar returns the code point of the last character in the font.
 func (f Font) LastChar() int {
-	return int(f.V.Key("LastChar").Int64())
+	return int32Value(f.V.Key("LastChar"))
+}
+
+// int32Value returns v's integer as an int, or 0 (what Int64 gives a
+// non-integer) when it lies outside int32: a character code is a few bytes
+// wide, so a larger one is malformed and must not wrap on a 32-bit build.
+func int32Value(v Value) int {
+	x := v.Int64()
+	if x < math.MinInt32 || x > math.MaxInt32 {
+		return 0
+	}
+	return int(x)
 }
 
 // Widths returns the widths of the glyphs in the font.
@@ -246,17 +258,19 @@ func newDictEncoder(differences Value) *dictEncoder {
 	for c := range e.table {
 		e.table[c] = rune(c)
 	}
-	n := -1
+	// int64, as lexed: a code outside 0..255 names no byte, and narrowing
+	// it to int could wrap it into that range on a 32-bit build.
+	n := int64(-1)
 	for j := 0; j < differences.Len(); j++ {
 		differences.r.charge(1)
 		x := differences.Index(j)
 		switch x.Kind() {
 		case Integer:
-			n = int(x.Int64())
+			n = x.Int64()
 		case Name:
 			// Only a byte's first known name is ever used, so only those
 			// names are hashed, each once, and the hash costs its bytes.
-			if n >= 0 && n < len(e.table) && !known[n] {
+			if n >= 0 && n < int64(len(e.table)) && !known[n] {
 				glyph := x.Name()
 				differences.r.charge(int64(len(glyph)))
 				if r := nameToRune[glyph]; r != 0 {

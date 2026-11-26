@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 
@@ -130,8 +131,12 @@ func inspectPDFParse(data []byte) (info PDFInfo, err error) {
 	if root.Kind() != pdf.Dict {
 		return PDFInfo{}, fmt.Errorf("%w: no page tree", ErrPDFMalformed)
 	}
-	if count := root.Key("Count"); count.Kind() == pdf.Integer && count.Int64() > 0 {
-		info.Pages = int(count.Int64())
+	// A page count above int32 is malformed (no reader indexes that many
+	// pages), so it stays unknown (0) like a missing or non-positive one.
+	if count := root.Key("Count"); count.Kind() == pdf.Integer {
+		if n := count.Int64(); n > 0 && n <= math.MaxInt32 {
+			info.Pages = int(n)
+		}
 	}
 	walker := pageTextWalker{fonts: pdf.NewFontCache(), budget: len(data)}
 	if err := walker.walkBounded(root); err != nil {
