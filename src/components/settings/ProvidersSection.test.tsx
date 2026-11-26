@@ -2161,7 +2161,7 @@ describe('ProvidersSection — Row expand shows limits and window source (FR-032
     expect(screen.getByTestId('model-limit-source-openai-A')).toHaveTextContent('catalog')
   })
 
-  it('a local model with window_unknown renders "No context length" with a pre-filled Settings → Models link (X-08)', async () => {
+  it('a local model with window_unknown renders "No context length" with a pre-filled Settings → Limits link (X-08)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ENTITLEMENT_PROVIDER] as never)
     vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(
       catalogWithModels('openai', [{ ...MODEL_A, window_unknown: true }]) as never,

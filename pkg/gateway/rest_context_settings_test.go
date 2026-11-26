@@ -1,7 +1,7 @@
 // Tests for GET/PUT /api/v1/settings/context (ADR-066 D9, FR-036 / US-11).
 //
 // The regression these guard: the contract, the generated types, the config
-// struct and the whole Settings → Models panel shipped, but no handler was
+// struct and the whole Settings → Limits panel shipped, but no handler was
 // ever registered, so every control on that screen 404'd — including
 // model_overrides, the ONLY documented escape from the context_window_unknown
 // turn refusal. TestContextSettings_RouteIsRegisteredOnRealMux drives the real

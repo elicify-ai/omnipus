@@ -35,7 +35,8 @@ function tokensU2(css: Root) {
 export function atLeastTouchU2(value: string, css: Root) {
   const resolved = expandU2(value, tokensU2(css)).trim()
   const literal = /^(\d+(?:\.\d+)?)px$/.exec(resolved)
-  const maximum = /^max\(100%,\s*(\d+(?:\.\d+)?)px\)$/.exec(resolved)
+  // Custom-property token streams may retain trailing CSS whitespace.
+  const maximum = /^max\(100%,\s*(\d+(?:\.\d+)?)px\s*\)$/.exec(resolved)
   return Number(literal?.[1] ?? maximum?.[1] ?? 0) >= 44
 }
 
