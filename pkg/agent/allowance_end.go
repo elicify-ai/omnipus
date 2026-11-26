@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -45,12 +46,15 @@ func (al *AgentLoop) EndAllowancesFor(ctx context.Context, logger *audit.Logger,
 		return nil
 	}
 	ended := al.approvalGrants.EndFor(c.AgentIDs, c.Key)
+	// The entry names the changed key as its permission map stores it (C-26
+	// Audit): a skill's bare key, without the store's "skill:" prefix.
+	changedKey := strings.TrimPrefix(c.Key, security.AllowanceSubjectSkillPrefix)
 	var errs []error
 	revoked := map[string]bool{}
 	for _, e := range ended {
 		if err := audit.EmitAllowanceEnded(ctx, logger, audit.AllowanceEnded{
 			AgentID: e.AgentID, Kind: e.Kind, Subject: e.Subject,
-			Key: c.Key, Old: c.Old, New: c.New,
+			Key: changedKey, Old: c.Old, New: c.New,
 		}); err != nil {
 			errs = append(errs, err)
 		}
