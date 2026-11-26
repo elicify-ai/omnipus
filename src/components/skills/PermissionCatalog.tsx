@@ -195,7 +195,7 @@ export function PermissionCatalog({
       ) : active && shown === 0 ? (
         <div className="flex flex-col items-start gap-[var(--space-2)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-            {filters.search.trim() ? `No ${noun} match "${filters.search.trim()}"` : `No ${noun} match the filters`}
+            {filters.search.trim() ? `No ${noun} match “${filters.search.trim()}”` : `No ${noun} match the filters`}
           </p>
           <Button variant="outline" size="sm" className="pointer-coarse:min-h-[var(--target-touch-minimum)]" onClick={clearAll}>Clear search and filters</Button>
         </div>
