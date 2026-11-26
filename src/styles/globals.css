@@ -231,6 +231,27 @@ html {
   }
 }
 
+/* Native radio hit region (FR-070, U8-A; design-system rule 12). A native
+   radio inside a card-style label draws a 13 px glyph near the card's edge, so
+   a touch-sized box around the glyph reached past the card into dead space.
+   Wrap the input in an element with data-radio-target and the class
+   relative: under a coarse pointer the wrapper's ::before grows the tap area
+   to the touch minimum around the glyph. The wrapper sits inside the option's
+   label, so every point of it selects that option. Inputs draw no ::before,
+   hence the wrapper. Fine pointer unchanged. */
+@media (pointer: coarse) {
+  [data-radio-target]::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, var(--target-touch-minimum));
+    height: max(100%, var(--target-touch-minimum));
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+  }
+}
+
 body {
   margin: 0;
   background-color: var(--color-primary);

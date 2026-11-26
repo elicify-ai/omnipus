@@ -1019,15 +1019,18 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
                     }`}
                   >
-                    <input tabIndex={0}
-                      type="radio"
-                      name="sandbox-mode"
-                      value={m.value}
-                      checked={effectiveMode === m.value}
-                      onChange={() => handleModeChange(m.value)}
-                      className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
-                      aria-label={`Sandbox mode: ${m.label}`}
-                    />
+                    {/* U8-A / FR-070: coarse-pointer tap area around the glyph (globals.css [data-radio-target]). */}
+                    <span data-radio-target="" className="relative mt-[var(--space-0-5)] inline-flex shrink-0">
+                      <input tabIndex={0}
+                        type="radio"
+                        name="sandbox-mode"
+                        value={m.value}
+                        checked={effectiveMode === m.value}
+                        onChange={() => handleModeChange(m.value)}
+                        className="accent-[var(--color-accent)]"
+                        aria-label={`Sandbox mode: ${m.label}`}
+                      />
+                    </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{m.label}</p>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{m.desc}</p>
@@ -1066,17 +1069,20 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
                     }`}
                   >
-                    <input
-                      tabIndex={0}
-                      type="radio"
-                      name="filesystem-model"
-                      value={m.value}
-                      checked={currentFsModel === m.value}
-                      onChange={() => handleFilesystemModelChange(m.value)}
-                      className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
-                      aria-label={`Filesystem model: ${m.label}`}
-                      data-testid={`sandbox-fs-model-${m.value}`}
-                    />
+                    {/* U8-A / FR-070: coarse-pointer tap area around the glyph (globals.css [data-radio-target]). */}
+                    <span data-radio-target="" className="relative mt-[var(--space-0-5)] inline-flex shrink-0">
+                      <input
+                        tabIndex={0}
+                        type="radio"
+                        name="filesystem-model"
+                        value={m.value}
+                        checked={currentFsModel === m.value}
+                        onChange={() => handleFilesystemModelChange(m.value)}
+                        className="accent-[var(--color-accent)]"
+                        aria-label={`Filesystem model: ${m.label}`}
+                        data-testid={`sandbox-fs-model-${m.value}`}
+                      />
+                    </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{m.label}</p>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{m.desc}</p>
@@ -1162,17 +1168,20 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                           : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
                       }`}
                     >
-                      <input
-                        tabIndex={0}
-                        type="radio"
-                        name="workspace-limit"
-                        value={o.value}
-                        checked={selected}
-                        onChange={() => handleWorkspaceLimitChange(o.value === 'on')}
-                        className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
-                        aria-label={`Shell workspace limit: ${o.label}`}
-                        data-testid={`sandbox-workspace-limit-${o.value}`}
-                      />
+                      {/* U8-A / FR-070: coarse-pointer tap area around the glyph (globals.css [data-radio-target]). */}
+                      <span data-radio-target="" className="relative mt-[var(--space-0-5)] inline-flex shrink-0">
+                        <input
+                          tabIndex={0}
+                          type="radio"
+                          name="workspace-limit"
+                          value={o.value}
+                          checked={selected}
+                          onChange={() => handleWorkspaceLimitChange(o.value === 'on')}
+                          className="accent-[var(--color-accent)]"
+                          aria-label={`Shell workspace limit: ${o.label}`}
+                          data-testid={`sandbox-workspace-limit-${o.value}`}
+                        />
+                      </span>
                       <div className="flex-1 min-w-0">
                         <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{o.label}</p>
                         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{o.desc}</p>
