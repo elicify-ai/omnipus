@@ -84,6 +84,18 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 	return ""
 }
 
+// skillSearchInputs gives ToolSearch's skill search (C-17) the live values a
+// Skill load decides from (composeSkillLoadPolicy): the global skill
+// settings and the agent's own skill values. ok is false with no loaded
+// config.
+func (al *AgentLoop) skillSearchInputs(agentID string) (config.PersistedSkillSettings, *config.AgentSkillsCfg, bool) {
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return config.PersistedSkillSettings{}, nil, false
+	}
+	return skillSettingsOf(cfg), agentSkillsCfg(cfg, agentID), true
+}
+
 // agentSkillsCfg returns the agent's own skill values from the live config.
 func agentSkillsCfg(cfg *config.Config, agentID string) *config.AgentSkillsCfg {
 	for i := range cfg.Agents.List {

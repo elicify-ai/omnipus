@@ -66,6 +66,10 @@ type ToolsTool struct {
 	// (e.g. "denied by policy", "unknown tool (did you mean 'X'?)").
 	canLoad    func(ctx context.Context, name string) (ok bool, reason string)
 	markLoaded func(ctx context.Context, names []string) (loaded map[string]any, rejected []string)
+	// skillHome is the Omnipus home whose installed skills a query also
+	// searches (C-17), decided from skillInputs; "" or nil searches none.
+	skillHome   string
+	skillInputs SkillSearchInputs
 
 	// BM25 engine cache (version-keyed, atomic-pointer + mutex for rebuild).
 	cacheMu sync.Mutex
@@ -89,6 +93,15 @@ func (t *ToolsTool) SetResolver(
 ) {
 	t.canLoad = canLoad
 	t.markLoaded = markLoaded
+}
+
+// SetSkillSearch sets the Omnipus home whose installed skills a query also
+// searches for the calling agent, and the live settings it decides from
+// (C-17, C-11). The loop that registers ToolSearch sets both, so the search
+// does not depend on a kernel sandbox being in force and decides from the
+// same values as a Skill load.
+func (t *ToolsTool) SetSkillSearch(home string, inputs SkillSearchInputs) {
+	t.skillHome, t.skillInputs = home, inputs
 }
 
 func (t *ToolsTool) Name() string           { return "ToolSearch" }
@@ -140,7 +153,7 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(query) != "" {
 		// C-17: the granted, not-denied skills of the agent are found too.
-		return withSkillHits(t.execSearchAndLoad(ctx, query), searchAgentSkills(ctx, query, t.maxSearchResults))
+		return withSkillHits(t.execSearchAndLoad(ctx, query), searchAgentSkills(ctx, t.skillHome, t.skillInputs, query, t.maxSearchResults))
 	}
 
 	// Neither provided.

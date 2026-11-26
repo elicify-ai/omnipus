@@ -22,7 +22,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -37,19 +36,27 @@ func skillSearchLine(h skillSearchHit) string {
 	return fmt.Sprintf("[skill] %s — %s Load it with the Skill tool.", h.slug, strings.TrimSpace(h.description))
 }
 
+// SkillSearchInputs returns the skill settings and the agent's own skill
+// values a search decides from: the same live values a Skill load reads.
+// ok is false when no configuration is loaded.
+type SkillSearchInputs func(agentID string) (settings config.PersistedSkillSettings, agentSkills *config.AgentSkillsCfg, ok bool)
+
 // searchAgentSkills returns the granted, not-denied installed skills of the
-// calling agent that match query, best first. The home is the registered
-// turn policy base; with no home or no agent nothing is returned.
-func searchAgentSkills(ctx context.Context, query string, limit int) []skillSearchHit {
-	base, ok := sandbox.RegisteredTurnPolicyBase()
+// calling agent under home that match query, best first. With no home, no
+// agent or no loaded configuration nothing is returned.
+func searchAgentSkills(ctx context.Context, home string, inputs SkillSearchInputs, query string, limit int) []skillSearchHit {
 	agentID := ToolAgentID(ctx)
-	if !ok || base.HomePath == "" || agentID == "" {
+	if home == "" || agentID == "" || inputs == nil {
 		return nil
 	}
-	return searchSkillsIn(base.HomePath, agentID, query, limit)
+	settings, agentSkills, ok := inputs(agentID)
+	if !ok {
+		return nil
+	}
+	return searchSkillsIn(home, agentID, settings, agentSkills, query, limit)
 }
 
-func searchSkillsIn(home, agentID, query string, limit int) []skillSearchHit {
+func searchSkillsIn(home, agentID string, settings config.PersistedSkillSettings, agentSkills *config.AgentSkillsCfg, query string, limit int) []skillSearchHit {
 	if _, err := os.Stat(agentstore.RecordsDir(home)); err != nil {
 		return nil
 	}
@@ -60,16 +67,6 @@ func searchSkillsIn(home, agentID, query string, limit int) []skillSearchHit {
 				map[string]any{"agent_id": agentID, "error": err.Error()})
 		}
 		return nil
-	}
-	settings, err := config.ReadPersistedSkillSettings(home)
-	if err != nil {
-		logger.WarnCF("tools", "ToolSearch: skill settings unreadable; no skill is searched",
-			map[string]any{"agent_id": agentID, "error": err.Error()})
-		return nil
-	}
-	var agentSkills *config.AgentSkillsCfg
-	if rec.Tools != nil {
-		agentSkills = rec.Tools.Skills
 	}
 	granted := map[string]bool{}
 	for _, g := range rec.Skills {
