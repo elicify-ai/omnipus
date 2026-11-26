@@ -13,6 +13,7 @@ package agentstore
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -37,18 +38,38 @@ func (s *Store) overlay(agent *config.AgentConfig) error {
 	return readOverlay(s.home, agent)
 }
 
-// notifyOverlaid hands the registry a record just written by a skills path
-// with the overlay applied, so an agent the upgrade has not reached runs on
-// its planned values (C-19). rec must be the caller's own copy: the overlay
-// changes it in place. When the values cannot be decided the registry is not
-// told, and the error says the record itself was saved.
+// notifyOverlaid hands the registry a record just written with the overlay
+// applied, so an agent the upgrade has not reached runs on its planned
+// values (C-19), the same record Get returns. The overlay works on a copy:
+// rec (the caller's record, or the one returned to it) is not changed. When
+// the values cannot be decided the registry is not told, and the error says
+// the record itself was saved.
 func (s *Store) notifyOverlaid(id string, rec *config.AgentConfig) error {
-	if s.notifier == nil {
+	if s.notifier == nil || rec == nil {
 		return nil
 	}
-	if err := s.overlay(rec); err != nil {
+	notified := overlayCopy(rec)
+	if err := s.overlay(notified); err != nil {
 		return fmt.Errorf("agentstore: %q was saved, but its upgraded skill values cannot be decided, so the running agent was not updated: %w", id, err)
 	}
-	s.notifier.AgentUpserted(id, rec)
+	s.notifier.AgentUpserted(id, notified)
 	return nil
+}
+
+// overlayCopy copies rec deeply enough for the overlay, which changes only
+// the agent's skill overrides and its built-in tool policies.
+func overlayCopy(rec *config.AgentConfig) *config.AgentConfig {
+	cp := *rec
+	if rec.Tools == nil {
+		return &cp
+	}
+	tools := *rec.Tools
+	tools.Builtin.Policies = maps.Clone(rec.Tools.Builtin.Policies)
+	if rec.Tools.Skills != nil {
+		skills := *rec.Tools.Skills
+		skills.Policies = maps.Clone(rec.Tools.Skills.Policies)
+		tools.Skills = &skills
+	}
+	cp.Tools = &tools
+	return &cp
 }

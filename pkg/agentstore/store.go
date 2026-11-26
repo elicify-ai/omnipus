@@ -243,10 +243,7 @@ func (s *Store) Create(id string, cfg *config.AgentConfig) error {
 	if err != nil {
 		return fmt.Errorf("agentstore: create %q: %w", id, err)
 	}
-	if s.notifier != nil {
-		s.notifier.AgentUpserted(id, cfg)
-	}
-	return nil
+	return s.notifyOverlaid(id, cfg)
 }
 
 // Update performs a read-modify-write of the agent identified by id under
@@ -263,8 +260,8 @@ func (s *Store) Update(id string, mutate func(*config.AgentConfig) error) (*conf
 	if err != nil {
 		return nil, fmt.Errorf("agentstore: update %q: %w", id, err)
 	}
-	if s.notifier != nil {
-		s.notifier.AgentUpserted(id, updated)
+	if err := s.notifyOverlaid(id, updated); err != nil {
+		return updated, err
 	}
 	return updated, nil
 }

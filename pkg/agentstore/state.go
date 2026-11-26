@@ -347,10 +347,7 @@ func (s *Store) MutateStateWithAgentMD(id, expectedRevision string, mutate func(
 			result.PersistenceStatus = PersistenceComplete
 			result.Revision = actual.Revision
 			updated = actual.Agent
-			if s.notifier != nil {
-				s.notifier.AgentUpserted(id, updated)
-			}
-			return nil
+			return s.notifyOverlaid(id, updated)
 		})
 	})
 	if err != nil {
@@ -468,10 +465,7 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 				return readErr
 			}
 			result.PersistenceStatus, result.Revision = PersistenceComplete, actual.Revision
-			if s.notifier != nil {
-				s.notifier.AgentUpserted(id, agent)
-			}
-			return nil
+			return s.notifyOverlaid(id, agent)
 		})
 	})
 	if err != nil {
