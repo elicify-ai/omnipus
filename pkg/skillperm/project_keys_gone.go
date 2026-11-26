@@ -26,6 +26,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+// GoneProjectKeys returns the project keys among keys whose workspace or
+// folder is gone, by the same complete-answer rule as the self-heal. The
+// gateway uses it to drop those keys from the live agent copies in the step
+// that heals the stored maps.
+func GoneProjectKeys(home string, keys []string) (map[string]struct{}, error) {
+	return goneProjectKeys(home, keys)
+}
+
 // goneProjectKeys returns the project keys among keys whose workspace or
 // folder is gone. It fails when the workspace list cannot be read.
 func goneProjectKeys(home string, keys []string) (map[string]struct{}, error) {
