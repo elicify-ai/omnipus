@@ -113,6 +113,19 @@ func SkillRefusalText(skill string, reason SkillDenyReason) string {
 	return ""
 }
 
+// ProjectSkillRefusalText words a deny of a project skill (C-11, S-102).
+// Refused by the project skill's own Deny, it names the project skill and
+// its workspace (workspace is its name, or its id when it has none), so the
+// person finds the row that refused it; any other reason is worded as
+// SkillRefusalText words it.
+func ProjectSkillRefusalText(skill, workspace string, reason SkillDenyReason) string {
+	if reason != SkillDenyPermission {
+		return SkillRefusalText(skill, reason)
+	}
+	return "The project skill `" + skill + "` in workspace \"" + workspace +
+		"\" is set to Deny in Skills & Tools. Change its permission there to use it."
+}
+
 // SkillPolicyValues returns the stored global value of key and the agent's
 // own override ("" when absent).
 func SkillPolicyValues(cfg *config.Config, agentSkills *config.AgentSkillsCfg, key string) (global, agent config.ToolPolicy) {

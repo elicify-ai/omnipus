@@ -201,6 +201,8 @@ The explicit description wins over body text. If you rely on the fallback instea
 
 A skill that lives in a folder mounted into a workspace (`.omnipus/skills` or `.claude/skills`) is a project skill. Agents in that workspace can load it. Omnipus does not change project skills: `edit_skill` and the file-tool rules above apply to your own skills folder only. Edit a project skill in the repository itself. A project skill cannot replace a skill you granted under the same name; your grant wins.
 
+A project skill has its own permission in each workspace, separate from an installed skill with the same name. When a project skill is set to Deny, an agent's load is refused with a message that names the project skill and its workspace, for example: "The project skill `notes` in workspace "Docs" is set to Deny in Skills & Tools. Change its permission there to use it."
+
 `list_skills` with `scope=management` and a `workspace_id` shows a workspace's project skills; only Omnipus may name a workspace other than the current one. `list_skills` is now a plain list and no longer takes a skill name. To read one skill, an agent uses `get_skill` with its `id` and a `fields` list that names what it wants (`instructions`, `files`, `versions` and so on, or `all`).
 
 A skill installed from a GitHub link takes its folder name from the link. That name must be a valid skill name: letters, digits and single hyphens, at most 64 characters, not a reserved Windows device name such as `CON`. Otherwise the install is refused before anything is written. A link that hides a slash or backslash in percent-encoding (`%2F`, `%5C`, or a double-encoded form) is refused outright, before anything is downloaded.

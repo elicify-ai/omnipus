@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 const skillLoadDeniedReason = "skill_load_denied"
@@ -67,6 +68,9 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 	switch d.Outcome {
 	case tools.SkillOutcomeDeny:
 		ex.toctouPolicy = string(config.ToolPolicyDeny)
+		if project {
+			return tools.ProjectSkillRefusalText(resolved.Slug, workspaceLabel(omnipusHome(), rt.ts.opts.WorkspaceID), d.Reason)
+		}
 		return tools.SkillRefusalText(resolved.Slug, d.Reason)
 	case tools.SkillOutcomeAskPending:
 		// A running timed allowance settles the permission check.
@@ -79,6 +83,15 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 		ex.toctouPolicy = stricterPolicy(ex.toctouPolicy, string(config.ToolPolicyAsk))
 	}
 	return ""
+}
+
+// workspaceLabel is the name a person knows workspace id by: its record's
+// name, or the id itself when the record is unreadable or has no name.
+func workspaceLabel(home, id string) string {
+	if name, _, ok := workspace.LoadTitle(home, id); ok && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return id
 }
 
 // agentSkillsCfg returns the agent's own skill values from the live config.
