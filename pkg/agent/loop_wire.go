@@ -1353,6 +1353,7 @@ func (rw *registerSharedToolsWire3) registerToolSearch(agentID string, agent *Ag
 
 			toolsTool := tools.NewToolsTool(agent.Tools, ttl, maxResults)
 			toolsTool.SetSkillSearch(omnipusHome(), rw.rs.al.skillSearchInputs)
+			toolsTool.SetLevelSource(rw.rs.al.readTurnToolSurface)
 			toolsTool.SetResolver(
 				// canLoad returns (true, "") when name is a policy-allowed LAZY tool for
 				// the calling agent. Full/infra tools are handled before this call (they

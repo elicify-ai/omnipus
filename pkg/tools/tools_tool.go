@@ -70,6 +70,8 @@ type ToolsTool struct {
 	// searches (C-17), decided from skillInputs; "" or nil searches none.
 	skillHome   string
 	skillInputs SkillSearchInputs
+	// levels reads the stored tool levels the turn uses (C-15).
+	levels func() ToolSurface
 
 	// BM25 engine cache (version-keyed, atomic-pointer + mutex for rebuild).
 	cacheMu sync.Mutex
@@ -541,15 +543,19 @@ func parseNamesArg(args map[string]any) ([]string, error) {
 	}
 }
 
-// searchSurface is the stored tool levels ToolSearch reads (C-15). An
-// unreadable config keeps the pre-conversion tiers for this call and says
-// so in the log: the target tool's own permission still applies.
+// SetLevelSource sets where ToolSearch reads the stored tool levels: the
+// loop that registers it hands in the reader its turns use, so ToolSearch's
+// load and search answers follow the same levels as the turn's request and
+// More tools block (C-15), with or without a kernel sandbox in force.
+func (t *ToolsTool) SetLevelSource(levels func() ToolSurface) {
+	t.levels = levels
+}
+
+// searchSurface is the stored tool levels ToolSearch reads (C-15). With no
+// level source (the catalog-shape stub) the pre-conversion tiers apply.
 func (t *ToolsTool) searchSurface() ToolSurface {
-	surface, err := registeredToolSurface()
-	if err != nil {
-		logger.ErrorCF("tools", "ToolSearch: stored tool levels unreadable; using the pre-conversion tiers for this call",
-			map[string]any{"error": err.Error()})
+	if t.levels == nil {
 		return ToolSurface{}
 	}
-	return surface
+	return t.levels()
 }

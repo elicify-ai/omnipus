@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // ToolSurface is one turn's stored tool levels. Levels is nil before the
@@ -35,16 +34,6 @@ func ReadToolSurface(home string) (ToolSurface, error) {
 		return ToolSurface{}, err
 	}
 	return ToolSurface{Levels: v.Tools}, nil
-}
-
-// registeredToolSurface reads the levels of the registered turn policy
-// home (the same home ToolSearch's skill hits read). No home: legacy.
-func registeredToolSurface() (ToolSurface, error) {
-	base, ok := sandbox.RegisteredTurnPolicyBase()
-	if !ok || base.HomePath == "" {
-		return ToolSurface{}, nil
-	}
-	return ReadToolSurface(base.HomePath)
 }
 
 // Leveled reports whether stored levels drive this surface.
