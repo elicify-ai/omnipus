@@ -46,7 +46,9 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
       <input tabIndex={0}
         className={cn(
           // 44px tap target on mobile (touch min); compact 36px on sm+ (pointer).
-          'flex h-11 sm:h-9 [@media(pointer:coarse)]:h-[44px] w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] transition-colors motion-reduce:transition-none',
+          // U7-4 / FR-070: a coarse-pointer width floor too, because a preferred
+          // width (w-28, w-full) is not a minimum in a shrinkable flex row.
+          'flex h-11 sm:h-9 [@media(pointer:coarse)]:h-[44px] pointer-coarse:min-w-[var(--target-touch-minimum)] w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] transition-colors motion-reduce:transition-none',
           'placeholder:text-[var(--color-muted)]',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className

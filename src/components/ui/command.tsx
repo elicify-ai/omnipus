@@ -23,7 +23,9 @@ const CommandInput = React.forwardRef<
   <div className="flex items-center border-b px-[var(--space-2-5)]" style={{ borderColor: 'var(--color-border)' }}>
     <CommandPrimitive.Input
       ref={ref}
-      className={clsx("flex h-10 w-full rounded-md bg-transparent py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] outline-none [@media(pointer:coarse)]:min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50", className)}
+      // U7-4 / FR-070: on a coarse pointer the search field keeps the touch
+      // minimum width too, so a flex row can never shrink it below it.
+      className={clsx("flex h-10 w-full rounded-md bg-transparent py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] outline-none [@media(pointer:coarse)]:min-h-[44px] pointer-coarse:min-w-[var(--target-touch-minimum)] disabled:cursor-not-allowed disabled:opacity-50", className)}
       style={{ color: 'var(--color-secondary)' }}
       {...props}
     />

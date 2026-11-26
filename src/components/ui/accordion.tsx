@@ -32,7 +32,8 @@ const AccordionTrigger = React.forwardRef<
       className={cn(
         // FR-070 (U3-2): the touch-minimum token sets the coarse-pointer height;
         // the rem padding alone gives 43.6 px at the app's 14 px root font.
-        'flex flex-1 items-center justify-between pointer-coarse:min-h-[var(--target-touch-minimum)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
+        // U7-4: and a width floor, so a flex row can never shrink it below it.
+        'flex flex-1 items-center justify-between pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
         className
       )}
       {...props}
