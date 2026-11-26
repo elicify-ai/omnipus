@@ -9,9 +9,9 @@
 //   S-46, S-47, US-6 AS3     typing "browser" opens only the Browser group and shows only
 //                            the rows that match; Escape empties the field and the groups
 //                            show collapsed
-//   S-49, US-6 AS5           "No tools match “zzzz”" with "Clear search and filters" (the
-//                            spec prints curly quotes, the page straight ones: either is
-//                            accepted and the difference is reported)
+//   S-49, US-6 AS5           "No tools match “zzzz”" with "Clear search and filters" (curly
+//                            quotes, as the spec prints them; the Part G version accepted
+//                            straight quotes too, and F4 of the architect's rulings ended that)
 //   US-6 AS4, C-20           under a search the group's Set all says "Set 3 of 3 matching"
 //                            and changes exactly the rows on screen
 //   US-1 AS1, C-2            a click on Deny shows Deny and saves only that tool
@@ -130,8 +130,10 @@ describe('Omnipus tools tab surface interaction contract', () => {
     await openTab(/^omnipus tools/i)
     await user.type(await search(), 'zzzz')
 
-    // Spec S-49 prints curly quotes, the page straight ones: either is accepted (reported in the pack).
-    expect(await screen.findByText(/^No tools match [“"]zzzz[”"]$/)).toBeInTheDocument()
+    // Oracle: spec S-49 / US-6 AS5 print curly quotes (U+201C, U+201D). Part G accepted either
+    // pair and reported the difference; the architect's F4 ruling (arch/rulings-partG-F3-F6.md)
+    // settled it for the spec, so the straight-quote form no longer passes.
+    expect(await screen.findByText(/^No tools match “zzzz”$/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Clear search and filters' }))
 
     expect(await search()).toHaveValue('')

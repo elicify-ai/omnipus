@@ -5,8 +5,8 @@
 //   S-46: groups start collapsed; typing "browser" opens only the matching
 //         group and only matching rows show;
 //   S-47: Escape empties the field and all groups collapse again;
-//   S-49: no match shows "No tools match "zzzz"" with "Clear search and
-//         filters";
+//   S-49: no match shows `No tools match “zzzz”` (curly quotes, as the spec
+//         writes them) with "Clear search and filters";
 //   S-50: a row whose saved value no longer matches the filter leaves the
 //         list, and clearing the filter shows it again;
 //   S-48: the Set all control over a filtered list is named
@@ -163,7 +163,13 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
   it('S-49: no match shows the empty state with its clear control', async () => {
     await typeSearch('zzzz')
 
-    expect(screen.getByText('No tools match "zzzz"')).toBeInTheDocument()
+    // Oracle: spec S-49 / US-6 AS5 write the message with typographic (curly) quotes,
+    // U+201C and U+201D around the term — `No tools match “zzzz”`. The earlier version of
+    // this assertion pinned straight quotes, which is the page's former behaviour and
+    // not the spec's; architect ruling F4 (arch/rulings-partG-F3-F6.md) and team-lead
+    // (2026-11-26) require the curly pair. getByText matches the whole text, so a
+    // straight-quote rendering fails here.
+    expect(screen.getByText('No tools match “zzzz”')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear search and filters' })).toBeInTheDocument()
   })
 
@@ -232,9 +238,12 @@ describe('SkillsToolsPage — search and filters (order 27)', () => {
 // SkillCard.test case 'renders Skills & Tools heading and tabs' (the old screen's
 // "Installed Skills", "MCP Servers" and "Built-in Tools") had no counterpart on the
 // page. Two data sets: the spec's own numbers, and smaller ones, so a label with
-// fixed numbers cannot pass both. The spec lists the tabs in this order but never
-// says they sit in this order, so the order is not asserted; whitespace between a
-// tab's name and its count is layout, not text.
+// fixed numbers cannot pass both. The ORDER is asserted too (Part H, architect ruling
+// F3): User Story 6 AS1 and FR-001 print "three tabs with counts — Skills, External
+// tools (MCP), Omnipus tools", the same order S-45 prints its three readings in. The
+// first version of this test compared the readings sorted, so a page that drew Omnipus
+// tools before External tools passed it. Whitespace between a tab's name and its count
+// is layout, not text.
 describe('SkillsToolsPage — the page opens on Skills with counts (S-45)', () => {
   function skillRecord(i: number): Skill {
     return {
@@ -261,7 +270,7 @@ describe('SkillsToolsPage — the page opens on Skills with counts (S-45)', () =
       skillCount: 2, serviceSizes: [3], omnipusCount: 5,
       tabs: ['Skills 2', 'External tools (MCP) 3', 'Omnipus tools 5'],
     },
-  ])('S-45: with $label the tabs read $tabs and Skills is selected', async ({ skillCount, serviceSizes, omnipusCount, tabs }) => {
+  ])('S-45: with $label the tabs read $tabs, in this order, and Skills is selected', async ({ skillCount, serviceSizes, omnipusCount, tabs }) => {
     const omnipus = Array.from({ length: omnipusCount }, (_, i) => tool(`omnipus_tool_${i}`, `group_${i % 7}`))
     const servers: McpServer[] = []
     const external: RegistryTool[] = []
@@ -308,5 +317,11 @@ describe('SkillsToolsPage — the page opens on Skills with counts (S-45)', () =
       },
       { timeout: 4000 },
     )
+    // US-6 AS1 / FR-001: the tabs sit in the order the spec lists them (document order is the
+    // order a person reads them and the order Tab and the arrow keys walk them).
+    expect(
+      screen.getAllByRole('tab').map(reading),
+      `the tabs sit in the order Skills, External tools (MCP), Omnipus tools (expected ${tabs.join(' | ')})`,
+    ).toEqual(tabs.map(squeeze))
   })
 })
