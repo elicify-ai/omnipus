@@ -27,7 +27,7 @@ it.each([
   ['block flex box in block flow', <div key="block"><a href="#x" className={`flex ${TOUCH_HEIGHT}`}>Go</a></div>, true],
   ['self-stretch overrides parent end', <div key="self-stretch" className="flex flex-col items-end"><a href="#x" className={`self-stretch ${TOUCH_HEIGHT}`}>Go</a></div>, true],
   ['default grid stretch', <div key="grid" className="grid"><a href="#x" className={TOUCH_HEIGHT}>Go</a></div>, true],
-  ['explicit full width in a row', <div key="full" className="flex"><a href="#x" className={`w-full ${TOUCH_HEIGHT}`}>Go</a></div>, true],
+  ['full width in a shrinkable row is not a minimum (part-43 ruling)', <div key="full" className="flex"><a href="#x" className={`w-full ${TOUCH_HEIGHT}`}>Go</a></div>, false],
   ['explicit coarse minimum width', <div key="minimum" className="flex"><a href="#x" className={`pointer-coarse:min-w-[var(--target-touch-minimum)] ${TOUCH_HEIGHT}`}>Go</a></div>, true],
 ] as const)('T4-5 width instrument — %s', async (name, ui, expected) => {
   render(ui)
