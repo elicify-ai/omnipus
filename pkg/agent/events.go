@@ -739,6 +739,15 @@ type ErrorPayload struct {
 	// webchat: uuid per connection. Not a wire-frame field — ErrorFrame is
 	// .strict() and already has its own session_id.
 	SessionID string
+	// RefusedInput marks an error that refuses ONE person's message and ends
+	// no turn (SFH-R5-2): the gateway sends it scoped to that message, so a
+	// turn still streaming in another view of the chat keeps its answer. An
+	// uncoded refused-input Message is an Omnipus sentence and is shown as
+	// written.
+	RefusedInput bool
+	// RefusedInputEntryID is the saved transcript entry id of the refused
+	// message; the gateway reads that entry's client message id from it.
+	RefusedInputEntryID string
 }
 
 // TurnTimeoutPayload describes a provider request that timed out inside a

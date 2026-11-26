@@ -89,6 +89,7 @@ var LLMErrorCodes = []string{
 	"external_cli_not_found",
 	"external_cli_invalid_config",
 	"model_list_unavailable",
+	"delegation_not_resumable",
 	"unknown",
 }
 
@@ -139,6 +140,7 @@ var LLMErrorUserMessages = map[string]string{
 	"external_cli_not_found":         "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"external_cli_invalid_config":    "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"model_list_unavailable":         "PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
+	"delegation_not_resumable":       "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation.",
 	"unknown":                        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -189,6 +191,7 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"external_cli_not_found":         LLMErrorAttributionConfig,
 	"external_cli_invalid_config":    LLMErrorAttributionConfig,
 	"model_list_unavailable":         LLMErrorAttributionProduct,
+	"delegation_not_resumable":       LLMErrorAttributionAmbiguous,
 	"unknown":                        LLMErrorAttributionUnknown,
 }
 
@@ -227,6 +230,9 @@ var LLMErrorMessageVariants = map[string]map[string]string{
 	"external_cli_invalid_config": {
 		"no_program": "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
 	},
+	"delegation_not_resumable": {
+		"no_cli": "I couldn't continue this delegation: its previous conversation can't be resumed. Start a new delegation.",
+	},
 }
 
 // LLMErrorNeutralMessages maps the codes whose chat sentence has a neutral-voice
@@ -246,6 +252,7 @@ var LLMErrorNeutralMessages = map[string]string{
 	"goal_state_unavailable":         "The goal for this conversation could not be read, so the work did not continue. Try again in a moment.",
 	"external_cli_not_found":         "{cli} could not be launched. Check the CLI worker's program path in Settings.",
 	"external_cli_invalid_config":    "{cli} could not be launched. Check the CLI worker's program path in Settings.",
+	"delegation_not_resumable":       "This delegation could not continue in {cli}: its previous conversation can't be resumed. Start a new delegation.",
 }
 
 // LLMErrorNeutralVariants maps the codes whose variants carry neutral-voice
@@ -261,5 +268,8 @@ var LLMErrorNeutralVariants = map[string]map[string]string{
 	},
 	"external_cli_invalid_config": {
 		"no_program": "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
+	},
+	"delegation_not_resumable": {
+		"no_cli": "This delegation could not continue: its previous conversation can't be resumed. Start a new delegation.",
 	},
 }

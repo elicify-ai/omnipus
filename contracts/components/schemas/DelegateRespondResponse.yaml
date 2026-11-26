@@ -2,9 +2,13 @@ type: object
 title: DelegateRespondResponse
 description: >
   Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement
-  only. A native answer routes into the child's turn; an external-CLI answer
-  reaches the same CLI conversation by interrupt and resume, or is refused.
-  No session is created or replaced by a respond.
+  only. A native answer routes into the child's turn. An external-CLI answer
+  goes to the same CLI conversation: once the CLI has reported its
+  conversation the run is interrupted and resumed with the answer, while the
+  CLI is still starting the answer is queued and delivered to that
+  conversation when the current run ends, and with no run in flight it is
+  refused. The acknowledgement does not say which of the two happened. No
+  session is created or replaced by a respond.
 required:
   - acknowledged
 additionalProperties: false

@@ -88,6 +88,11 @@ const (
 	// be used — no executor config, no CLI, a driver that could not be built
 	// (B16-config) or an unusable turn cap (B17b).
 	CodeExternalCLIInvalidConfig LLMErrorCode = "external_cli_invalid_config"
+	// CodeDelegationNotResumable: a delegated external-CLI helper's previous
+	// CLI conversation is gone (released at the end of its episode, or lost
+	// in a gateway restart), so it cannot continue (B16a). Selected only by
+	// errExternalResumeUnavailable's identity, never by text or call site.
+	CodeDelegationNotResumable LLMErrorCode = "delegation_not_resumable"
 )
 
 const (
@@ -1006,6 +1011,14 @@ func TranslateTurnError(err error) LLMError {
 	// external-CLI failure, the own request limiter, a duplicate tool name)
 	// carry it to every surface — never re-classified from their text.
 	if llm, ok := translateKnownCauseError(err); ok {
+		return llm
+	}
+	// #1857 B16a: a resume-unavailable refusal that reached here without its
+	// CLI fact (the sentinel raw or ordinarily wrapped) is still
+	// delegation_not_resumable, in W14's no-fact form. Identity only: an
+	// error that merely carries the same text is not this cause.
+	if errors.Is(err, errExternalResumeUnavailable) {
+		llm, _ := translateKnownCauseError(newResumeUnavailableRefusal("", err))
 		return llm
 	}
 	var route *providers.ModelRouteUnavailableError

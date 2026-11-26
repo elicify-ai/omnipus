@@ -4209,7 +4209,9 @@ paths:
         calling the same buildArgs() logic used at real dispatch time
         (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a
         hand-maintained description like GET /agents/executor-defaults.
-        Any cli_args token the safety filter (argsafety.go) would strip is
+        Any cli_args token the run filter (argsafety.go: the safety filter
+        plus any model option) would strip, and a model option in the saved
+        standard parameters when the worker's own model is passed, is
         excluded from the previewed argv and reported in dropped_args instead
         of being silently dropped, so the operator sees it before saving.
         Needs no existing agent id — mirrors POST /system/cli-validate's

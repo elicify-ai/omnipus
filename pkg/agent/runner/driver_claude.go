@@ -368,7 +368,7 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
 	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
 	args = append(args, kept...)
-	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
+	args = append(args, presetArgsForBuild("runner/claude", "claude", opts)...) // r17 §3.7 after the agent args; only a model option is dropped (#1880)
 	return args
 }
 
@@ -666,6 +666,15 @@ func (d *ClaudeDriver) Resume(ctx context.Context, runID string, instruction ...
 	// delivers nothing and never replays the original prompt.
 	opts.Input = resumeInstruction(instruction)
 	return d.ResumeWith(ctx, opts)
+}
+
+// HasNativeConversation reports whether the current or most recent run has
+// announced its claude session id, so an interrupt can be followed by a
+// Resume of the same conversation (#1899; see NativeConversationReporter).
+func (d *ClaudeDriver) HasNativeConversation() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.nativeID != ""
 }
 
 // ResumeWith continues the same native conversation under opts, not the prior

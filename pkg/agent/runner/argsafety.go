@@ -42,6 +42,20 @@
 // error surfaced to the operator. filterDangerousCLIArgs is the right place
 // to guard it regardless: the same last-occurrence-wins argv semantics apply,
 // and the same warn-and-drop shape (logDroppedCLIArgs) already covers it.
+//
+// A third category is model precedence (#1880, founder decision 2026-11-18,
+// ADR-032 amendment): the worker's configured model is the one model source.
+// Every driver passes that model itself, and some CLIs (opencode 2.2.6)
+// refuse a repeated model option outright, so a model option in a person's
+// "Additional CLI arguments" (--model, and the -m alias on codex and
+// opencode) is dropped and reported like the other entries. This replaces the
+// earlier rule that a cli_args model override passed through and won as the
+// last occurrence. The model entries live in modelPrecedenceCLIFlagsByCLI,
+// separate from the safety denylist, because they are not a safety guard:
+// PresetArgs (a Settings surface the safety filter never touches) are audited
+// against the safety denylist only (safetyCLIFlagsDetailed). The same model
+// entries also apply to PresetArgs, but only when the driver passes its own
+// model (preset_model.go::filterPresetArgs, founder decision 2026-11-19).
 
 package runner
 
@@ -76,8 +90,8 @@ type dangerousCLIFlag struct {
 // cli_args ONLY. It is deliberately narrow: only flags that can re-enable a
 // full permission/sandbox bypass, or otherwise conflict with the specific
 // non-interactive posture ADR-032 fix D chose for that CLI, are listed.
-// Ordinary cli_args (model overrides, logging flags, etc.) pass through
-// untouched.
+// Ordinary cli_args (logging flags, etc.) pass through untouched; model
+// options are handled by modelPrecedenceCLIFlagsByCLI below.
 var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	// claude: the driver itself now passes --dangerously-skip-permissions
 	// unconditionally (operator decision, 2026-07-05, reversing FR-5.3/US-5's
@@ -213,6 +227,30 @@ var dangerousCLIFlagsByCLI = map[string][]dangerousCLIFlag{
 	},
 }
 
+// modelPrecedenceReason is the reason reported for a dropped model option.
+const modelPrecedenceReason = "the worker's configured model takes precedence: Omnipus gives the CLI the worker's own model itself, so a model option in Additional CLI arguments is ignored — set the model in the worker's model field instead"
+
+// modelPrecedenceCLIFlagsByCLI lists, per CLI, the model options a person's
+// cli_args may not carry (#1880). Every value is dropped (nil valueCheck): the
+// configured model wins whatever the person's value is. The aliases follow
+// each CLI's own help text: claude documents --model only; codex and
+// opencode run also accept -m.
+var modelPrecedenceCLIFlagsByCLI = map[string][]dangerousCLIFlag{
+	"claude":   {{name: "--model", reason: modelPrecedenceReason}},
+	"codex":    {{name: "--model", reason: modelPrecedenceReason}, {name: "-m", reason: modelPrecedenceReason}},
+	"opencode": {{name: "--model", reason: modelPrecedenceReason}, {name: "-m", reason: modelPrecedenceReason}},
+}
+
+// runtimeCLIFlags is the full list of cli_args entries dropped at run for cli:
+// the safety/correctness denylist plus the model-precedence entries.
+func runtimeCLIFlags(cli string) []dangerousCLIFlag {
+	safety := dangerousCLIFlagsByCLI[cli]
+	model := modelPrecedenceCLIFlagsByCLI[cli]
+	out := make([]dangerousCLIFlag, 0, len(safety)+len(model))
+	out = append(out, safety...)
+	return append(out, model...)
+}
+
 // droppedCLIArg pairs a dropped cli_args flag descriptor (same "--flag" or
 // "--flag value" shape filterDangerousCLIArgs has always logged) with the
 // dangerousCLIFlag.reason that caused it to be dropped.
@@ -255,8 +293,22 @@ func filterDangerousCLIArgs(cli string, args []string) (kept []string, dropped [
 // exported for pkg/gateway's executor-command-preview endpoint so an
 // operator sees WHY a cli_args token would be dropped before saving, not
 // just that it would be).
+//
+// It applies every entry dropped at run: the safety denylist and the model
+// precedence entries (#1880).
 func filterDangerousCLIArgsDetailed(cli string, args []string) (kept []string, dropped []droppedCLIArg) {
-	deny := dangerousCLIFlagsByCLI[cli]
+	return filterCLIArgsAgainst(runtimeCLIFlags(cli), args)
+}
+
+// safetyCLIFlagsDetailed applies the safety/correctness denylist only, without
+// the model-precedence entries. It answers "does this argv carry a token the
+// safety filter exists to stop", which is what the PresetArgs audit records.
+func safetyCLIFlagsDetailed(cli string, args []string) (kept []string, dropped []droppedCLIArg) {
+	return filterCLIArgsAgainst(dangerousCLIFlagsByCLI[cli], args)
+}
+
+// filterCLIArgsAgainst is the shared token walk behind both filters above.
+func filterCLIArgsAgainst(deny []dangerousCLIFlag, args []string) (kept []string, dropped []droppedCLIArg) {
 	if len(deny) == 0 || len(args) == 0 {
 		return args, nil
 	}
@@ -353,7 +405,7 @@ func lookupDangerousFlag(deny []dangerousCLIFlag, name string) (dangerousCLIFlag
 // exactly which configured cli_args value was silently ignored and why.
 func logDroppedCLIArgs(logPrefix, cli, runID string, dropped []string) {
 	for _, tok := range dropped {
-		slog.Warn(logPrefix+": operator cli_args flag conflicts with the driver's own safety posture — dropped",
+		slog.Warn(logPrefix+": operator cli_args flag conflicts with the driver's own posture or the configured model — dropped",
 			"run_id", runID, "cli", cli, "flag", tok)
 	}
 }

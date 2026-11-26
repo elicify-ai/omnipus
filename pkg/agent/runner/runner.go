@@ -206,8 +206,10 @@ type RunOptions struct {
 	CLIArgs []string
 	// PresetArgs are the person's Settings preset parameters for this CLI,
 	// tokenised (r17 §3.7). Each driver appends them after the filtered
-	// CLIArgs and never filters them: the last occurrence of a repeated flag
-	// wins, so a person's value beats an agent flag of the same name.
+	// CLIArgs: the last occurrence of a repeated flag wins, so a person's
+	// value beats an agent flag of the same name. The one exception is a
+	// model option, dropped when the driver passes the worker's own model
+	// (#1880, preset_model.go::filterPresetArgs); nothing else is filtered.
 	PresetArgs []string
 	// EnvOverrides are additional environment variables merged into Env for the
 	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal
@@ -341,6 +343,33 @@ func ResumeCurrent(ctx context.Context, driver ExternalAgentRunner, opts RunOpti
 		return r.ResumeWith(ctx, opts)
 	}
 	return driver.Resume(ctx, opts.RunID, opts.Input)
+}
+
+// NativeConversationReporter is an ExternalAgentRunner that can say whether
+// its CLI has announced its own native conversation id yet (#1899). Until it
+// has, an interrupt cannot be followed by a Resume of the same conversation, so
+// a steering delivery queues the instruction without interrupting and the run
+// continues to its natural end. Every real driver implements it.
+type NativeConversationReporter interface {
+	HasNativeConversation() bool
+}
+
+var (
+	_ NativeConversationReporter = (*OpencodeDriver)(nil)
+	_ NativeConversationReporter = (*ClaudeDriver)(nil)
+	_ NativeConversationReporter = (*CodexDriver)(nil)
+)
+
+// CanResumeAfterInterrupt reports whether interrupting driver's current run
+// can be followed by a Resume of the same native conversation. A driver that
+// cannot report readiness keeps the earlier interrupt behaviour: true. Only a
+// test double reaches that fallback: NewDriver refuses a production driver
+// without NativeConversationReporter.
+func CanResumeAfterInterrupt(driver ExternalAgentRunner) bool {
+	if r, ok := driver.(NativeConversationReporter); ok {
+		return r.HasNativeConversation()
+	}
+	return true
 }
 
 // ErrMaxTurnsRequired is returned by a driver's Run when RunOptions.MaxTurns is

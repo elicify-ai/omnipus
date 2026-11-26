@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "model_list_unavailable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "model_list_unavailable", "delegation_not_resumable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -85,6 +85,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   external_cli_not_found: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   external_cli_invalid_config: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   model_list_unavailable: "PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
+  delegation_not_resumable: "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -134,6 +135,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   external_cli_not_found: "config",
   external_cli_invalid_config: "config",
   model_list_unavailable: "product",
+  delegation_not_resumable: "ambiguous",
   unknown: "unknown",
 }
 
@@ -175,5 +177,8 @@ export const llmErrorMessageVariants: Partial<Record<LLMErrorCode, Record<string
   },
   external_cli_invalid_config: {
     no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings.",
+  },
+  delegation_not_resumable: {
+    no_cli: "I couldn't continue this delegation: its previous conversation can't be resumed. Start a new delegation.",
   },
 }

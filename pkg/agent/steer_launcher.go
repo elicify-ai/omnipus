@@ -154,6 +154,15 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 			req.TargetAgentID, targetDispatchErr)
 	}
 	targetIs3P := targetDispatchKind == runner.DispatchKindExternalCLI
+	// ARCHITECT-RULING-R4 D1 (founder Q-R4-1): a helper on an external CLI
+	// cannot take a goal — it is never told the goal, has no goal_claim, and
+	// cannot be woken to continue once its run ends — so a goal-bearing launch
+	// to one is refused here, through this one kind resolution, before any
+	// write. pkg/tools/delegate_run.go maps the sentinel to its refusal.
+	if req.Goal != nil && targetIs3P {
+		return steer.LaunchResult{}, fmt.Errorf(
+			"steer: launch: %w: agent %q", tools.ErrDelegateGoalUnsupported, req.TargetAgentID)
+	}
 	// ADR-072 D9/FR-050/FR-053/FR-054: requested_skill is "a hard request,
 	// not a hint" (pkg/tools/delegate.go::Parameters). Resolved here, on the
 	// real launch path, BEFORE any write below (launchOrdinaryRoot/

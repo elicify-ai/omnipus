@@ -86,6 +86,11 @@ type turnResult struct {
 	turnID string
 	// goalID preserves the producing turn's immutable goal association.
 	goalID string
+	// saveFailure is a transcript-save failure latched on an external-CLI turn
+	// of a steered drain, kept here so a later successful or cancelled
+	// continuation cannot erase it (SFH-1). The chat was already told
+	// (announceExternalSaveFailure); completionDisposition tells the parent.
+	saveFailure error
 }
 
 type turnState struct {
@@ -432,8 +437,13 @@ type turnState struct {
 	//      bottom of runTurn) resolved to the defaultResponse sentinel — but NOT
 	//      when the caller supplied a custom success DefaultResponse (e.g.
 	//      "Background task completed." on the heartbeat/system path).
-	// Threaded into the DoneStats.TurnFailed field on the done frame so
-	// CLI/automation clients can detect failure without parsing message content.
+	// This field records only those engine conditions. The done frame's
+	// DoneStats.TurnFailed is wider: finalizeStreamer also sets it when the
+	// turn's transcript could not be saved (#1178) — a call-accounting save
+	// failure — and the gateway streamer sets it on a late final-transcript
+	// write failure, even when a real answer was delivered. CLI/automation
+	// clients read DoneStats.TurnFailed to detect failure without parsing
+	// message content.
 	turnFailed bool
 
 	// goalNarrowMisses is ADR-088 D3's bounded-escape counter (the D3
@@ -614,6 +624,27 @@ type turnState struct {
 	// delegated child turn gets its OWN turnState and therefore its own
 	// independent count (FR-017).
 	browserDeferralLedger turnBrowserDeferralLedger
+
+	// externalLiveOutput is set by the steered external-CLI body
+	// (steer_turn_body.go::runExternalCLISteeredTurn) before the run: each CLI
+	// text segment then goes live through the webchat streamer under the id of
+	// its saved row, and the body finalizes the turn with one done (#1895).
+	// Other external callers (the task path) leave it false.
+	externalLiveOutput bool
+	// externalErrorAnnounced records that an external-CLI error frame was
+	// emitted for this turn, so the steered body adds its one terminal error
+	// event only for a failure nothing announced yet (#1895).
+	externalErrorAnnounced atomic.Bool
+	// externalLiveDoneDeferred records that this external-CLI turn ended (by
+	// a steer interrupt or naturally) with an instruction queued, so its done
+	// was held back: the resumed run's live view continues the working state
+	// (#1895, #1899 B). drainSteeredTurn sends the held done if no resumed run follows
+	// (settleDeferredExternalLiveDone).
+	externalLiveDoneDeferred atomic.Bool
+	// externalSaveFailureAnnounced records that a transcript-save failure
+	// latched on this external-CLI turn was announced once
+	// (announceExternalSaveFailure, SFH-1).
+	externalSaveFailureAnnounced atomic.Bool
 
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
