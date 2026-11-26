@@ -121,17 +121,44 @@ func TestProgramSave_BusyStore(t *testing.T) {
 
 		release, holderDone := pgBusyHolder(t, holder, func(h chan struct{}) { <-h })
 
+		// The 5 s bound of FR-049 is the store wait: it starts when the paste's
+		// own transaction asks for admission (the "admission" stage), not when
+		// the request arrives. The whole-request time also holds the session
+		// cookie check (bcrypt), about 68 ms normally and about 0.9 s under
+		// -race (measured: /workspace/logs/1960/ci-fix-be/busy-timing-race*.log),
+		// so the whole-request time is only a LOWER bound here.
+		var admissionMu sync.Mutex
+		var admissions []time.Time
+		holderHook := credentials.TransactHook // the holder's, already disarmed
+		credentials.TransactHook = func(stage string) {
+			if stage == "admission" {
+				admissionMu.Lock()
+				admissions = append(admissions, time.Now())
+				admissionMu.Unlock()
+			}
+			if holderHook != nil {
+				holderHook(stage)
+			}
+		}
+
 		// The person pastes while the holder is inside its transaction.
 		start := time.Now()
 		w := pgProgramsSessionCall(t, f, http.MethodPut, "/api/v1/programs/github/credential",
 			`{"value":"tok_new_67890"}`)
-		elapsed := time.Since(start)
+		end := time.Now()
+		elapsed := end.Sub(start)
 		require.Equal(t, http.StatusServiceUnavailable, w.Code,
 			"a busy store answers 503: got %d %s after %s", w.Code, w.Body.String(), elapsed)
 		require.Contains(t, w.Body.String(), "The credential store is busy. Try again.",
 			"the busy message (S-146)")
+		admissionMu.Lock()
+		require.NotEmpty(t, admissions, "instrument: the paste's own transaction asked for admission")
+		storeWaitStart := admissions[len(admissions)-1]
+		admissionMu.Unlock()
+		storeWait := end.Sub(storeWaitStart)
 		require.GreaterOrEqual(t, elapsed, 4500*time.Millisecond, "the paste waited the 5 s bound")
-		require.LessOrEqual(t, elapsed, 5500*time.Millisecond, "the bound is 5 s ± 0.5 s (FR-049)")
+		require.GreaterOrEqual(t, storeWait, 4500*time.Millisecond, "the store wait lasted the 5 s bound")
+		require.LessOrEqual(t, storeWait, 5500*time.Millisecond, "the store wait is bounded at 5 s ± 0.5 s (FR-049), measured from admission to the response")
 
 		row := pgConnection(t, pgProgramEntryByID(t, f, "github"))
 		require.Equal(t, "connected", row["state"], "GitHub is still connected")
