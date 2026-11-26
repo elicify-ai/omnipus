@@ -216,7 +216,15 @@ export function DefaultModelCard({
           )}
 
           {status !== 'loading' && defaultModel && (
-            <p className="mt-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            // U6-2: on a coarse pointer the "Set it in Limits" tap area is 44 px
+            // high, centred on a ~15 px link, so it reaches about 14.5 px above
+            // the line. With the normal 2 px gap it covered the bottom of the
+            // Effort button and a tap there followed the link. A 16 px gap on a
+            // coarse pointer keeps the whole area below the button; the mouse
+            // layout is unchanged.
+            <p className={windowUnknown
+              ? 'mt-[var(--space-0-5)] pointer-coarse:mt-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]'
+              : 'mt-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]'}>
               {windowUnknown ? (
                 <>
                   <span data-testid="default-model-window">{NO_CONTEXT_LENGTH_COPY}</span>{' '}
