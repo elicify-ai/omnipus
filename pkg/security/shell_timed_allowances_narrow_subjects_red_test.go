@@ -25,8 +25,9 @@ package security_test
 // expiry. The call chain after the sweep (AgentLoop.SweepEndedAllowances, which
 // AgentLoop.RunAllowanceExpirySweep runs every second) is pinned in pkg/agent
 // (timed_allowance_sweep_red_test.go), not here. That the gateway STARTS
-// RunAllowanceExpirySweep is pinned by no test; the header of
-// pkg/gateway/timed_allowance_native_lifecycle_red_test.go says why. Native
+// RunAllowanceExpirySweep is pinned in pkg/gateway, in
+// timed_allowance_sweep_launch_red_test.go (the start calls the launch) and
+// timed_allowance_sweep_seam_red_test.go (the launch itself). Native
 // kernel command confinement is separate, UNVERIFIED here, and requires
 // ST-29/ST-30 on each supported platform.
 // Mutations (independent CHECK): widen path/host/family, share another agent's
@@ -224,8 +225,9 @@ func testNarrowLiveProxy(t *testing.T) {
 // monotonic input. The sweep is the production SweepEndedNetwork. Its caller half (hand each
 // returned token to EgressProxy.RevokeRunToken) is written out below the way
 // AgentLoop.SweepEndedAllowances does it; that production caller is pinned in pkg/agent
-// (timed_allowance_sweep_red_test.go), and that the gateway starts the sweep is pinned by no test
-// (see the header above). The test also asserts the sweep returns NOTHING before
+// (timed_allowance_sweep_red_test.go), and that the gateway starts the sweep is pinned in
+// pkg/gateway (timed_allowance_sweep_launch_red_test.go and
+// timed_allowance_sweep_seam_red_test.go). The test also asserts the sweep returns NOTHING before
 // the end and EXACTLY Mia's token at it, so a sweep that revokes nothing, the wrong token, Jim's
 // token as well, or one nanosecond early, fails here.
 func testNarrowTimedAddressExpiry(t *testing.T) {

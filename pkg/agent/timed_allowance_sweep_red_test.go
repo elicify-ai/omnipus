@@ -18,12 +18,12 @@ package agent
 // real loopback servers; no verdict, token or refusal is supplied by the test. The expected
 // statuses come from C-26 (an ended allowance revokes the token; the proxy refuses an ungranted or
 // revoked token with 403, the status the pkg/security control shows for the same proxy).
-// That the gateway STARTS RunAllowanceExpirySweep (the one-line launch in
-// pkg/gateway/gateway.go::runContextWithOptions.startBackgroundServices) is NOT pinned by any
-// test: the header of pkg/gateway/timed_allowance_native_lifecycle_red_test.go says why (calling
-// that method also leaves running the retention goroutines that read the package-level
-// retention*SweepFn variables other tests write, a data race under -race) and that it needs a
-// seam in production code, reported to team-lead.
+// That the gateway STARTS RunAllowanceExpirySweep (the launch in
+// pkg/gateway/gateway.go::runContextWithOptions.startBackgroundServices) is pinned in pkg/gateway
+// (Q4, 2026-11-26): timed_allowance_sweep_launch_red_test.go reads that the start launches it, and
+// timed_allowance_sweep_seam_red_test.go runs the launch through the seam the backend added,
+// because calling startBackgroundServices leaves running the retention goroutines that read the
+// package-level retention*SweepFn variables other tests write (a data race under -race).
 // Mutations (independent CHECK): never revoke, revoke every agent's tokens, revoke one tick
 // early, never start the ticker, ignore ctx cancel. GREEN and mutation proof are deferred.
 

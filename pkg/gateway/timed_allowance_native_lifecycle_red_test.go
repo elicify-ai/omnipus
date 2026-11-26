@@ -27,11 +27,14 @@ package gateway
 //     log, which records the answers, as timedCardHomeTree already excludes
 //     it) are byte-identical before and after.
 //
-// Still not pinned here: that the gateway STARTS AgentLoop.RunAllowanceExpirySweep
-// (the one-line launch inside runContextWithOptions.startBackgroundServices). A
-// test cannot call that method without leaving the retention goroutines that
-// read the package-level retention*SweepFn variables other tests write, a data
-// race under -race; it needs a seam in production code (reported to team-lead).
+// Not pinned here: that the gateway STARTS AgentLoop.RunAllowanceExpirySweep
+// (the launch inside runContextWithOptions.startBackgroundServices). A test
+// cannot call that method without leaving the retention goroutines that read
+// the package-level retention*SweepFn variables other tests write, a data race
+// under -race. Q4 (2026-11-26) pins it in two files instead:
+// timed_allowance_sweep_launch_red_test.go reads that the start launches it, and
+// timed_allowance_sweep_seam_red_test.go runs the launch through the seam the
+// backend added.
 // The loop's own sweep is pinned in pkg/agent's TestTimedAllowance_SweepRevokesLiveEgressToken.
 // This file does not certify OS kernel enforcement: ST-29/ST-30 remain
 // UNVERIFIED. GREEN/mutation proof belongs to independent CHECK.

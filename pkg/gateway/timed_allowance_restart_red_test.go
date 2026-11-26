@@ -23,7 +23,7 @@ package gateway
 // test, TestSkillPermissionsUpgrade_StopAtEveryStep, is still gated on a seam no test binds
 // (reported in the Part H pack), so nothing pins the upgrade at boot at this head. This file does
 // not certify that the gateway STARTS the allowance expiry sweep either (see
-// timed_allowance_native_lifecycle_red_test.go).
+// timed_allowance_sweep_launch_red_test.go).
 // Mutation probes and GREEN acceptance belong to independent CHECK.
 //
 // Oracles come from the spec: S-113's Given/When/Then, C-12/C-24 (which checks a card answers and
