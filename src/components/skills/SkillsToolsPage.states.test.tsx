@@ -130,8 +130,12 @@ describe('SkillsToolsPage — states (order 30)', () => {
 
     expect(await screen.findByText('Omnipus did not respond')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
-    // No badge is enabled anywhere (no writable rows without data).
-    for (const badge of screen.queryAllByRole('button', { name: /^(allow|ask|deny)$/i })) {
+    // No badge is enabled anywhere (no writable rows without data). The row badges are toggle buttons and the three
+    // choices of the trust block are radios (spec "Accessibility and Keyboard"), so both roles are looked at.
+    for (const badge of [
+      ...screen.queryAllByRole('button', { name: /^(allow|ask|deny)$/i }),
+      ...screen.queryAllByRole('radio', { name: /^(allow|ask|deny)$/i }),
+    ]) {
       expect(badge).toBeDisabled()
     }
   })

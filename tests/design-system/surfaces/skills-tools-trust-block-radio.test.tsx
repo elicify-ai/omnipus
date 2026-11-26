@@ -10,23 +10,29 @@
 //   Allow  "Unverified skills install and load without a check."
 //   Ask    "Installing or loading an unverified skill asks you first."
 //   Deny   "Unverified skills cannot be installed or loaded."
-// Nothing was read from the page. The page's own Trust block is drawn today as three
-// aria-pressed toggle buttons in a plain container (TrustBlock.tsx), which is the gap.
+// Nothing was read from the page. Until Part I the page's own Trust block was drawn as three
+// aria-pressed toggle buttons in a plain container (TrustBlock.tsx at e0f987fa0), which was
+// the gap this probe reported.
 //
 // Readings added to the spec's words, each labelled where it is used:
 //   (1) a radio group has exactly one checked radio, and it is the stored value;
 //   (2) "arrow keys" means: the right arrow moves focus to the next choice in the order
-//       Allow, Ask, Deny and the left arrow to the previous one. Whether the arrow also
-//       CHOOSES the value it lands on (the WAI-ARIA radio-group habit) is not in the
-//       spec's words and is not asserted; it is a hands-on row in the pack.
+//       Allow, Ask, Deny and the left arrow to the previous one. What the spec leaves open
+//       is settled by the architect ruling of 2026-11-26 (arch/ruling-trust-arrows.md): an
+//       arrow also CHOOSES and saves the value it lands on, and the arrows stop at Allow and
+//       Deny instead of wrapping round. That part is asserted in
+//       src/components/skills/SkillsToolsPage.trust.test.tsx (rows 2 to 8); this probe keeps
+//       only the focus movement.
 //
 // How the clauses are kept apart: the first test asks for the role (a radio group of three
 // radios). The other clauses (one tab stop, arrow keys, aria-describedby) find each choice
-// by its word, as a radio or, until the page draws radios, as the button of the same name,
-// so that each reports its own failure and not the missing role again.
+// by its word as a radio. Part I tightened this: they used to accept the button of the same
+// name until the page drew radios, so that each reported its own failure; the page draws
+// radios now, and a return to buttons must fail all of them.
 //
-// RED proof: run against the frontend head e0f987fa0 (receipt in the Part H pack). GREEN,
-// mutation and proof of failability: deferred to CHECK.
+// RED proof: Part H, run against the frontend head e0f987fa0; Part I, re-run against
+// c6f7f29b6 (receipts in the Part I pack). GREEN, mutation and proof of failability:
+// deferred to CHECK.
 //
 // Only the network edge is doubled: the list requests and the permissions endpoint.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -90,11 +96,10 @@ async function trustBlock(): Promise<HTMLElement> {
   return screen.findByTestId('trust-block')
 }
 
-// The control of one choice: a radio (what the spec requires) or, until the page draws radios,
-// the button of the same name. Exactly one must exist.
+// The control of one choice: the radio of that name (what the spec requires). Exactly one must exist.
 function choice(block: HTMLElement, word: string): HTMLElement {
-  const found = [...within(block).queryAllByRole('radio', { name: word }), ...within(block).queryAllByRole('button', { name: word })]
-  expect(found, `the Trust block has exactly one control named ${word}`).toHaveLength(1)
+  const found = within(block).queryAllByRole('radio', { name: word })
+  expect(found, `the Trust block has exactly one radio named ${word}`).toHaveLength(1)
   return found[0]
 }
 
@@ -148,8 +153,9 @@ describe('Trust block accessibility: a radio group of three badges, one tab stop
     choice(block, 'Ask').focus()
     expect(choice(block, 'Ask'), 'instrument: the test put focus on Ask').toHaveFocus()
 
-    // Reading (2): arrows move focus along the order Allow, Ask, Deny. Waits, because a roving
-    // focus moves focus after the key event, not inside it.
+    // Reading (2): arrows move focus along the order Allow, Ask, Deny (each arrow also saves its
+    // choice, which the trust test asserts; the answers come from the permissions double). Waits,
+    // because a roving focus moves focus after the key event, not inside it.
     await user.keyboard('{ArrowRight}')
     await waitFor(() => expect(choice(block, 'Deny'), 'the right arrow on Ask moves focus to Deny').toHaveFocus())
     await user.keyboard('{ArrowLeft}')

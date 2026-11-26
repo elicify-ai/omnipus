@@ -162,11 +162,13 @@ describe('Skills tab surface interaction contract', () => {
     const warning = 'Allow turns off the check for unverified skills. Choose Ask to turn it back on.'
     expect(within(block).queryByText(warning), 'at Ask there is no warning').toBeNull()
 
-    await user.click(within(block).getByRole('button', { name: 'Allow' }))
+    // The three choices are radios (spec "Accessibility and Keyboard": a radio group of three badges), so the
+    // chosen one reads aria-checked; before Part I they were toggle buttons reading aria-pressed.
+    await user.click(within(block).getByRole('radio', { name: 'Allow' }))
     expect(await within(block).findByText(warning)).toBeVisible()
-    await waitFor(() => expect(within(block).getByRole('button', { name: 'Allow' })).toHaveAttribute('aria-pressed', 'true'))
+    await waitFor(() => expect(within(block).getByRole('radio', { name: 'Allow' })).toHaveAttribute('aria-checked', 'true'))
 
-    await user.click(within(block).getByRole('button', { name: 'Ask' }))
+    await user.click(within(block).getByRole('radio', { name: 'Ask' }))
     await waitFor(() => expect(within(block).queryByText(warning)).toBeNull())
     expectPermissionPatches(permissions(), { skill_trust: 'allow' }, { skill_trust: 'ask' })
   })

@@ -76,6 +76,15 @@ beforeEach(async () => {
 
 const CHOICES = /^(allow|ask|deny)$/i
 
+// Every Allow / Ask / Deny control on the page. The permission badges of the rows are toggle buttons; the three
+// choices of the trust block are radios (spec "Accessibility and Keyboard": a radio group of three badges). A check
+// that every choice is disabled has to look at both roles, or it passes without ever seeing the trust block (Part I:
+// the page draws radios there now, and a button-only query returned nothing for the block).
+const choiceControls = () => [
+  ...screen.queryAllByRole('button', { name: CHOICES }),
+  ...screen.queryAllByRole('radio', { name: CHOICES }),
+]
+
 // The 13 category ids and the name each shows, in the wireframe's order (SKILL_CATS, then UNCAT). The names are
 // literal here; they are never read from the page (see the category test below for the oracles).
 const CATEGORY_NAMES: ReadonlyArray<readonly [SkillCategory, string]> = [
@@ -164,7 +173,7 @@ describe('Skills tab surface unit contract', () => {
     // First block: it comes before the search field in the page.
     expect(block.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING, 'the block precedes the search field').toBeTruthy()
     expect(within(block).getByText('Unverified skills')).toBeInTheDocument()
-    expect(within(block).getAllByRole('button', { name: CHOICES }).map((button) => button.textContent)).toEqual(['Allow', 'Ask', 'Deny'])
+    expect(within(block).getAllByRole('radio', { name: CHOICES }).map((radio) => radio.textContent)).toEqual(['Allow', 'Ask', 'Deny'])
     // S-26's And: the three lines, each visible at once.
     for (const line of [
       'Unverified skills install and load without a check.',
@@ -184,7 +193,7 @@ describe('Skills tab surface unit contract', () => {
     for (const filter of [/^permission/i, /^what the model sees/i]) {
       for (const button of screen.getAllByRole('button', { name: filter })) expect(button, `filter ${filter} is disabled`).toBeDisabled()
     }
-    for (const badge of screen.queryAllByRole('button', { name: CHOICES })) expect(badge, 'no badge is enabled while loading').toBeDisabled()
+    for (const badge of choiceControls()) expect(badge, 'no badge or trust choice is enabled while loading').toBeDisabled()
   })
 
   it('UI states Empty: with no skill the trust block stays and the tab says No skills installed with Browse the catalog', async () => {
@@ -203,7 +212,7 @@ describe('Skills tab surface unit contract', () => {
 
     expect(await screen.findByText(cause)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^retry$/i })).toBeEnabled()
-    for (const badge of screen.queryAllByRole('button', { name: CHOICES })) expect(badge, 'no badge is enabled after a failed load').toBeDisabled()
+    for (const badge of choiceControls()) expect(badge, 'no badge or trust choice is enabled after a failed load').toBeDisabled()
     expect(permissions().patches(), 'nothing was written').toEqual([])
   })
 

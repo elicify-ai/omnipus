@@ -480,7 +480,9 @@ describe('C-16 app-owned save queue through SkillsToolsPage: cases ported from r
     fireEvent.click(screen.getByRole('tab', { name: /^skills/i })); await tick()
     const block = screen.getByTestId('trust-block')
     const save = network.hold('PATCH')
-    fireEvent.click(within(block).getByRole('button', { name: /^deny$/i }))
+    // The trust block's choices are radios (spec "Accessibility and Keyboard"), not toggle buttons: a radio reads
+    // aria-checked where a badge reads aria-pressed.
+    fireEvent.click(within(block).getByRole('radio', { name: /^deny$/i }))
     await tick(100)
     expect(screen.queryAllByText('Saving…').length, '"Saving…" is shown within 100 ms of the click').toBeGreaterThan(0)
     await tick(900)
@@ -489,7 +491,7 @@ describe('C-16 app-owned save queue through SkillsToolsPage: cases ported from r
     save.release(200, full({ skill_trust: 'deny' })); await tick()
     expect(screen.queryAllByText('Saved').length, '"Saved" once the PATCH is acknowledged').toBeGreaterThan(0)
     expect(screen.queryAllByText('Saving…'), 'nothing is saving any more').toHaveLength(0)
-    expect(within(block).getByRole('button', { name: /^deny$/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(block).getByRole('radio', { name: /^deny$/i })).toHaveAttribute('aria-checked', 'true')
     expect(network.stored.skill_trust).toBe('deny')
   })
   it('ownership: a reopened page joins the same in-flight app queue before its first response', async () => {

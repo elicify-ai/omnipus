@@ -19,6 +19,13 @@ export class SkillPermissionNetwork {
   // either, and each test starts from a fresh network.
   readsHeld = false
   readFailure?: { status: number; body: ErrorResponse }
+  // Write-side double (C-16, "one request at a time"): after holdPatches() every PATCH stays
+  // unanswered until releasePatch() answers the oldest one, as the server would. In flight means
+  // sent and not yet answered; the highest value is kept so "one at a time" is a number.
+  patchesHeld = false
+  patchesInFlight = 0
+  maxPatchesInFlight = 0
+  private heldPatches: Array<() => void> = []
 
   constructor(settings: PermissionSettings) {
     SettingsSchema.parse(settings)
@@ -45,6 +52,19 @@ export class SkillPermissionNetwork {
     this.readFailure = { status, body: { error } }
   }
 
+  // Every PATCH from now on is held unanswered (a server that is still working).
+  holdPatches() {
+    this.patchesHeld = true
+  }
+
+  // Answers the oldest held PATCH. Throws when none is held, so a test that releases a request
+  // that was never sent fails loudly instead of passing on a silent no-op.
+  releasePatch() {
+    const release = this.heldPatches.shift()
+    if (!release) throw new Error('releasePatch: no PATCH is held')
+    release()
+  }
+
   fetch: typeof fetch = async (input, init) => {
     const rawURL = input instanceof Request ? input.url : String(input)
     const path = new URL(rawURL, 'http://localhost').pathname
@@ -63,25 +83,39 @@ export class SkillPermissionNetwork {
     if (method === 'PATCH') {
       // Keep RAW body in observations: schema stripping must not hide extras.
       const patch: PermissionSettingsPatch = PatchSchema.parse(body)
-      const failure = this.rejection
-      this.rejection = undefined
-      if (failure) {
-        if (failure.stored) {
-          SettingsSchema.parse(failure.stored)
-          this.stored = structuredClone(failure.stored)
-        }
-        return Response.json(failure.body, { status: failure.status })
+      this.patchesInFlight++
+      this.maxPatchesInFlight = Math.max(this.maxPatchesInFlight, this.patchesInFlight)
+      try {
+        if (this.patchesHeld) await new Promise<void>((resolve) => this.heldPatches.push(resolve))
+        return this.answerPatch(patch)
+      } finally {
+        this.patchesInFlight--
       }
-      this.stored = {
-        // Read-only members this fixture does not model (C-2 `upgrade_unfinished`) stay as the server holds
-        // them: every PATCH answer carries the whole stored state, those members included.
-        ...this.stored,
-        policies: { ...this.stored.policies, ...patch.policies },
-        skill_policies: { ...this.stored.skill_policies, ...patch.skill_policies },
-        visibility: { ...this.stored.visibility, ...patch.visibility },
-        skill_visibility: { ...this.stored.skill_visibility, ...patch.skill_visibility },
-        skill_trust: patch.skill_trust ?? this.stored.skill_trust,
+    }
+    SettingsSchema.parse(this.stored)
+    return Response.json(this.stored)
+  }
+
+  // The server's answer to one PATCH: a queued refusal, else the write and the whole stored state.
+  private answerPatch(patch: PermissionSettingsPatch): Response {
+    const failure = this.rejection
+    this.rejection = undefined
+    if (failure) {
+      if (failure.stored) {
+        SettingsSchema.parse(failure.stored)
+        this.stored = structuredClone(failure.stored)
       }
+      return Response.json(failure.body, { status: failure.status })
+    }
+    this.stored = {
+      // Read-only members this fixture does not model (C-2 `upgrade_unfinished`) stay as the server holds
+      // them: every PATCH answer carries the whole stored state, those members included.
+      ...this.stored,
+      policies: { ...this.stored.policies, ...patch.policies },
+      skill_policies: { ...this.stored.skill_policies, ...patch.skill_policies },
+      visibility: { ...this.stored.visibility, ...patch.visibility },
+      skill_visibility: { ...this.stored.skill_visibility, ...patch.skill_visibility },
+      skill_trust: patch.skill_trust ?? this.stored.skill_trust,
     }
     SettingsSchema.parse(this.stored)
     return Response.json(this.stored)
