@@ -374,10 +374,16 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
 
   // FR-030: 100 renders whole, 101 does not.
   const virtualiseCatalog = catalogMode && shouldVirtualiseModelList(visibleCatalogModelCount)
-  const catalogListRef = React.useRef<HTMLDivElement | null>(null)
+  // U6-3: the list is held in state, not a ref. The popover mounts its
+  // content one render after it opens (the portal waits for its own mount), so
+  // a ref filled then never re-renders this component: the virtualiser kept no
+  // scroll element, showed zero rows and the list said "No models found" until
+  // something unrelated re-rendered. Setting state on attach re-renders once
+  // and the virtualiser measures the list on the first open.
+  const [catalogListElement, setCatalogListElement] = React.useState<HTMLDivElement | null>(null)
   const catalogVirtualizer = useVirtualizer({
     count: virtualiseCatalog ? visibleCatalogRows.length : 0,
-    getScrollElement: () => catalogListRef.current,
+    getScrollElement: () => catalogListElement,
     estimateSize: () => CATALOG_ROW_HEIGHT,
     overscan: 10,
   })
@@ -938,7 +944,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList ref={catalogListRef} style={{ maxHeight: 300 }}>
+          <CommandList ref={setCatalogListElement} style={{ maxHeight: 300 }}>
             {catalogStatus === 'loading' ? (
               <div
                 className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)]"

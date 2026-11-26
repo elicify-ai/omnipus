@@ -56,6 +56,8 @@ export interface DefaultModelCardProps {
   providers: readonly Provider[]
   /** Registry-fed catalog document (ADR-068 FR-037). */
   catalog?: ProvidersCatalog | null
+  /** True while the catalog's first read is in flight: the picker says it is loading, never "No models found" (U6-3). */
+  catalogLoading?: boolean
   /** Fired when the operator picks a new pair; the caller owns the PUT. */
   onChange: (pair: DefaultModelUpdateRequest) => void
   /** True while that PUT is in flight. */
@@ -86,6 +88,7 @@ export function DefaultModelCard({
   defaultModel,
   providers,
   catalog,
+  catalogLoading = false,
   onChange,
   isSaving = false,
   status = 'ready',
@@ -263,6 +266,7 @@ export function DefaultModelCard({
             valueProvider={defaultModel?.provider}
             constrainToCatalog
             catalogGroups={groups}
+            catalogStatus={catalogLoading ? 'loading' : 'ready'}
             filterProviders={{
               statuses: [...USABLE_PROVIDER_STATUSES],
               ...(filterToProviderId ? { providerIds: [filterToProviderId] } : {}),
