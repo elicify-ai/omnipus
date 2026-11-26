@@ -370,6 +370,51 @@ test('S-69 actual Tab then Enter chooses Ask on bash and the live status announc
   expect(Reflect.get((await nativeGet(native, '/api/v1/security/permissions', wire.PermissionSettings)).policies, 'bash')).toBe('ask')
 })
 
+// Part J3: the two rules of the retired tests/e2e/security-tools.spec.ts that no other test holds. The legacy
+// Security > Tool Access grid that file drove was deleted (spec C-22, "What this landing does" row 6; frontend
+// commit a1b321371), but both rules are still owed to the page that replaced it.
+// ORACLE: the Skills & Tools spec (b27c64109) is silent on both, so they come from the older spec that stated them,
+// docs/internal/specs/uxh-spec1-showstoppers-and-registry.md: US-1 AC1 ("no tool is listed twice, and no raw category
+// key (core/system) is shown as a user-facing label"), AC4 (a tool still reporting core reads "General") and FR-103
+// (every builtin tool exactly once, under a human-readable label). The expected set is that spec's quantifier, every
+// builtin tool, taken from the native gateway's own GET /api/v1/tools through the generated schema. S-45 ties the
+// count: the tab reads "Omnipus tools N" for N Omnipus tools.
+// GAPS: neither spec names a label for `system`, so only the bare lower-case key is refused ("System" is not judged).
+// The names the old file looked for (bash, search_web) are not repeated: S-69 names bash, and no spec names search_web.
+test('UXH-1 US-1 AC1 and FR-103: Omnipus tools lists every tool exactly once and no group is named by a raw core or system key', async ({ page, native }) => {
+  const registry = await nativeGet(native, '/api/v1/tools', wire.ToolRegistryEntry.array())
+  const builtin = registry.filter((tool) => tool.source === 'builtin')
+  expect(builtin.length, 'positive control: the native registry reports Omnipus tools').toBeGreaterThan(0)
+  await openPage(page, native, 'Omnipus tools')
+  const tabText = (await skillsToolsTab(page, 'Omnipus tools').textContent()) ?? ''
+  expect(Number(/(\d+)\s*$/.exec(tabText)?.[1]), `S-45: the tab "${tabText}" counts the registry's Omnipus tools`).toBe(builtin.length)
+  // Groups start collapsed (S-46): open every one, then read what the page lists.
+  const headers = page.locator('section[data-group-id] [data-group-header]')
+  const groups = await headers.count()
+  expect(groups, 'positive control: the group scanner sees the groups').toBeGreaterThan(0)
+  for (let n = 0; n < groups; n++) {
+    if (await headers.nth(n).getAttribute('aria-expanded') === 'false') await headers.nth(n).click()
+  }
+  const rows = page.locator('[data-testid^="tool-row-"]')
+  await expect.poll(() => rows.count(), { message: 'every opened group has drawn its rows' }).toBeGreaterThanOrEqual(builtin.length)
+  const ids = await rows.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid') ?? ''))
+  expect(ids.filter((id, at) => ids.indexOf(id) !== at), 'AC1: no tool is listed twice').toEqual([])
+  expect([...ids].sort(), 'FR-103: every Omnipus tool is listed, and nothing else').toEqual(builtin.map((tool) => `tool-row-${tool.name}`).sort())
+  // The group names are read from the header's own text with the count that follows the name taken off.
+  const labels = await headers.evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').replace(/\s*\d+$/, '').trim()))
+  expect(labels.map((label) => label.toLowerCase()), 'positive control: the label reader sees Web & Search (S-64) and Shell (S-65, S-69)')
+    .toEqual(expect.arrayContaining(['web & search', 'shell']))
+  // core has the spec's own label (AC4), so it is refused in any letter case; of system only the bare key is.
+  expect(labels.filter((label) => /^core$/i.test(label) || label === 'system'), 'AC1: no group is named by a raw category key').toEqual([])
+  // AC4: a tool that still reports core reads under General. The loop is empty when the build reports none, and the
+  // annotation then says so in the report rather than letting an empty loop pass as proof.
+  const legacy = builtin.filter((tool) => tool.category === 'core')
+  if (legacy.length === 0) test.info().annotations.push({ type: 'not exercised', description: 'AC4: no registry entry reports category core on this build, so the General label was not checked' })
+  for (const tool of legacy) {
+    await expect(groupOf(page, header('General')).getByTestId(`tool-row-${tool.name}`), `AC4: ${tool.name} reports core and reads under General`).toBeVisible()
+  }
+})
+
 test('F24 integration: real upload, review, category, Install, exact bytes and person grant survive reopening', async ({ page, native }) => {
   await openPage(page, native)
   await page.getByRole('button', { name: 'New skill', exact: true }).click()
