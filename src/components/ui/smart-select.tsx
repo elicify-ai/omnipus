@@ -178,8 +178,11 @@ function SearchableSelect({
           <CaretUpDown size={14} className="ml-[var(--space-2)] shrink-0 opacity-50" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
+      {/* U6-7: the popup sizes to its longest label (never narrower than the
+          trigger) within the width Radix reports free in the viewport; a label
+          that still does not fit wraps instead of being clipped. */}
       <PopoverContent
-        className="w-[var(--radix-popover-trigger-width)] min-w-[8rem] p-0"
+        className="w-max min-w-[max(8rem,var(--radix-popover-trigger-width))] max-w-[var(--radix-popover-content-available-width)] p-0"
         align="start"
         sideOffset={4}
       >
@@ -200,7 +203,7 @@ function SearchableSelect({
                   className={item.className}
                 >
                   {item.icon}
-                  <span className="flex-1">{item.label}</span>
+                  <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{item.label}</span>
                   {item.value === value && (
                     <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-[var(--space-2)] shrink-0" aria-hidden="true" />
                   )}
