@@ -3,8 +3,10 @@ package discord
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stretchr/testify/assert"
@@ -136,18 +138,45 @@ func TestGhostDiscordRunningAdapterReconnectsAndHandlesMessages(t *testing.T) {
 	assert.True(t, fixture.adapter.IsRunning(), "running control was never stopped")
 }
 
-// Code-review F2: a test fixture cannot undo the process-lifetime logger bridge.
+// discordgoLoggerValue is the installed function value, not its code pointer.
+// discordgo.Logger is not comparable with ==. reflect.Value.Pointer returns
+// Logf's code address, which is identical for every method value, so a second
+// constructor that assigns a new closure still looks unchanged. The func value
+// itself is a pointer to that closure. installDiscordgoLogger writes it once
+// per process; a later assignment is a different closure.
+func discordgoLoggerValue(fn func(msgL, caller int, format string, a ...interface{})) uintptr {
+	return *(*uintptr)(unsafe.Pointer(&fn))
+}
+
+// Code-review F2 and installDiscordgoLogger: the constructor installs one
+// process-lifetime bridge. A later constructor or fixture teardown must keep
+// that same function value. Non-nil is not enough — a fresh assignment is also
+// non-nil, and it is the rewrite the once-guard exists to prevent.
 // No callback is installed or restored by this test. Constructors and fixture
-// teardown are real; a later constructor must still have a working bridge.
+// teardown are real.
 func TestGhostDiscordLoggerSurvivesFixtureTeardown(t *testing.T) {
 	for _, name := range []string{"initial-fixtures", "later-fixtures"} {
+		// Hold the closures, not only their addresses, so a replacement cannot
+		// reuse the address of a collected function value.
+		var installed func(msgL, caller int, format string, a ...interface{})
+		var afterSecond func(msgL, caller int, format string, a ...interface{})
 		t.Run(name, func(t *testing.T) {
 			ctx := ghostTestContext(t)
 			newGhostDiscordFixture(t, ctx)
 			require.NotNil(t, discordgo.Logger, "the constructor must install the application bridge")
+			installed = discordgo.Logger
 			newGhostDiscordFixture(t, ctx)
 			require.NotNil(t, discordgo.Logger, "a second constructor must retain the bridge")
+			afterSecond = discordgo.Logger
+			require.Equal(t, discordgoLoggerValue(installed), discordgoLoggerValue(afterSecond),
+				"a second constructor must keep the same process-lifetime logger")
+			runtime.KeepAlive(installed)
+			runtime.KeepAlive(afterSecond)
 		})
 		require.NotNil(t, discordgo.Logger, "F2: fixture teardown must not undo the process-lifetime bridge")
+		require.Equal(t, discordgoLoggerValue(afterSecond), discordgoLoggerValue(discordgo.Logger),
+			"F2: fixture teardown must not replace the process-lifetime logger")
+		runtime.KeepAlive(installed)
+		runtime.KeepAlive(afterSecond)
 	}
 }
