@@ -197,13 +197,14 @@ export function SkillsToolsPage() {
             Skills
             <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{skillsQuery.isPending ? '…' : skills.length}</span>
           </TabsTrigger>
-          <TabsTrigger value="tools" onClick={() => setTab('tools')}>
-            Omnipus tools
-            {toolsQuery.isSuccess && <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{builtinTools.length}</span>}
-          </TabsTrigger>
+          {/* Tab order: spec US-6 AS1, FR-001, S-45. */}
           <TabsTrigger value="external" onClick={() => setTab('external')}>
             External tools (MCP)
             {toolsQuery.isSuccess && <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{externalTools.length}</span>}
+          </TabsTrigger>
+          <TabsTrigger value="tools" onClick={() => setTab('tools')}>
+            Omnipus tools
+            {toolsQuery.isSuccess && <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{builtinTools.length}</span>}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="skills">
