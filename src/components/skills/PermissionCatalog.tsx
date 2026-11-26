@@ -208,7 +208,8 @@ export function PermissionCatalog({
               <section key={group.id} data-group-id={group.id} className="rounded-md border border-[var(--color-border)] px-[var(--space-2)]">
                 <div className="flex flex-wrap items-center gap-[var(--space-2)]">
                   <DisclosureRow expanded={open} expandable onExpandedChange={(next) => toggleGroup(group.id, next)} aria-controls={bodyId} data-group-header="">
-                    <span className="font-medium text-[var(--color-secondary)]">{group.label}</span>
+                    {/* The name stays in normal case; the capitals are a style (architect ruling F5). */}
+                    <span className="font-medium uppercase tracking-wide text-[var(--color-secondary)]">{group.label}</span>
                     <span className="text-[var(--color-muted)]">{active ? `${group.rows.length} of ${group.items.length}` : group.items.length}</span>
                   </DisclosureRow>
                   {groupControls?.(group.id)}
