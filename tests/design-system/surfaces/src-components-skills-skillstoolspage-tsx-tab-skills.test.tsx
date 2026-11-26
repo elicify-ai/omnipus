@@ -28,6 +28,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { ApiError } from '@/lib/api-error'
+import type { SkillCategory } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -52,7 +53,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 import * as api from '@/lib/api'
 import { useSkillPermissionNetwork } from '../../helpers/skill-permission-network'
 import {
-  NEVER, groupDisclosures, groupName, headerReadings, openGroup, reading, renderPage, requireSkillsToolsPage,
+  NEVER, groupDisclosures, headerReadings, openGroup, reading, renderPage, requireSkillsToolsPage,
   resetWorld, serveWorld, service, serviceTools, skill, tool, world,
 } from './skills-tools-harness'
 
@@ -74,6 +75,15 @@ beforeEach(async () => {
 })
 
 const CHOICES = /^(allow|ask|deny)$/i
+
+// The 13 category ids and the name each shows, in the wireframe's order (SKILL_CATS, then UNCAT). The names are
+// literal here; they are never read from the page (see the category test below for the oracles).
+const CATEGORY_NAMES: ReadonlyArray<readonly [SkillCategory, string]> = [
+  ['tools', 'Tools'], ['business', 'Business'], ['development', 'Development'], ['testing_security', 'Testing & Security'],
+  ['data_ai', 'Data & AI'], ['devops', 'DevOps'], ['documentation', 'Documentation'], ['content_media', 'Content & Media'],
+  ['research', 'Research'], ['lifestyle', 'Lifestyle'], ['databases', 'Databases'], ['blockchain', 'Blockchain'],
+  ['uncategorised', 'Uncategorised'],
+]
 
 describe('Skills tab surface unit contract', () => {
   it('S-45 US-6 AS1: the page opens on Skills and every tab name carries its count', async () => {
@@ -111,28 +121,25 @@ describe('Skills tab surface unit contract', () => {
     expect(screen.queryByRole('button', { name: /^blockchain/i })).toBeNull()
   })
 
-  // Part H (architect ruling F5; team-lead's wording pin). The spec's Assumptions (line 3326 at b27c64109) write
-  // the categories of the built-in skills as "Tools", "Business", "Research", "Testing & Security" and
-  // "Content & Media"; US-7 AS7 and S-104 write "Uncategorised". S-57 prints its group headers in capitals
-  // (RESEARCH 1, TOOLS 12, UNCATEGORISED 31): that is the look, and the capitals come from CSS (ruling F5), so
-  // the text of the name is compared as the spec spells it in prose, ampersand included. The ids are the
-  // SkillCategory values of the contract. Only these six names are pinned. The spec also writes Lifestyle
-  // (S-17, S-98, S-104) and Blockchain (S-57), for which this fixture has no skill, and writes no display name
-  // at all for five of the 13 ids (development, data_ai, devops, documentation, databases); that is reported
-  // as a spec gap in the pack.
-  it('Spec line 3326 and S-57: the category names the spec writes are the names a group header shows, ampersand included', async () => {
-    world.skills = [
-      skill('one-tools', { category: 'tools' }),
-      skill('one-business', { category: 'business' }),
-      skill('one-research', { category: 'research' }),
-      skill('one-testing', { category: 'testing_security' }),
-      skill('one-content', { category: 'content_media' }),
-      skill('one-none', { category: 'uncategorised' }),
-    ]
+  // Part H (architect ruling F5; team-lead's wording pin), widened in Part I (team-lead Q2: pin all 13). The
+  // ids are the SkillCategory values of the contract; the name is what a group header shows. S-57 prints its
+  // group headers in capitals (RESEARCH 1, TOOLS 12, UNCATEGORISED 31): that is the look, and the capitals come
+  // from CSS (ruling F5), so a name is compared as the spec spells it in prose, ampersand included. Oracles:
+  // the spec at b27c64109 writes eight of the 13 (Assumptions, line 3326: Tools, Business, Research, Testing &
+  // Security, Content & Media; US-7 AS7 and S-104: Uncategorised; S-17, S-98, S-104: Lifestyle; S-57:
+  // Blockchain) and no display name for the other five (development, data_ai, devops, documentation,
+  // databases, spec gap in the pack). For those five, and as the cross-check on the other eight, the oracle is
+  // the founder-approved wireframe, coordination repo handoffs/ui-redesign/skills-tools-wireframe/app.js:
+  // SKILL_CATS = Tools, Business, Development, Testing & Security, Data & AI, DevOps, Documentation, Content &
+  // Media, Research, Lifestyle, Databases, Blockchain, and UNCAT = Uncategorised (spec-sync item for the PR
+  // notes). Category number n holds n skills, so each header reads "<name> <n>" and ties its name to its own id.
+  it('Spec line 3326, S-57 and the approved wireframe: all 13 category names are the names a group header shows, ampersand included', async () => {
+    world.skills = CATEGORY_NAMES.flatMap(([category], at) =>
+      Array.from({ length: at + 1 }, (_, i) => skill(`${category}-${i}`, { category })))
     renderPage(Page)
 
-    await waitFor(() => expect(groupDisclosures()).toHaveLength(6))
-    expect(groupDisclosures().map(groupName).sort()).toEqual(['Business', 'Content & Media', 'Research', 'Testing & Security', 'Tools', 'Uncategorised'])
+    await waitFor(() => expect(groupDisclosures()).toHaveLength(13))
+    expect(groupDisclosures().map(reading).sort()).toEqual(CATEGORY_NAMES.map(([, name], at) => `${name} ${at + 1}`).sort())
   })
 
   it('US-6 AS2: category groups start collapsed and draw no skill row until one is opened', async () => {

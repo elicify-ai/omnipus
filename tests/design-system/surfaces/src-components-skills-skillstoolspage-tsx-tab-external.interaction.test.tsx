@@ -13,10 +13,15 @@
 //                    lose its tools."; Cancel keeps the service; confirming removes that
 //                    service and no other
 //   S-61, US-8 AS3   in the notice of a service that cannot connect, Retry tests that
-//                    service again and Edit opens its edit form (the spec names the two
-//                    buttons, FR-046; what each does is read from their names, "Retry" and
-//                    "Edit", and the form is checked only for naming the service it edits;
-//                    so both tests are titled "characterization test": the spec is silent)
+//                    service again and Edit opens its edit form. The spec names the two
+//                    buttons (FR-046) and does not yet say what each does; Part I (team-lead Q5)
+//                    drops the label "characterization test" from both tests because architect
+//                    ruling F6 (arch/rulings-partG-F3-F6.md) is their independent oracle:
+//                    "Retry does exactly what that service's Test does; Edit opens the same Edit
+//                    window as the group header's Edit", taken from the founder-approved wireframe
+//                    (design-notes.md N14, N25 and C10; app.js wires Retry to svctest and Edit to
+//                    svcedit). The Edit test checks only that the window opens and names the
+//                    service it edits. The one-sentence spec edit is a spec-sync item for the PR notes.
 //   S-59, US-8 AS1   when a service later reports one more tool, that row also shows Ask
 //   "External tools tab" row of UI Screens and States, Error: Retry asks for the services again
 //
@@ -182,7 +187,7 @@ describe('External tools tab surface interaction contract', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
-  it('S-61 US-8 AS3 characterization test: Retry in the notice of a service that cannot connect tests that service again', async () => {
+  it('S-61 US-8 AS3 ruling F6: Retry in the notice of a service that cannot connect tests that service again', async () => {
     const user = userEvent.setup()
     failingService()
     vi.mocked(api.testMcpServer).mockResolvedValue({ success: false, message: REASON })
@@ -199,7 +204,7 @@ describe('External tools tab surface interaction contract', () => {
     expect(within(await headerOf('context7')).getByText(REASON), 'the service still cannot connect, so the reason stays').toBeVisible()
   })
 
-  it('S-61 US-8 AS3 characterization test: Edit in the notice opens the edit form of that service', async () => {
+  it('S-61 US-8 AS3 ruling F6: Edit in the notice opens the edit form of that service', async () => {
     const user = userEvent.setup()
     failingService()
     renderPage(Page)
