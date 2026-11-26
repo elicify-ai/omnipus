@@ -73,17 +73,33 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 			return false
 		}
 		err = al.enqueueHelperSteeringFromMessage(msg, agentID, rec.Is3P)
+		// ARCHITECT-RULING-R4 D2: an external-CLI helper with no conversation
+		// to take the message refuses in its own chat, classified and saved
+		// after the person's row, instead of a bare unsaved reply.
+		if llm, ok := al.humanHelperRefusal(err, rec); ok {
+			logger.WarnCF("agent", "A message to a helper was not accepted",
+				map[string]any{"session_id": msg.SessionID, "code": string(llm.Code), "error": err.Error()})
+			if saveErr := al.refuseHumanHelperInput(msg, agentID, llm); saveErr != nil {
+				logger.ErrorCF("agent", "A refusal shown in a helper chat could not be saved; it will not appear after a reload",
+					map[string]any{"session_id": msg.SessionID, "error": saveErr.Error()})
+			}
+			return true
+		}
 	default:
-		// FR-032: a person typing into the chat of a LIVE external-CLI task run
-		// steers that run (interrupt + native resume, consumed by the task
-		// loop). Any other task chat keeps the ordinary dispatch.
+		// FR-032 delivery into a LIVE external-CLI task run (interrupt +
+		// native resume, consumed by the task loop). Web chat does not reach
+		// this branch today: the gateway refuses a message typed into an
+		// external worker's Board task chat before it is saved or published
+		// (founder Q13 B, pkg/gateway/ws_task_chat_refusal.go). The branch
+		// stays as the bus-level path for any other inbound addressed to such
+		// a session, and epic #1969 G16 re-enables it for web chat. Any other
+		// task chat keeps the ordinary dispatch.
 		taskRec := al.liveExternalTaskRecord(msg.SessionID)
 		if taskRec == nil {
 			return false
 		}
 		if err = al.validateInboundWorkspace(msg); err == nil {
-			_, err = al.DeliverExternalCLIInstruction(context.Background(), msg.SessionID, strings.TrimSpace(taskRec.AgentID),
-				providers.Message{Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...)}, "")
+			err = al.deliverHumanExternalCLIInput(msg, strings.TrimSpace(taskRec.AgentID))
 		}
 		if err != nil {
 			err = fmt.Errorf("deliver message to external-CLI task run %q: %w", msg.SessionID, err)
@@ -111,12 +127,14 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 //
 // N3 (FR-043 / BDD-05.5): for an external-CLI (3P) helper the message is not
 // merely queued — it is DELIVERED by interrupt + native-conversation resume,
-// the SAME authorized mechanism delegate(action="steer") uses, because a
-// person typing into a running external worker's own chat IS the entry BDD-05.5
-// names ("send S in existing worker chat"). The delivery refuses visibly when
-// there is no live external conversation (and, per the N4 seam, when the target
-// is a task run), so a person's course-correction is never silently dropped.
-// The native helper keeps the ordinary queue path unchanged.
+// the SAME delivery rules delegate(action="steer") uses, because a person
+// typing into a running external worker's own chat IS the entry BDD-05.5 names
+// ("send S in existing worker chat"). The delivery refuses visibly when there
+// is no live external conversation, so a person's course-correction is never
+// silently dropped. Unlike delegate(steer), the person's message is queued
+// through the ordinary inbound intake with the gateway's saved row id, so it is
+// stored once and never as an agent-authored steer receipt (#1894). The native
+// helper keeps the ordinary queue path unchanged.
 func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, agentID string, is3P bool) error {
 	if err := al.validateInboundWorkspace(msg); err != nil {
 		return err
@@ -130,11 +148,7 @@ func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, ag
 		return err
 	}
 	if is3P {
-		if _, derr := al.DeliverExternalCLIInstruction(
-			context.Background(), msg.SessionID, agentID,
-			providers.Message{Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...)},
-			"",
-		); derr != nil {
+		if derr := al.deliverHumanExternalCLIInput(msg, agentID); derr != nil {
 			return fmt.Errorf("deliver message to external-CLI helper %q: %w", msg.SessionID, derr)
 		}
 		return nil

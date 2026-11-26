@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -517,19 +518,25 @@ func TestOpencodeDriver_BuildArgs_DangerousCLIArgsDropped(t *testing.T) {
 // opts.CLIArgs, never on the accumulated args slice) — see the buildArgs call
 // sites in driver_claude.go / driver_codex.go / driver_opencode.go.
 //
-// The example flag used here, --model, is genuinely absent from every CLI's
-// denylist (dangerousCLIFlagsByCLI) — unlike --permission-mode, which is now
-// itself a denylisted (always-dropped) entry for claude (see
-// TestFilterDangerousCLIArgs_Claude_PermissionModeAlwaysDroppedAsInert) and
-// so would no longer demonstrate "untouched pass-through" if used here.
+// 2026-11-18 amendment (#1880, ADR-032): --model in worker cli_args is
+// removed by the separate model-precedence policy even though it is not on
+// the safety denylist. The driver's configured model is outside that input
+// and must survive exactly once. Unrelated worker arguments remain intact.
 func TestFilterDangerousCLIArgs_NeverTouchesDriverOwnFlags(t *testing.T) {
-	benignArgs := []string{"--model", "claude-sonnet-5"}
-	kept, dropped := filterDangerousCLIArgs("claude", benignArgs)
-	if len(dropped) != 0 {
-		t.Fatalf("--model is not a denylisted flag and must never be dropped; dropped=%v", dropped)
+	workerArgs := []string{"--verbose", "--model", "person-model", "--fixture-option", "kept"}
+	kept, dropped := filterDangerousCLIArgs("claude", workerArgs)
+	if !slices.Equal(dropped, []string{"--model person-model"}) {
+		t.Fatalf("#1880: drop exactly the worker's model option and value; dropped=%v", dropped)
 	}
-	if !containsSeq(kept, "--model", "claude-sonnet-5") {
-		t.Fatalf("expected the flag+value preserved verbatim; kept=%v", kept)
+	if !slices.Equal(kept, []string{"--verbose", "--fixture-option", "kept"}) {
+		t.Fatalf("preserve every unrelated worker argument in order; kept=%v", kept)
+	}
+	args := NewClaudeDriver(nil).buildArgs(RunOptions{Model: "claude-sonnet-5", CLIArgs: workerArgs})
+	if got := opencodeFix1880ModelValues(t, args); !slices.Equal(got, []string{"claude-sonnet-5"}) {
+		t.Fatalf("filtering worker args must leave exactly the driver's own configured model; models=%v argv=%v", got, args)
+	}
+	if !containsSeq(args, "--fixture-option", "kept") || !containsFlag(args, "--verbose") {
+		t.Fatalf("the actual driver must preserve unrelated worker arguments too; argv=%v", args)
 	}
 }
 

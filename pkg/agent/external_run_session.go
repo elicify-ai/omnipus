@@ -435,9 +435,7 @@ func (al *AgentLoop) beginExternalRun(
 	// execution have done their job (the entry below either takes the driver or
 	// refuses visibly). A reservation of another revival stays.
 	sess.dropReservationsForExecutionLocked(claim)
-	resumeRequested := externalResumeRequested(ts)
-	needsResume := resumeRequested || (resumeOnly && (sess.started || priorRun))
-	if needsResume {
+	if externalRunNeedsResume(ts, resumeOnly, sess.started, priorRun) {
 		if sess.driver == nil {
 			// N5/N7: a continuation (or a later steered entry) with no retained
 			// driver must refuse — never start a fresh conversation.
@@ -452,6 +450,38 @@ func (al *AgentLoop) beginExternalRun(
 	sess.claim = claim
 	sess.cancelRun = cancel
 	return sess, false, nil
+}
+
+// externalRunNeedsResume is beginExternalRun's choice between Resume and Run:
+// an explicit continuation, or a later entry of a steered session (started in
+// this process, or durably marked as started before a restart), must resume.
+func externalRunNeedsResume(ts *turnState, resumeOnly, started, priorRun bool) bool {
+	return externalResumeRequested(ts) || (resumeOnly && (started || priorRun))
+}
+
+// externalResumeMissing is beginExternalRun's refusal decision (a resume is
+// needed and no driver is retained) as a read-only look that takes no claim
+// and creates no holder. runExternalCLISubTurn asks it before its program and
+// workspace checks (#1857 B16a): a conversation that is gone can never
+// continue, so "start a new delegation" is the one true answer, and a program
+// or workspace refusal would send the person to fix something that cannot
+// help. It only ever refuses where beginExternalRun would refuse too; a
+// record that cannot be read is left to beginExternalRun, which reports it.
+func (al *AgentLoop) externalResumeMissing(sessionKey string, ts *turnState, resumeOnly bool) bool {
+	priorRun := false
+	if resumeOnly {
+		var err error
+		if priorRun, err = al.externalRunPriorStart(sessionKey); err != nil {
+			return false
+		}
+	}
+	started, retained := false, false
+	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
+		sess.mu.Lock()
+		started, retained = sess.started, sess.driver != nil
+		sess.mu.Unlock()
+	}
+	return externalRunNeedsResume(ts, resumeOnly, started, priorRun) && !retained
 }
 
 // driverForRun returns the driver to call once the caller's pre-start checks

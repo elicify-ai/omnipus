@@ -66,6 +66,22 @@ func FilterDangerousCLIArgsDetailed(cli string, args []string) (kept []string, d
 	return kept, dropped
 }
 
+// SafetyCLIArgsDetailed is FilterDangerousCLIArgsDetailed restricted to the
+// safety/correctness denylist: it leaves model options alone (#1880 model
+// precedence is not a safety guard). The external_cli.run audit uses it for
+// PresetArgs, which no filter touches, to record only a real safety bypass.
+func SafetyCLIArgsDetailed(cli string, args []string) (kept []string, dropped []DroppedCLIArg) {
+	kept, detailed := safetyCLIFlagsDetailed(cli, args)
+	if len(detailed) == 0 {
+		return kept, nil
+	}
+	dropped = make([]DroppedCLIArg, len(detailed))
+	for i, d := range detailed {
+		dropped[i] = DroppedCLIArg{Flag: d.flag, Reason: d.reason}
+	}
+	return kept, dropped
+}
+
 // LooksLikeProviderModel exports driver_opencode.go's looksLikeProviderModel
 // so the executor-command-preview endpoint can independently detect the same
 // "not shaped like provider/model" condition BuildOpencodeArgs already acts

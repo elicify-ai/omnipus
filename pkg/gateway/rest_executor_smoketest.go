@@ -269,7 +269,7 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 	agentID := derefTrimStr(req.AgentId)
 
 	resp, resolvedBinary, presetApplied := a.runExecutorSmokeTest(r.Context(), cli, model, cliArgsRaw, agentID)
-	a.auditExecutorSmokeTest(r, cli, resolvedBinary, presetApplied, resp)
+	a.auditExecutorSmokeTest(r, cli, model, resolvedBinary, presetApplied, resp)
 	jsonOK(w, resp)
 }
 
@@ -881,7 +881,7 @@ func sweepSmokeTestOrphans() (removed int, errs []error) {
 // diagnostic.
 func (a *restAPI) auditExecutorSmokeTest(
 	r *http.Request,
-	cli, resolvedBinary, presetApplied string,
+	cli, model, resolvedBinary, presetApplied string,
 	resp gen.ExecutorSmokeTestResponse,
 ) {
 	if a.auditor == nil {
@@ -897,8 +897,12 @@ func (a *restAPI) auditExecutorSmokeTest(
 		"ok":     resp.Ok,
 	}
 	if presetApplied != "" {
-		details["preset_args"] = thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())(presetApplied)
+		filter := thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())
+		details["preset_args"] = filter(presetApplied)
 		details["note"] = thirdpartycli.PresetUseNote
+		if presetFlags := smokeTestPresetFlagsDropped(cli, model, presetApplied, filter); len(presetFlags) > 0 {
+			details["preset_flags_dropped"] = presetFlags
+		}
 	}
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    audit.EventExecutorSmokeTest,
@@ -908,4 +912,22 @@ func (a *restAPI) auditExecutorSmokeTest(
 	}); err != nil {
 		slog.Warn("audit write failed", "event", audit.EventExecutorSmokeTest, "error", err)
 	}
+}
+
+// smokeTestPresetFlagsDropped lists, through the audit filter, the preset model
+// options the smoke run's driver dropped because it passed the worker's own
+// model (#1880) — the same decision as the driver's buildArgs, re-derived from
+// the preset text the run used. presetApplied is the raw saved row.PresetArgs
+// text; this function tokenises it with runner.ParseCLIArgs, exactly as the
+// run did for RunOptions.PresetArgs.
+func smokeTestPresetFlagsDropped(cli, model, presetApplied string, filter func(string) string) []string {
+	dropped := runner.PresetArgsDroppedAtRun(runner.FilterKey(cli), model, runner.ParseCLIArgs(presetApplied, "executor-smoke-test-audit"))
+	if len(dropped) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(dropped))
+	for _, d := range dropped {
+		out = append(out, filter(d.Flag))
+	}
+	return out
 }

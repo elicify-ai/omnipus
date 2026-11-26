@@ -299,6 +299,9 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 	// / --ask-for-approval never flags are never touched.
 	kept, dropped := filterDangerousCLIArgs("codex", opts.CLIArgs)
 	logDroppedCLIArgs("runner/codex", "codex", opts.RunID, dropped)
+	// r17 §3.7: the person's preset follows the agent args; only a model
+	// option is dropped, when the driver passes its own model (#1880).
+	preset := presetArgsForBuild("runner/codex", "codex", opts)
 
 	// Native-conversation resume (FR-043): `codex exec resume <id>` continues
 	// the thread the CLI announced on the prior stream (opts.resumeNativeID).
@@ -317,8 +320,8 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 			args = append(args, "-m", model)
 		}
 		args = append(args, kept...)
-		args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
-		args = append(args, "-")                // read prompt from stdin
+		args = append(args, preset...)
+		args = append(args, "-") // read prompt from stdin
 		return args
 	}
 
@@ -334,8 +337,8 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 		args = append(args, "-C", opts.WorkDir)
 	}
 	args = append(args, kept...)
-	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
-	args = append(args, "-")                // read prompt from stdin
+	args = append(args, preset...)
+	args = append(args, "-") // read prompt from stdin
 	return args
 }
 
@@ -554,6 +557,15 @@ func (d *CodexDriver) Resume(ctx context.Context, runID string, instruction ...s
 	// delivers nothing and never replays the original prompt.
 	opts.Input = resumeInstruction(instruction)
 	return d.ResumeWith(ctx, opts)
+}
+
+// HasNativeConversation reports whether the current or most recent run has
+// announced its codex thread id, so an interrupt can be followed by a
+// Resume of the same conversation (#1899; see NativeConversationReporter).
+func (d *CodexDriver) HasNativeConversation() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.nativeID != ""
 }
 
 // ResumeWith continues the same native thread under opts, not the prior

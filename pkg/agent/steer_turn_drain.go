@@ -37,13 +37,41 @@ var continueSteeredTurnBeforeRunTestHook func(sessionID string, generation int)
 // dispatch, but reconstructs a fresh turnState for every continuation. The
 // caller performs the completion tail once, after this returns, using the
 // final attempted turn's state/result/error.
+//
+// #1895: an external-CLI turn that ends with an instruction queued holds back
+// its done (deferExternalLiveDoneForResume). On every return, the final attempted
+// turn's held done is sent here, so a drain that resumes nothing still closes
+// that turn's live view; a resumed run's own live view closes the chat
+// otherwise. A done that cannot be finalized fails the turn, exactly as in
+// runExternalCLISteeredTurn.
 func (al *AgentLoop) drainSteeredTurn(
 	ctx context.Context,
 	snapshot *session.LifecycleRecord,
 	initialTS *turnState,
 	initialResult turnResult,
 	initialErr error,
-) (*turnState, turnResult, error) {
+) (finalTS *turnState, finalResult turnResult, finalErr error) {
+	// ranTurns are every turn this drain ran, the original first.
+	ranTurns := []*turnState{initialTS}
+	defer func() {
+		if liveErr := al.settleDeferredExternalLiveDone(ctx, finalTS); liveErr != nil {
+			finalErr = errors.Join(finalErr, liveErr)
+			finalResult.status, finalResult.turnFailed = TurnEndStatusError, true
+			if finalResult.finalContent == "" {
+				finalResult.finalContent = liveErr.Error()
+			}
+		}
+		// SFH-1: a transcript-save failure latched on any external-CLI turn of
+		// this drain (the original, or a continuation replaced since) is not
+		// lost when a later turn succeeds or is cancelled: it is announced on
+		// the turn it belongs to and carried in the result, not the error, so
+		// the callers' stop and drain-retry handling is unchanged. It does not
+		// change the turn's status or turnFailed (ruling R1-d): the outcome
+		// stays what it would be without it, and completion adds the warning.
+		if saveErr := al.drainSaveFailures(initialResult.saveFailure, ranTurns); saveErr != nil {
+			finalResult.saveFailure = saveErr
+		}
+	}()
 	lastTS, lastResult, lastErr := initialTS, initialResult, initialErr
 	// Founder Q2=A: this bounded drain is the original admitted job. Keep
 	// its selected immutable claim, even if the session now has a replacement.
@@ -78,6 +106,7 @@ func (al *AgentLoop) drainSteeredTurn(
 
 		if attempted.turnRan {
 			lastTS, lastResult, lastErr = attempted.ts, attempted.result, attempted.runErr
+			ranTurns = append(ranTurns, attempted.ts)
 		}
 		if continueErr != nil {
 			switch {
@@ -299,4 +328,27 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 		al.deliverSubagentMessage(parentID, childRec, "error",
 			fmt.Sprintf("Queued follow-up %q: %s", itemID, notice), nil)
 	}
+}
+
+// drainSaveFailures announces every transcript-save failure latched on the
+// drain's external-CLI turns (each once, on its own turn) and returns them
+// joined with the one an earlier drain already carried, nil when every turn's
+// rows were saved (SFH-1). A native turn reports its own save failure through
+// its model-call path (loop_run_turn.go), so it is not announced again here.
+func (al *AgentLoop) drainSaveFailures(carried error, turns []*turnState) error {
+	joined := carried
+	for _, ts := range turns {
+		if ts == nil || !ts.externalLiveOutput {
+			continue
+		}
+		saveErr := ts.callAccountingError()
+		if saveErr == nil {
+			continue
+		}
+		al.announceExternalSaveFailure(ts)
+		if joined == nil || !errors.Is(joined, saveErr) {
+			joined = errors.Join(joined, saveErr)
+		}
+	}
+	return joined
 }

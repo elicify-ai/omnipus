@@ -822,9 +822,12 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }
-      prevMsg.isStreaming = false
-      prevMsg.status = 'done'
-      prevMsg.pendingTextBoundary = false
+      // #1895: the bake replaces the bubble object, so close the current one;
+      // the earlier `prevMsg` reference would no longer reach the bucket.
+      const closing = draft.messagesById[prevOpenId]
+      closing.isStreaming = false
+      closing.status = 'done'
+      closing.pendingTextBoundary = false
     }
   }
   // R-J's collision case (see the "cross-turn id collision" comment on
@@ -1867,9 +1870,11 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // Stop; tagging the session alone still dropped it, which is why
             // this branch exists). The refused ROW is reconciled by the
             // paired MessageStatusFrame{failed} (applyMessageStatusFrame).
-            // Nothing is persisted server-side on a refusal, so no
-            // replay/reload can re-deliver this frame; the per-bucket
-            // entry-id check is belt-and-braces dedup. An error frame
+            // Some refusals are also saved server-side (an external
+            // helper's or task chat's refusal row), so a replay or reload
+            // can deliver them again as replay_error: that path adopts this
+            // notice or dedups by entry id instead of adding a second row
+            // (replay-and-status-frames.ts, findLiveCopyOfSavedError). An error frame
             // without client_message_id keeps today's full turn-ending
             // behaviour below.
             if (frameSessionId && frame.client_message_id && !frame.first_message_error) {

@@ -603,7 +603,7 @@ export interface paths {
         put?: never;
         /**
          * Preview the real command Omnipus would run for these executor settings
-         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate's stateless, body-driven shape; the web app uses it for the command preview on an existing external worker's Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person's saved standard parameters, as a real run's does.
+         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the run filter (argsafety.go: the safety filter plus any model option) would strip, and a model option in the saved standard parameters when the worker's own model is passed, is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate's stateless, body-driven shape; the web app uses it for the command preview on an existing external worker's Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person's saved standard parameters, as a real run's does.
          */
         post: operations["postAgentsExecutorPreview"];
         delete?: never;
@@ -9665,7 +9665,7 @@ export interface components {
              */
             readonly effective_cli_path?: string;
             /**
-             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn. A model option in them (--model, and -m for codex and opencode) is dropped when Omnipus passes this agent's own model; nothing else is filtered.
              * @example --max-turns 40
              */
             readonly effective_preset_args?: string;
@@ -9682,7 +9682,7 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+             * @description Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the run filter would drop (the safety filter's, and any model option, because the model field sets the model) are removed at run time.
              * @example --max-turns 5
              */
             cli_args?: string;
@@ -9703,7 +9703,7 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
+             * @description Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the run filter would drop (the safety filter's, and any model option, because the model field sets the model) are reported in the tool result's cli_args.dropped_at_run and removed at run time.
              * @example --max-turns 5
              */
             cli_args?: string;
@@ -9920,7 +9920,7 @@ export interface components {
             cli_args?: {
                 /** @description The stored cli_args after tokenisation, in order. */
                 argv: string[];
-                /** @description Tokens the safety filter will drop at run time, with its reason. */
+                /** @description Tokens of the stored cli_args the run filter will drop at run time, with its reason. The run filter is the safety filter plus any model option, which is dropped because the worker's model field sets the model. */
                 dropped_at_run: {
                     flag: string;
                     reason: string;
@@ -9958,12 +9958,12 @@ export interface components {
             cli: components["schemas"]["ExternalCli"];
             /** @description Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case). */
             model?: string;
-            /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
+            /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the run filter would strip at real dispatch time (the safety filter's, and any model option, because the model field sets the model) is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
             cli_args?: string;
             /** @description Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted. */
             max_tool_iterations?: number;
         };
-        /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
+        /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. Every token a real run would drop is surfaced in dropped_args rather than silently omitted: cli_args tokens the run filter strips (the safety filter, plus any model option, because the worker's model field sets the model), and a model option in the saved standard parameters when Omnipus passes the worker's own model. The operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
         ExecutorCommandPreviewResponse: {
             /**
              * @description The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
@@ -9971,7 +9971,7 @@ export interface components {
              */
             binary: string;
             /**
-             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with the cli_args tokens the run filter drops already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters. From those only a model option is removed, and only when Omnipus passes the worker's own model; nothing else in them is filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
              * @example [
              *       "-p",
              *       "--output-format",
@@ -9997,11 +9997,11 @@ export interface components {
             /** @description Present only when a non-empty model was previewed but --model/-m was omitted from argv because it does not fit the target CLI's required shape (opencode requires "provider/model"). Absent when the model was applied as given or no model was previewed. */
             model_dropped_reason?: string;
             /**
-             * @description Every token from the previewed cli_args that the safety filter (argsafety.go) removed before it reached argv, with why. Empty when cli_args was empty or every token was kept.
+             * @description Every token removed before it reached argv, with why. First the previewed cli_args tokens the run filter (argsafety.go) removed: the safety filter's tokens and any model option, which is always dropped because the worker's model field sets the model. Then any model option from the saved standard parameters, dropped because Omnipus passes the worker's own model. Empty when nothing was dropped.
              * @example []
              */
             dropped_args: {
-                /** @description The exact cli_args token (or flag=value pair) that was dropped. */
+                /** @description The exact token (or flag=value pair) that was dropped, from cli_args or the standard parameters. */
                 flag: string;
                 /** @description Why this token is not permitted for this CLI. */
                 reason: string;
@@ -16183,7 +16183,7 @@ export interface components {
              */
             path: string;
             /**
-             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token may be saved: no allow list. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name. One exception: a model option (--model, and -m for codex and opencode) is dropped at spawn when Omnipus passes the agent's own model, and the command preview and the run audit list it as dropped; when Omnipus passes no model it stays. Nothing else is filtered.
              * @example --max-turns 40
              */
             preset_args: string;
@@ -19278,7 +19278,7 @@ export interface components {
         };
         /**
          * DelegateRespondResponse
-         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
+         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn. An external-CLI answer goes to the same CLI conversation: once the CLI has reported its conversation the run is interrupted and resumed with the answer, while the CLI is still starting the answer is queued and delivered to that conversation when the current run ends, and with no run in flight it is refused. The acknowledgement does not say which of the two happened. No session is created or replaced by a respond.
          */
         DelegateRespondResponse: {
             /**

@@ -108,6 +108,10 @@ type wsHandlerHandleChatMessage struct {
 	// step 2); nil on a legacy origin-less non-browser send. A new_chat origin
 	// gives a minted chat its key (spec 4.3.3).
 	origin *generated.SendOrigin
+	// taskChat is the external task-chat refusal resolveTargetAgent decided
+	// for this frame (founder Q13 B); adoptExistingSession sends it once the
+	// frame's session and workspace checks have passed. nil otherwise.
+	taskChat *taskChatRefusal
 }
 
 // pendingMessageStatus is one persisted user message still waiting for its
@@ -589,6 +593,15 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 				hcm.sendResolveRefusal(sessionOwnerMissingRefusal(owner))
 				return true
 			}
+			// Founder Q13 B: an external worker's Board task chat refuses
+			// typed messages, visibly and saved. Decided here, read-only,
+			// so the worker gate below does not answer it first; sent only
+			// after the session and workspace checks (adoptExistingSession,
+			// architect F2), before the owner path admits anything.
+			if hcm.taskChat = hcm.classifyExternalTaskRunChat(owner); hcm.taskChat != nil {
+				hcm.targetAgentID = owner
+				return false
+			}
 			if hcm.targetAgentID == "" {
 				hcm.targetAgentID = owner
 				return false
@@ -958,6 +971,13 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 			Type: string(generated.WsFrameTypeError), SessionId: &sid,
 			Message: session.ErrWorkspaceImmutable.Error(),
 		})
+		return true
+	}
+	// Founder Q13 B: the external task-chat refusal (or its lifecycle read
+	// failure) decided in resolveTargetAgent, now that the frame passed every
+	// session and workspace check; the message is neither saved nor admitted.
+	if hcm.taskChat != nil {
+		hcm.refuseTaskChat(hcm.taskChat)
 		return true
 	}
 	// Track for streamer, and (#823) bind this connection to the

@@ -116,6 +116,11 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		}
 	}
 
+	// SFH-1 / ruling R1-a, R1-b: a transcript-save failure never changes the
+	// outcome decided above; the parent's message carries the neutral
+	// missing-history warning with it, so it is never a clean success.
+	answer, failureReason = withSaveFailureWarning(result.saveFailure, outcome, answer, failureReason)
+
 	if completeBeforeDeliveryTestHook != nil {
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
@@ -1205,4 +1210,32 @@ func (al *AgentLoop) claimOwnsCurrentRecord(sessionID string, claim executionCla
 		return false
 	}
 	return claim.matches(cur)
+}
+
+// withSaveFailureWarning adds transcript_save_failed's neutral sentence, once,
+// to the parent's completion when a save failure is carried (ruling R1-b): in
+// front of a final answer, separated by a blank line, so the hand-back cap
+// (capHandbackResult, applied later) can never cut it off; or after every
+// other outcome's failure reason. With no save failure it changes nothing.
+func withSaveFailureWarning(saveFailure error, outcome steer.Outcome, answer, failureReason string) (string, string) {
+	if saveFailure == nil {
+		return answer, failureReason
+	}
+	warning := transcriptSaveFailedNeutral()
+	if outcome == steer.OutcomeFinalAnswer {
+		return warning + "\n\n" + answer, failureReason
+	}
+	if failureReason == "" {
+		failureReason = string(outcome) + ": the session did not complete"
+	}
+	return answer, failureReason + ". " + warning
+}
+
+// transcriptSaveFailedNeutral is transcript_save_failed's neutral-voice
+// sentence, the form for the parent agent (#1857 rule 4).
+func transcriptSaveFailedNeutral() string {
+	if twin := generated.LLMErrorNeutralMessages[string(CodeTranscriptSaveFailed)]; twin != "" {
+		return twin
+	}
+	return defaultUserMessage(CodeTranscriptSaveFailed)
 }

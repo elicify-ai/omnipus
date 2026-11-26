@@ -48,6 +48,15 @@ var (
 // session exists.
 var ErrDelegateTargetCannotReport = errors.New("tools: delegation target cannot deliver a result upward (message_parent denied)")
 
+// ErrDelegateGoalUnsupported is returned by the session launcher when a
+// `delegate` run carries a goal (criteria and dod) for a target that runs on an
+// external command-line tool (founder Q-R4-1, ARCHITECT-RULING-R4 D1). Such a
+// helper is never told the goal, has no goal_claim, and cannot be woken to
+// continue once its run ends, so the goal could never be checked. The
+// launcher wraps this sentinel before any session exists; declared here for
+// the same tools<->agent-cycle reason as the sentinels above.
+var ErrDelegateGoalUnsupported = errors.New("tools: delegation target runs on an external CLI and cannot take a goal")
+
 // DelegateProgramRefusalError is returned by the session launcher when the target
 // is an external CLI worker whose Settings program is missing or fails its
 // check (r17 §3.6 steps 2, 3, 5): Text is the NoPath or CheckFailed text,
@@ -68,6 +77,18 @@ func delegateTargetCannotReportResult(agentID string) *ToolResult {
 			"No child session was started (this is a policy configuration problem, not a failed or hung child). "+
 			"Set %q to allow for that agent, or delegate to a different agent.",
 		agentID, "message_parent", "deny", "message_parent",
+	))
+}
+
+// delegateGoalUnsupportedResult is the visible refusal for
+// ErrDelegateGoalUnsupported: the approved agent-facing sentence (TEXT.md §1,
+// prometheus-prompt-engineer), naming the target. Nothing was started.
+func delegateGoalUnsupportedResult(agentID string) *ToolResult {
+	return ErrorResult(fmt.Sprintf(
+		"delegate: refused — agent %q cannot take a delegated goal because it runs on an external command-line tool. "+
+			"Delegate again without criteria and dod and check the answer yourself, "+
+			"or use create_task for a board task with a checked goal.",
+		agentID,
 	))
 }
 
@@ -279,6 +300,9 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		}
 		if errors.Is(err, ErrDelegateTargetCannotReport) {
 			return delegateTargetCannotReportResult(targetAgentID).WithError(err)
+		}
+		if errors.Is(err, ErrDelegateGoalUnsupported) {
+			return delegateGoalUnsupportedResult(targetAgentID).WithError(err)
 		}
 		var programRefusal *DelegateProgramRefusalError
 		if errors.As(err, &programRefusal) {
