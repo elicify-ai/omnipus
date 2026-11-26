@@ -8,6 +8,7 @@
 #     it is listed here, so a test can never end up running nowhere
 pkg/preview TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo
 pkg/preview TestPreviewRenderer_RealPagesGeometryAndDistinctPixelControl
+pkg/preview TestPreviewRenderer_FilledFormValueIsVisibleAgainstEmptyField
 pkg/preview TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch
 pkg/preview TestPreviewOffice_T114_T115_T116_LinuxFormatsRestartCleanupAndRepeat
 pkg/preview TestPreviewOffice_Q1B_ForcedConfinedBootMatchesOpen
