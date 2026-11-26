@@ -62,7 +62,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchConfig: vi.fn(),
     fetchCredentials: vi.fn(),
     fetchBuiltinTools: vi.fn(),
-    fetchGlobalToolPolicies: vi.fn(),
     fetchIntegrationProviders: vi.fn(),
   }
 })
@@ -226,7 +225,6 @@ beforeEach(() => {
   vi.mocked(api.fetchConfig).mockResolvedValue({ gateway: {}, data: { session_retention_days: 90 } } as never)
   vi.mocked(api.fetchCredentials).mockResolvedValue([] as never)
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([] as never)
-  vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue([] as never)
   vi.mocked(api.fetchIntegrationProviders).mockResolvedValue(INTEGRATIONS_OK as never)
   // The reauth POST and the protected PUT are state-changing: the client-side
   // CSRF gate needs the session cookie planted (ProvidersSection.customModels
