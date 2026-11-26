@@ -9,11 +9,13 @@ package gateway
 // grants, real later model requests/transcript and raw persisted policies are
 // observed. Only a scripted no-paid-call provider and a clock are injectable.
 //
-// The local weather fixture is genuinely granted under trust Allow. It is
-// NOT a fabricated hash-verified install. Exact S-109 verification metadata
-// and S-113's DIFFERENT unverified/trust-Ask/restart scenario remain explicit
-// BLOCKED obligations. A task run is not proof that the scheduler fired or
-// that the full gateway restarted.
+// The ordinary weather rows install a plain folder, genuinely granted under trust Allow; it is
+// NOT a fabricated hash-verified install. Part H (round 10): the exact S-109 Given, a VERIFIED
+// `weather`, is the "exact verified weather prerequisite" rows (the same bytes staged, reviewed and
+// published through the real install routes, newScheduledAllowanceHarnessAs), and S-113's
+// DIFFERENT unverified/trust-Ask/restart scenario is written on the real gateway composition
+// root in timed_allowance_restart_red_test.go. A task run is not proof that the scheduler fired:
+// the run is the executor's own, dispatched by the test.
 // Mutation probes and complete GREEN acceptance belong to independent CHECK.
 //
 // Fix round 4 (team-lead ruling, part B row 8 option 1, part D item 9):
@@ -66,6 +68,10 @@ import (
 const scheduledWeatherInstructions = "S109-WEATHER-INSTRUCTIONS-9Z"
 const scheduledWeatherRefusal = "Not run: needs approval, and task and plan runs never ask."
 
+// scheduledWeatherBody is the SKILL.md of the weather fixture: written as a plain folder for the
+// ordinary rows, and the very same bytes served by the external registry for the verified rows.
+const scheduledWeatherBody = "---\nname: weather\ndescription: Scheduled weather fixture.\n---\n\n" + scheduledWeatherInstructions + "\n"
+
 // Input-only clock boundary. Never returns a card decision or allowance.
 var injectScheduledAllowanceClock func(*agent.AgentLoop, func() time.Time, func() time.Duration)
 
@@ -95,10 +101,19 @@ func (c *scheduledAllowanceClock) advance(d time.Duration) {
 }
 
 type scheduledAllowanceScript struct {
-	armed    atomic.Bool
-	calls    atomic.Int64
+	armed atomic.Bool
+	calls atomic.Int64
+	// skill is the skill the one armed call loads; "weather" when empty (the S-109 rows).
+	skill    string
 	mu       sync.Mutex
 	requests [][]providers.Message
+}
+
+func (p *scheduledAllowanceScript) skillName() string {
+	if p.skill != "" {
+		return p.skill
+	}
+	return "weather"
 }
 
 func (p *scheduledAllowanceScript) GetDefaultModel() string { return "scheduled-allowance-script" }
@@ -117,7 +132,7 @@ func (p *scheduledAllowanceScript) Chat(_ context.Context, messages []providers.
 	p.requests = append(p.requests, captured)
 	p.mu.Unlock()
 	if p.armed.CompareAndSwap(true, false) {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: fmt.Sprintf("weather-call-%d", p.calls.Add(1)), Type: "function", Name: "Skill", Arguments: map[string]any{"name": "weather"}}}}, nil
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: fmt.Sprintf("%s-call-%d", p.skillName(), p.calls.Add(1)), Type: "function", Name: "Skill", Arguments: map[string]any{"name": p.skillName()}}}}, nil
 	}
 	return &providers.LLMResponse{Content: "done"}, nil
 }
@@ -142,9 +157,38 @@ type scheduledAllowanceHarness struct {
 	handler *WSHandler
 	script  *scheduledAllowanceScript
 	home    string
+	// skill and marker name the skill the scripted model loads and the bytes of its instructions
+	// that must (or must never) reach a model request. Empty means the weather fixture; S-113
+	// builds the harness over notes-helper (timed_allowance_restart_red_test.go).
+	skill  string
+	marker string
+}
+
+func (h *scheduledAllowanceHarness) skillKey() string {
+	if h.skill != "" {
+		return h.skill
+	}
+	return "weather"
+}
+
+func (h *scheduledAllowanceHarness) instructions() string {
+	if h.marker != "" {
+		return h.marker
+	}
+	return scheduledWeatherInstructions
 }
 
 func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAllowanceHarness {
+	t.Helper()
+	return newScheduledAllowanceHarnessAs(t, global, own, false)
+}
+
+// newScheduledAllowanceHarnessAs is newScheduledAllowanceHarness, with `weather` either left as
+// the plain folder (verified false: the ordinary rows) or made the S-109 Given, a verified skill
+// (verified true, C-5): after the loop exists, the same bytes are staged, reviewed and published
+// through the real install routes of the REST API, whose external registry reports a matched
+// hash. Nothing writes a verification record by hand (installVerifiedWeather).
+func newScheduledAllowanceHarnessAs(t *testing.T, global, own string, verified bool) *scheduledAllowanceHarness {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
@@ -152,7 +196,7 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	dir := filepath.Join(home, "skills", "weather")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: weather\ndescription: Scheduled weather fixture.\n---\n\n"+scheduledWeatherInstructions+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(scheduledWeatherBody), 0o600))
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scheduled-allowance-script"}
@@ -227,10 +271,35 @@ func newScheduledAllowanceHarness(t *testing.T, global, own string) *scheduledAl
 	handler.approvalRegV2 = reg
 	al.SetToolApprover(newPolicyApproverAdapter(reg, handler))
 	t.Cleanup(handler.Wait)
-	return &scheduledAllowanceHarness{al: al, api: &restAPI{agentLoop: al, approvalReg: reg, homePath: home, auditor: al.AuditLogger()}, reg: reg, handler: handler, script: script, home: home}
+	h := &scheduledAllowanceHarness{al: al, api: &restAPI{agentLoop: al, approvalReg: reg, homePath: home, auditor: al.AuditLogger()}, reg: reg, handler: handler, script: script, home: home}
+	if verified {
+		h.installVerifiedWeather(t)
+	}
+	return h
 }
 
-func (h *scheduledAllowanceHarness) assertModelResult(t *testing.T, loads bool) {
+// installVerifiedWeather replaces the plain weather folder with the registry-reviewed install of
+// the same bytes (HandleSkills review, then publication; the existing seedNativeD10VerifiedInstall
+// drives both and reads the verification back through the independent inventory), then requires
+// the two grants to still resolve the skill: S-109's Given is "verified skill `weather` at global
+// Ask, granted to Mia (no own value) and to Ray (no own value)", so a replace that left either
+// grant stale is a failure of this fixture, not a row the test could pass.
+func (h *scheduledAllowanceHarness) installVerifiedWeather(t *testing.T) {
+	t.Helper()
+	seedNativeD10VerifiedInstall(t, &nativeSkillHarness{timedCardHarness: &timedCardHarness{api: h.api}}, "weather", scheduledWeatherBody)
+	for _, id := range []string{"mia", "ray"} {
+		inst, ok := h.al.GetRegistry().GetAgent(id)
+		require.True(t, ok)
+		_, found := inst.ContextBuilder.ResolveSkillFullForWorkspace("", "weather")
+		require.True(t, found, "fixture: the verified install still resolves for %s, whose grant it must keep", id)
+	}
+}
+
+// modelToolResult is the one tool message of the second model request of the last armed run: the
+// text the scripted model actually received as the result of its Skill call. It is read at the
+// model boundary, so it is what the product really handed over and never a verdict the test
+// computed.
+func (h *scheduledAllowanceHarness) modelToolResult(t *testing.T) string {
 	t.Helper()
 	requests := h.script.captured()
 	require.GreaterOrEqual(t, len(requests), 2, "actual tool result must reach a later model request")
@@ -241,14 +310,20 @@ func (h *scheduledAllowanceHarness) assertModelResult(t *testing.T, loads bool) 
 		}
 	}
 	require.Len(t, results, 1)
+	return results[0]
+}
+
+func (h *scheduledAllowanceHarness) assertModelResult(t *testing.T, loads bool) {
+	t.Helper()
+	result := h.modelToolResult(t)
 	if loads {
-		assert.Contains(t, results[0], scheduledWeatherInstructions, "the actual Skill tool returned instructions")
-	} else {
-		for _, request := range requests {
-			raw, err := json.Marshal(request)
-			require.NoError(t, err)
-			assert.NotContains(t, string(raw), scheduledWeatherInstructions, "refused skill bytes never reach ANY real model request")
-		}
+		assert.Contains(t, result, h.instructions(), "the actual Skill tool returned instructions")
+		return
+	}
+	for _, request := range h.script.captured() {
+		raw, err := json.Marshal(request)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), h.instructions(), "refused skill bytes never reach ANY real model request")
 	}
 }
 
@@ -366,10 +441,14 @@ func (h *scheduledAllowanceHarness) runRealTask(t *testing.T, owner, prompt stri
 	return final.SessionID
 }
 
-func (h *scheduledAllowanceHarness) scheduled(t *testing.T, owner string, loads bool) {
+// scheduledTexts runs one real task of owner whose one scripted call loads the harness's skill,
+// requires that no card was raised and that the instructions did (loads) or did not reach a model
+// request, and returns every text the run persisted: the entries' contents and each tool result's
+// text. Callers read the refusal wording from these texts; nothing here supplies it.
+func (h *scheduledAllowanceHarness) scheduledTexts(t *testing.T, owner string, loads bool) []string {
 	t.Helper()
 	h.script.arm()
-	sessionID := h.runRealTask(t, owner, "Load weather.")
+	sessionID := h.runRealTask(t, owner, "Load "+h.skillKey()+".")
 	assert.Empty(t, h.reg.pendingApprovals(), "unattended turns never raise a card")
 	h.assertModelResult(t, loads)
 	entries, err := h.al.GetSessionStore().ReadTranscript(sessionID)
@@ -381,8 +460,19 @@ func (h *scheduledAllowanceHarness) scheduled(t *testing.T, owner string, loads 
 			if text, ok := call.Result["text"].(string); ok {
 				texts = append(texts, text)
 			}
+			// session.ToolCall.Error is where the loop persists the reason of a failed call
+			// that has no richer Result (its own doc comment).
+			if call.Error != "" {
+				texts = append(texts, call.Error)
+			}
 		}
 	}
+	return texts
+}
+
+func (h *scheduledAllowanceHarness) scheduled(t *testing.T, owner string, loads bool) {
+	t.Helper()
+	texts := h.scheduledTexts(t, owner, loads)
 	if loads {
 		assert.NotContains(t, strings.Join(texts, "\n"), scheduledWeatherRefusal)
 	} else {
@@ -404,7 +494,7 @@ func (h *scheduledAllowanceHarness) pendingFromRealChat(t *testing.T) (*approval
 	done := make(chan error, 1)
 	finished := make(chan struct{})
 	go func() {
-		_, runErr := h.al.ProcessDirectWithChannelAs(ctx, "mia", "Load weather.", "agent:mia:session:"+meta.ID, "webchat", "weather-chat")
+		_, runErr := h.al.ProcessDirectWithChannelAs(ctx, "mia", "Load "+h.skillKey()+".", "agent:mia:session:"+meta.ID, "webchat", h.skillKey()+"-chat")
 		done <- runErr
 		close(finished)
 	}()
@@ -423,7 +513,7 @@ func (h *scheduledAllowanceHarness) pendingFromRealChat(t *testing.T) (*approval
 			require.Len(t, pending, 1)
 			require.Equal(t, "mia", pending[0].AgentID)
 			require.Equal(t, "Skill", pending[0].ToolName)
-			require.Equal(t, map[string]any{"name": "weather"}, pending[0].Args)
+			require.Equal(t, map[string]any{"name": h.skillKey()}, pending[0].Args)
 			return pending[0], done
 		}
 		select {
@@ -451,41 +541,10 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 	}
 	for _, own := range []string{"", "ask"} {
 		t.Run("S-109 actual chat HTTP answer reaches scheduled calls own="+own, func(t *testing.T) {
-			h := newScheduledAllowanceHarness(t, "ask", own)
-			entry, done := h.pendingFromRealChat(t)
-			snap := h.handler.pendingApprovalSnapshot(entry)
-			// C-24 permission-only skill card; unlike an ordinary tool
-			// card, this new card's specified actions do not include Cancel.
-			assert.Equal(t, []string{"allow_once", "allow_for", "deny"}, snap.OfferedActions)
-			assert.Equal(t, []string{"1h", "3h", "1d"}, snap.AllowDurations)
-			nativebinding.Require(t, "pkg/agent", injectScheduledAllowanceClock,
-				"C-26/S-109: named loop-to-ApprovalGrantStore wall/monotonic input; actual card/handler/store are not replaceable")
-			clock := &scheduledAllowanceClock{wall: time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)}
-			injectScheduledAllowanceClock(h.al, clock.wallNow, clock.elapsedNow)
-			before := h.storedPolicyBytes(t)
-			w := postToolApprovalRaw(t, h.api, entry.ApprovalID, `{"action":"allow_for","duration":"1d"}`)
-			require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
-			var response gen.ToolApprovalResponse
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-			require.NotNil(t, response.ExpiresAt)
-			require.Equal(t, time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC), response.ExpiresAt.UTC())
-			require.Equal(t, boolPtr(true), response.GrantRecorded)
-			require.NoError(t, <-done, "the original waiting call is released")
-			h.assertModelResult(t, true)
-			h.scheduled(t, "mia", true)
-			h.scheduled(t, "ray", false)
-			assert.Equal(t, before, h.storedPolicyBytes(t), "no global/agent policy is persisted by a card answer")
-			t.Run("actual audit subject and decision", func(t *testing.T) {
-				h.assertAllowanceAudit(t, entry.ApprovalID, response.ExpiresAt.UTC())
-			})
-			// An absent audit carrier must fail loudly without hiding the
-			// independent scheduled-expiry assertions that follow.
-			clock.advance(24*time.Hour - time.Nanosecond)
-			h.scheduled(t, "mia", true)
-			clock.advance(time.Nanosecond)
-			h.scheduled(t, "mia", false)
-			clock.advance(time.Nanosecond)
-			h.scheduled(t, "mia", false)
+			newScheduledAllowanceHarness(t, "ask", own).runS109(t)
+		})
+		t.Run("S-109 exact verified weather prerequisite: the same answer and runs own="+own, func(t *testing.T) {
+			newScheduledAllowanceHarnessAs(t, "ask", own, true).runS109(t)
 		})
 	}
 	t.Run("C-26 runtime retains the literal global and own skill permissions", func(t *testing.T) {
@@ -523,21 +582,54 @@ func TestTimedAllowance_ReachesScheduledRun(t *testing.T) {
 		}
 		t.Fatal("fixture: Mia is missing from the actual runtime roster")
 	})
-	// The two placeholders below were written while C-5 (verified install metadata) and C-24
-	// (durable version approval, combined card) did not exist in the product. Fix round 4, part E
-	// re-read them against the dev branch (proof target 186e99344): both now exist there
-	// (TestSkillConsent_Table/C-5_verified_fixture_uses_native_registry_review_install_and_independent_inventory,
-	// TestSkillConsent_Table/D10#30_real_same-home_restart_after_allowance and
-	// TestSkillApprovalActions_Handler/C-24_actual_combined_card_answer_releases_real_instructions_and_persists_trust
-	// pass there), so "not implemented" would now be a false claim. What is missing is the
-	// composite scenario itself in this scheduled-run harness; the messages say so. They stay
-	// loud failures, never skips, until the composites are written (open item in fix4-report.md).
-	t.Run("S-109 exact verified weather prerequisite", func(t *testing.T) {
-		t.Fatal("BLOCKED: test-side gap, not a product gap — the exact S-109 Given (verified `weather`, C-5) is not yet driven in this scheduled-run harness, which still installs weather as a plain folder; the verified install review and publication it needs exist in the dev branch (see TestSkillConsent_Table/C-5_verified_fixture_...). Required by S-109; a trust-Allow runtime probe above is not a verified install")
+	// Part H: the two rows that stood here as unconditional BLOCKED failures are real now. The
+	// verified `weather` Given of S-109 is the "exact verified weather prerequisite" row above (the
+	// install review and publication exist since fix round 4); the S-113 composite is written on
+	// the real gateway composition root in timed_allowance_restart_red_test.go.
+	t.Run("S-113 actual gateway restart retains R1 trust but ends allowance", testScheduledAllowanceGatewayRestart)
+}
+
+// runS109 is scenario S-109 on a harness whose weather is at global Ask (the harness is built by
+// the caller, with or without the C-5 verified install, and with or without Mia's own Ask):
+// the tasks of Mia and Ray skip it, a real chat card answered with "Allow for 1 day" releases the
+// waiting call and lets only Mia's task load it, no permission is stored, and the allowance ends
+// at the exact instant.
+func (h *scheduledAllowanceHarness) runS109(t *testing.T) {
+	t.Helper()
+	entry, done := h.pendingFromRealChat(t)
+	snap := h.handler.pendingApprovalSnapshot(entry)
+	// C-24 permission-only skill card; unlike an ordinary tool
+	// card, this new card's specified actions do not include Cancel.
+	assert.Equal(t, []string{"allow_once", "allow_for", "deny"}, snap.OfferedActions)
+	assert.Equal(t, []string{"1h", "3h", "1d"}, snap.AllowDurations)
+	nativebinding.Require(t, "pkg/agent", injectScheduledAllowanceClock,
+		"C-26/S-109: named loop-to-ApprovalGrantStore wall/monotonic input; actual card/handler/store are not replaceable")
+	clock := &scheduledAllowanceClock{wall: time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)}
+	injectScheduledAllowanceClock(h.al, clock.wallNow, clock.elapsedNow)
+	before := h.storedPolicyBytes(t)
+	w := postToolApprovalRaw(t, h.api, entry.ApprovalID, `{"action":"allow_for","duration":"1d"}`)
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	var response gen.ToolApprovalResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotNil(t, response.ExpiresAt)
+	require.Equal(t, time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC), response.ExpiresAt.UTC())
+	require.Equal(t, boolPtr(true), response.GrantRecorded)
+	require.NoError(t, <-done, "the original waiting call is released")
+	h.assertModelResult(t, true)
+	h.scheduled(t, "mia", true)
+	h.scheduled(t, "ray", false)
+	assert.Equal(t, before, h.storedPolicyBytes(t), "no global/agent policy is persisted by a card answer")
+	t.Run("actual audit subject and decision", func(t *testing.T) {
+		h.assertAllowanceAudit(t, entry.ApprovalID, response.ExpiresAt.UTC())
 	})
-	t.Run("S-113 actual gateway restart retains R1 trust but ends allowance", func(t *testing.T) {
-		t.Fatal("BLOCKED: test-side gap, not a product gap — the S-113 composite (trust Ask, notes-helper R1, Mia/Ray own-Deny, combined-card answer, scheduled runs, real restart, permission-only then R2 combined card) is not yet written; its parts exist in the dev branch (TestSkillConsent_Table/D10#30 restart, TestSkillApprovalActions_Handler combined-card answer). Required by S-113; a new store/loop alone is not gateway restart proof")
-	})
+	// An absent audit carrier must fail loudly without hiding the
+	// independent scheduled-expiry assertions that follow.
+	clock.advance(24*time.Hour - time.Nanosecond)
+	h.scheduled(t, "mia", true)
+	clock.advance(time.Nanosecond)
+	h.scheduled(t, "mia", false)
+	clock.advance(time.Nanosecond)
+	h.scheduled(t, "mia", false)
 }
 
 func (h *scheduledAllowanceHarness) storedPolicyBytes(t *testing.T) map[string][]byte {

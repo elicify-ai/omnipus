@@ -16,11 +16,11 @@
 // US-10 AS1 (loading), the "Skills tab" row of "UI Screens and States" (empty, error,
 // partial) and S-131 (unfinished upgrade). No expected value was read from the page.
 //
-// Known and reported, not asserted: the spec lists the tabs as Skills, External tools
-// (MCP), Omnipus tools (S-45); the page orders them Skills, Omnipus tools, External
-// tools (MCP). The readings are compared as a set. Spec S-49 prints curly quotes
-// around the searched text; the page prints straight ones; that is asserted in the
-// interaction file, which accepts either.
+// Asserted elsewhere (Part H, rulings F3 and F4): the ORDER of the tabs, Skills,
+// External tools (MCP), Omnipus tools (S-45, US-6 AS1, FR-001), is pinned in
+// src/components/skills/SkillsToolsPage.search.test.tsx, so the tab readings here are
+// compared as a set; the curly quotes of the no-match sentence (S-49, FR-004) are
+// asserted in the interaction file of this surface.
 //
 // Only the network edge is doubled: the list requests the page makes, and the
 // permissions endpoint at fetch (tests/helpers/skill-permission-network.ts).
@@ -52,7 +52,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 import * as api from '@/lib/api'
 import { useSkillPermissionNetwork } from '../../helpers/skill-permission-network'
 import {
-  NEVER, groupDisclosures, headerReadings, openGroup, reading, renderPage, requireSkillsToolsPage,
+  NEVER, groupDisclosures, groupName, headerReadings, openGroup, reading, renderPage, requireSkillsToolsPage,
   resetWorld, serveWorld, service, serviceTools, skill, tool, world,
 } from './skills-tools-harness'
 
@@ -96,7 +96,7 @@ describe('Skills tab surface unit contract', () => {
   })
 
   it('S-57 US-6 AS2 US-7 AS7: skills are grouped by category with counts, and an empty category is not listed', async () => {
-    // S-57's Given: Research 1, Tools 12, Uncategorised 31.
+    // S-57's Given: skills in Research (1), Tools (12) and none in Blockchain, plus 31 without a category.
     world.skills = [
       skill('research-one', { category: 'research' }),
       ...Array.from({ length: 12 }, (_, i) => skill(`tool-${i}`, { category: 'tools' })),
@@ -109,6 +109,30 @@ describe('Skills tab surface unit contract', () => {
     // S-57's But: no Blockchain group. The same query finds the Research group, so it can see a name.
     expect(screen.getByRole('button', { name: /^research/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^blockchain/i })).toBeNull()
+  })
+
+  // Part H (rulings F5, F6; team-lead's wording pin). The spec's Assumptions (line 3326 at b27c64109) write
+  // the categories of the built-in skills as "Tools", "Business", "Research", "Testing & Security" and
+  // "Content & Media"; US-7 AS7 and S-104 write "Uncategorised". S-57 prints its group headers in capitals
+  // (RESEARCH 1, TOOLS 12, UNCATEGORISED 31): that is the look, and the capitals come from CSS (ruling F5), so
+  // the text of the name is compared as the spec spells it in prose, ampersand included. The ids are the
+  // SkillCategory values of the contract. Only these six names are pinned. The spec also writes Lifestyle
+  // (S-17, S-98, S-104) and Blockchain (S-57), for which this fixture has no skill, and writes no display name
+  // at all for five of the 13 ids (development, data_ai, devops, documentation, databases); that is reported
+  // as a spec gap in the pack.
+  it('Spec line 3326 and S-57: the category names the spec writes are the names a group header shows, ampersand included', async () => {
+    world.skills = [
+      skill('one-tools', { category: 'tools' }),
+      skill('one-business', { category: 'business' }),
+      skill('one-research', { category: 'research' }),
+      skill('one-testing', { category: 'testing_security' }),
+      skill('one-content', { category: 'content_media' }),
+      skill('one-none', { category: 'uncategorised' }),
+    ]
+    renderPage(Page)
+
+    await waitFor(() => expect(groupDisclosures()).toHaveLength(6))
+    expect(groupDisclosures().map(groupName).sort()).toEqual(['Business', 'Content & Media', 'Research', 'Testing & Security', 'Tools', 'Uncategorised'])
   })
 
   it('US-6 AS2: category groups start collapsed and draw no skill row until one is opened', async () => {

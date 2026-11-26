@@ -15,26 +15,29 @@ package agent
 //        agent id); a helper of another agent, or a delegation to another
 //        agent, is not covered and asks as usual.
 //
-// RED today: the store keys grants by SESSION, so a fresh Mia session
-// misses the allowance her parent chat recorded (leg 2 — CHECK round 1
-// finding 8's corrected oracle: the same agent shares one allowance, no
-// copy at spawn). Leg 1 drives the real spawn path and stays green today
-// through the very copy C-26 removes; leg 3 is the control C-26 keeps (the
-// Auto-approve modifier inheritance is unchanged). F17 reconciliation moves
-// order 52 to the gateway package and removes its whole-store callbacks.
-// Leg 4 now uses real inheritance/store effects for same/other agents; its
-// missing duration/clock acceptance remains a separate loud BLOCKED leg.
+// Legs 1 and 2 pin that the same agent shares one allowance with no copy at
+// spawn (CHECK round 1 finding 8's corrected oracle); leg 3 is the control
+// C-26 keeps (the Auto-approve modifier inheritance is unchanged); leg 4
+// uses real inheritance/store effects for same and other agents. F17
+// reconciliation moved order 52 to the gateway package and removed its
+// whole-store callbacks.
 //
-// GREEN reconciliation note: C-26 re-keys ApprovalGrantStore and may drop
-// the session parameter from Record/IsAllowed; leg 1's calls pin the
-// copy-no-grants behaviour and are reconciled with the re-keyed store,
-// never deleted.
+// Part H (2026-11-26) replaced the last placeholder, the loud BLOCKED leg
+// "actual timed self-helper lifetime", with a real test: a timed answer
+// (RecordFor, 3 hours) on the loop's own store, the loop's own clock input
+// (SetAllowanceClock), the real spawn path (inheritSessionPermissions) for
+// Mia's own helper, for a helper of Jim and for a helper spawned after the
+// end, and the lookups before, one nanosecond before and at the end. The
+// legacy no-end Record calls in legs 1, 2 and 4 stay as the scope probes
+// they always were: they are not a timed answer.
 import (
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,7 +119,36 @@ func TestTimedAllowance_HelpersAndOtherAgents(t *testing.T) {
 		require.False(t, store.IsAllowed("child-jim", "jim", "delete_task", args), "C-26: actual other-agent inheritance must not copy a consent Mia received")
 		require.True(t, store.IsAllowed("source-mia", "mia", "delete_task", args), "the source agent keeps its own record")
 	})
+	// S-120 and C-26 "Covers"/"Length"/"End": Mia's answer "Allow for 3 hours" covers her own helper (same
+	// agent id) for exactly those three hours; a helper of another agent is not covered; a helper started after
+	// the end is not covered. Ends are literals from C-26's length (3 hours on the injected clock).
 	t.Run("C-26 actual timed self-helper lifetime", func(t *testing.T) {
-		t.Fatal("BLOCKED: C-26 duration recording and controlled clock are not implemented — required by S-120; real inheritance/scope probes above are not a timed answer or before/at/after expiry acceptance")
+		al := newLoop(t)
+		clock := &allowanceTestClock{start: time.Date(2026, time.November, 22, 12, 0, 0, 0, time.UTC)}
+		al.SetAllowanceClock(clock.wallNow, clock.elapsedNow)
+		store := al.ApprovalGrants()
+		answered := map[string]any{"task_id": "t1"}
+		other := map[string]any{"task_id": "t2"}
+		end, recorded := store.RecordFor("mia", "delete_task", answered, 3*time.Hour)
+		require.True(t, recorded, "the store takes Mia's timed answer for an ordinary tool")
+		require.Equal(t, time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC), end, "instrument: three hours on the injected clock")
+
+		// The real spawn path, once for Mia's own helper and once for a helper of Jim.
+		al.inheritSessionPermissions("parent-sess", "mia", "self-helper", "mia")
+		al.inheritSessionPermissions("parent-sess", "mia", "jim-helper", "jim")
+
+		require.True(t, store.IsAllowed("self-helper", "mia", "delete_task", other),
+			"S-120: Mia's own helper runs the whole tool, other arguments too, with no card")
+		require.True(t, store.IsAllowed("fresh-mia-chat", "mia", "delete_task", answered), "a fresh Mia chat shares the allowance")
+		require.False(t, store.IsAllowed("jim-helper", "jim", "delete_task", answered), "a helper of another agent asks as usual")
+
+		clock.advance(3*time.Hour - time.Nanosecond)
+		assert.True(t, store.IsAllowed("self-helper", "mia", "delete_task", other), "one nanosecond before the end the helper is still covered")
+		assert.False(t, store.IsAllowed("jim-helper", "jim", "delete_task", answered), "Jim's helper is never covered")
+
+		clock.advance(time.Nanosecond)
+		assert.False(t, store.IsAllowed("self-helper", "mia", "delete_task", other), "at the end the running helper is no longer covered")
+		al.inheritSessionPermissions("parent-sess", "mia", "late-helper", "mia")
+		assert.False(t, store.IsAllowed("late-helper", "mia", "delete_task", answered), "a helper started after the end asks")
 	})
 }

@@ -9,18 +9,18 @@
 //   US-6 AS2 and AS3, S-46, S-47   groups start collapsed; typing opens the groups
 //                                   with a match and shows only matching rows; Escape
 //                                   in the field empties it and the groups show collapsed
-//   US-6 AS5, S-49                  no match: "No skills match “zzzz”" and "Clear search
-//                                   and filters" (the spec prints curly quotes around
-//                                   zzzz, the page prints straight ones; either is
-//                                   accepted here and the difference is reported)
+//   US-6 AS5, S-49, FR-004          no match: "No skills match “zzzz”" and "Clear search
+//                                   and filters" (FR-004 prints the pattern "No <items>
+//                                   match “<text>”" with curly quotes; curly only)
 //   US-6 AS4, S-48, C-20            Set all under a filter names "Set <k> of <n> matching"
 //                                   and changes only the rows on screen
 //   US-2 AS1, C-2                   a click on Deny changes that one skill and shows Saved
 //   US-4 AS5                        trust Allow shows "Allow turns off the check for
 //                                   unverified skills. Choose Ask to turn it back on."
 //   Accessibility and Keyboard      tabs: arrow keys, Home, End (the order of the tabs is
-//                                   read from the page, not assumed: the spec lists the
-//                                   tabs in one order but never says they sit in it)
+//                                   read from the page here; the order itself, Skills,
+//                                   External tools (MCP), Omnipus tools, is pinned by S-45
+//                                   in src/components/skills/SkillsToolsPage.search.test.tsx)
 //
 // Only the network edge is doubled: the list requests and the permissions endpoint.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -115,8 +115,10 @@ describe('Skills tab surface interaction contract', () => {
     renderPage(Page)
     await user.type(await search(), 'zzzz')
 
-    // Spec S-49 prints curly quotes, the page straight ones: either is accepted (reported in the pack).
-    expect(await screen.findByText(/^No skills match [“"]zzzz[”"]$/)).toBeInTheDocument()
+    // FR-004 prints the empty result as "No <items> match “<text>”" with curly quotes, and S-49 prints it
+    // so for the tools tab; the Skills tab is the same pattern with its own noun (Part H, ruling F4:
+    // curly quotes only; the first version of this test accepted straight ones too).
+    expect(await screen.findByText(/^No skills match “zzzz”$/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Clear search and filters' }))
 
     expect(await search()).toHaveValue('')

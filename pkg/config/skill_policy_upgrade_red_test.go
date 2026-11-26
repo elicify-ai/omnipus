@@ -16,15 +16,16 @@ package config
 // at run time"), so S-16 row 3 stores the looser allow and only the runtime
 // floor makes it ask.
 //
-// The production upgrade plan does not exist at this commit. Per the qa-lead
-// RED rule the test fails LOUD with BLOCKED until it lands;
-// skillPermissionsUpgradePlanOf is the test-local seam the fix wires to.
+// skillPermissionsUpgradePlanOf below calls the two production planners the
+// real upgrade uses (pkg/skillperm/plan.go::applyConfigPlan calls
+// PlanSkillGlobalPolicies, ::writeAgentPlan calls PlanAgentSkillOverrides), so
+// these rows run against production code. That the real upgrade WRITES these
+// values to config.json and the agent record is the real-path test
+// TestSkillPolicyUpgrade_StartupWritesThePlan (skill_upgrade_startup_red_test.go,
+// package config_test: pkg/skillperm imports pkg/config, so an internal test
+// here cannot import it).
 
-import (
-	"testing"
-
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
-)
+import "testing"
 
 // upgradePlanInput is one pre-upgrade state: the old blanket `Skill` values
 // plus which skills exist and which the agent holds.
@@ -45,19 +46,18 @@ type upgradePlanInput struct {
 	wantAgentOverrides map[string]string
 }
 
-// skillPermissionsUpgradePlanOf is the test-local seam for the C-19
-// upgrade plan (steps 2–4, computed in memory from the snapshot alone).
-// The GREEN step wires it to the production entry point; it stays nil here
-// so the RED run fails with BLOCKED instead of panicking.
-// Expected maps and case names never enter the production planner.
-var skillPermissionsUpgradePlanOf func(oldGlobal, oldAgent string, installed, granted []string) (global, agentOverrides map[string]string)
+// skillPermissionsUpgradePlanOf computes the C-19 plan (steps 3 and 4) from the
+// raw snapshot values through the production planners; Mia is the one agent.
+// Expected maps and case names never enter them.
+func skillPermissionsUpgradePlanOf(oldGlobal, oldAgent string, installed, granted []string) (global, agentOverrides map[string]string) {
+	return PlanSkillGlobalPolicies(oldGlobal, installed),
+		PlanAgentSkillOverrides(SkillUpgradeAgent{ID: "mia", OldSkill: oldAgent, Granted: granted, ProjectSkills: []string{}}, installed)
+}
 
 // TestSkillPolicyUpgrade_FromSkillTool drives S-16's four examples plus
 // Dataset D1 rows 15–16.
 // Traces to: BDD S-16; spec C-19 steps 3–4; Dataset D1 rows 15–16.
 func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
-	nativebinding.Require(t, "pkg/config", skillPermissionsUpgradePlanOf,
-		"C-19/S-16/D1#15-16: native snapshot upgrade planner; post-GREEN boot-path re-audit required")
 	cases := []upgradePlanInput{
 		{
 			// S-16 example row 1 / D1#15 variant: allow, none
@@ -129,25 +129,4 @@ func TestSkillPolicyUpgrade_FromSkillTool(t *testing.T) {
 			assertStringMap(t, "agent skills.policies plan", gotAgent, tc.wantAgentOverrides)
 		})
 	}
-}
-
-// TestSkillPolicyUpgrade_StartupWritesThePlan is the native-path binding
-// obligation for skillPermissionsUpgradePlanOf (CHECK round 4, false-green
-// table row 7). TestSkillPolicyUpgrade_FromSkillTool reads an adapter that
-// computes the plan from raw inputs; it cannot show that the real C-19 upgrade
-// (steps 3 and 4) writes that plan, so a planner only the adapter calls passes
-// it. C-19 step 2 says every target value is computed in memory from the
-// snapshot alone. This can only be checked after GREEN, so it is a loud BLOCKED
-// leaf (never a skip). Real-path observer today: TestSkillPermissionsUpgrade_StopAtEveryStep
-// runs the real startup upgrader through its startSkillUpgradeAtBoot adapter
-// on a literal old home and reads the persisted global skill_policies and Mia's
-// skills.policies from disk; it is unbound (loud BLOCKED) until GREEN. The test
-// author reconciles both at test-side reconciliation, and CHECK then mutates
-// the bound planner and requires that observer to fail.
-func TestSkillPolicyUpgrade_StartupWritesThePlan(t *testing.T) {
-	t.Fatal("BLOCKED: the real C-19 upgrade (steps 3 and 4, run at startup " +
-		"before any turn) is not shown to write the values of the function " +
-		"skillPermissionsUpgradePlanOf binds to, computed from the snapshot " +
-		"alone — required by C-19 steps 2-4, S-16 and Dataset D1 rows 15-16; a " +
-		"planner only this adapter calls must never turn this green")
 }

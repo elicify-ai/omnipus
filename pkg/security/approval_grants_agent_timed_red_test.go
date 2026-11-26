@@ -10,12 +10,18 @@ package security_test
 // A real same-home fresh subprocess proves the legacy restart instrument.
 // It is NOT a gateway restart or a duration-bearing card-answer acceptance.
 //
-// Only clock injection is a callback. The absent duration-taking Record*
-// and ClearAgent operations stay fatal BLOCKED in thin adapters: they may
-// later call real methods, never manufacture ends, coverage or lifecycle.
+// Only clock injection is a callback (injectTimedStoreClock, bound by the
+// backend to security.SetApprovalGrantStoreClock). Part H (2026-11-26): the
+// thin adapters no longer stand in for absent code. recordActualTimedStore
+// calls the real duration-bearing method of the subject's kind (RecordFor,
+// RecordPrefixGrantFor, RecordPathGrantFor, RecordNetworkGrantFor) and
+// returns the end the store reports, and the ClearAgent row calls the real
+// ClearAgent. No adapter manufactures an end, a coverage verdict or a
+// lifecycle: every expected end below is a literal derived from C-26.
 // Lookups below are always direct real-store calls. Native enforcement and
 // the two real agent-delete entry paths are not certified by this unit test;
-// gateway restart/delete integration stays UNVERIFIED (ST-29/ST-30).
+// gateway restart/delete integration is pinned in pkg/gateway and the
+// real-kernel rows stay UNVERIFIED (ST-29/ST-30).
 // Mutations for independent CHECK: 55/65 minutes, wall-clock expiry, wrong
 // 24h end, shortening a second answer, new persisted file, restored grants,
 // or clearing Jim along with Mia. GREEN/mutation proof remains deferred.
@@ -28,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -39,8 +46,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test-only clock boundary, NOT a store/action/lookup replacement. The
-// production store currently has neither duration recording nor a clock.
+// Test-only clock boundary, NOT a store/action/lookup replacement: the
+// store's wall and monotonic clock input. Every other store call is direct.
 var injectTimedStoreClock func(*security.ApprovalGrantStore, func() time.Time, func() time.Duration)
 
 type allowanceStoreClock struct {
@@ -85,17 +92,35 @@ func allowanceStoreSubjects(home string) []allowanceStoreSubject {
 	}
 }
 
-// No successful test implementation of recording: reconciliation must call
-// the actual duration-bearing Record* method and return its real end time.
-func recordActualTimedStore(t *testing.T, _ *security.ApprovalGrantStore, agent string, subject allowanceStoreSubject, duration string) time.Time {
-	t.Helper()
-	t.Fatalf("BLOCKED: actual duration-bearing Record* for agent=%s kind=%s duration=%s is not implemented — required by C-26 Length/S-120; legacy recording is not a timed answer", agent, subject.kind, duration)
-	return time.Time{} // Unreachable after Fatal; never an invented expected end.
-}
+// allowanceLengths are the three lengths a time choice offers (C-26 "Length": `1h`, `3h` or `1d`,
+// the last being 24 hours). They are spec constants; nothing here reads them from the store.
+var allowanceLengths = map[string]time.Duration{"1h": time.Hour, "3h": 3 * time.Hour, "1d": 24 * time.Hour}
 
-func clearActualTimedAgent(t *testing.T, _ *security.ApprovalGrantStore, agent string) {
+// recordActualTimedStore records the answer a card gives through the real duration-bearing method of
+// the subject's kind and returns the end the store reports. It decides nothing: callers compare the
+// returned end with a literal derived from C-26, and the lookups are asserted separately.
+func recordActualTimedStore(t *testing.T, store *security.ApprovalGrantStore, agent string, subject allowanceStoreSubject, duration string) time.Time {
 	t.Helper()
-	t.Fatalf("BLOCKED: ApprovalGrantStore.ClearAgent(%q) is not implemented — required by C-26 End/S-122; no callback may simulate agent deletion", agent)
+	length, known := allowanceLengths[duration]
+	require.True(t, known, "fixture: %q is not one of the three lengths of C-26", duration)
+	var (
+		end time.Time
+		ok  bool
+	)
+	switch subject.kind {
+	case "tool", "shell_exact":
+		end, ok = store.RecordFor(agent, subject.tool, subject.recordArgs, length)
+	case "shell_family":
+		end, ok = store.RecordPrefixGrantFor(agent, subject.tool, subject.family, length)
+	case "path":
+		end, ok = store.RecordPathGrantFor(agent, subject.path, length)
+	case "network_hosts", "network_ports":
+		end, ok = store.RecordNetworkGrantFor(agent, subject.hosts, length)
+	default:
+		t.Fatalf("fixture: unknown subject kind %q", subject.kind)
+	}
+	require.True(t, ok, "the store refused a valid timed answer: agent=%s kind=%s duration=%s", agent, subject.kind, duration)
+	return end
 }
 
 func recordLegacyStoreSubject(t *testing.T, store *security.ApprovalGrantStore, session, agent string, subject allowanceStoreSubject) {
@@ -225,22 +250,35 @@ func TestApprovalGrantStore_AgentScopedTimed(t *testing.T) {
 		runAllowanceFreshProcess(t, home)
 		assertAllowanceTreeUnchanged(t, before, readAllowanceAppTree(t, home))
 	})
-	t.Run("C-26 actual ClearAgent preserves another agent", func(t *testing.T) {
+	// C-26 End: "when the agent is deleted ... drop its allowances"; the plan row of test 57 and the impact table
+	// say ClearAgent "drops a deleted agent's allowances and revokes its tokens". The store half of that is
+	// asserted here: every timed allowance of the deleted agent is gone, its tokens are gone from the store
+	// and handed back so the caller can revoke them at the proxy; another agent keeps everything.
+	// The proxy half is observed by the gateway rows (REST and delete_agent tool).
+	t.Run("C-26 actual ClearAgent drops one agent's timed allowances and tokens and keeps another's", func(t *testing.T) {
 		home := seedAllowanceAppHome(t)
-		store := security.NewApprovalGrantStore()
+		store := newTimedStoreWithClock(t, &allowanceStoreClock{wall: allowanceStoreStart()})
+		tokens := map[string][]string{}
 		for _, agent := range []string{"mia", "jim"} {
 			for _, subject := range allowanceStoreSubjects(home) {
-				recordLegacyStoreSubject(t, store, "source-chat", agent, subject)
+				recordActualTimedStore(t, store, agent, subject, "3h")
 				subject.callArgs = subject.recordArgs
 				assertActualStoreSubject(t, store, "source-chat", agent, subject, true)
 			}
+			for _, session := range []string{"chat-a-", "chat-b-"} {
+				tokens[agent] = append(tokens[agent], store.SessionEgressToken(session+agent, agent))
+			}
+			sort.Strings(tokens[agent])
+			require.Equal(t, tokens[agent], store.NetworkTokensForAgent(agent), "instrument: the store holds both of %s's tokens", agent)
 		}
-		clearActualTimedAgent(t, store, "mia")
+		assert.Equal(t, tokens["mia"], store.ClearAgent("mia"), "the cleared agent's tokens are handed back for revocation, sorted")
 		for _, subject := range allowanceStoreSubjects(home) {
 			subject.callArgs = subject.recordArgs
 			assertActualStoreSubject(t, store, "source-chat", "mia", subject, false)
 			assertActualStoreSubject(t, store, "source-chat", "jim", subject, true)
 		}
+		assert.Empty(t, store.NetworkTokensForAgent("mia"), "no token of the deleted agent stays in the store")
+		assert.Equal(t, tokens["jim"], store.NetworkTokensForAgent("jim"), "another agent keeps its tokens")
 	})
 }
 

@@ -6,18 +6,33 @@ package security_test
 // Plan: use actual grant methods and lookups for every narrow subject; use
 // real loopback HTTP/proxy traffic with exactly the token minted by the store.
 // A real, still-running shell/curl loop opens a new proxy connection on demand.
-// Its manual-revocation control must deny the exact token while an unrelated
-// token still works and the original command answers an alive probe.
 //
-// The control is NOT automatic clock expiry. That missing C-26 sweep/timed
-// recording remains a loud BLOCKED obligation, not a returned revoked-token
-// list or a fabricated success. Native kernel command confinement is separate,
-// UNVERIFIED here, and requires ST-29/ST-30 on each supported platform.
-// The current Record* shapes are legacy scope probes, not HTTP timed answers;
-// GREEN must reconcile signatures without removing subject/scope assertions.
+// Rows 1–8 and 13 record with the no-end Record* methods, which are still the
+// production methods behind a no-end answer; the duration-bearing answers are
+// pinned in approval_grants_agent_timed_red_test.go.
+//
+// Part H (2026-11-26) replaced the two placeholders that stood here:
+//   - D17#9 records a timed address answer (RecordNetworkGrantFor), moves the
+//     store's injected wall and monotonic clock to the end, and asks the
+//     production sweep (SweepEndedNetwork) which tokens ended. The returned
+//     tokens are handed to the proxy the way the production caller does it; the
+//     refusal is observed through the real running sh/curl loop. The sweep
+//     must return nothing one nanosecond before the end and exactly Mia's
+//     token at it.
+//   - D17#12 records 3 hours and then 1 hour through the real methods.
+// The manual-revocation control (testNarrowLiveProxy) stays as the instrument
+// check: it shows the rig refuses a revoked token and is NEVER presented as
+// expiry. The call chain after the sweep (AgentLoop.SweepEndedAllowances, which
+// AgentLoop.RunAllowanceExpirySweep runs every second) is pinned in pkg/agent
+// (timed_allowance_sweep_red_test.go), not here. That the gateway STARTS
+// RunAllowanceExpirySweep is pinned by no test; the header of
+// pkg/gateway/timed_allowance_native_lifecycle_red_test.go says why. Native
+// kernel command confinement is separate, UNVERIFIED here, and requires
+// ST-29/ST-30 on each supported platform.
 // Mutations (independent CHECK): widen path/host/family, share another agent's
 // grants, fingerprint an ordinary call, revoke the wrong proxy token, kill the
-// running command, or omit expiry sweep. GREEN/mutation proof is deferred.
+// running command, omit the expiry sweep, shorten a running allowance with a
+// later shorter answer. GREEN/mutation proof is deferred.
 
 import (
 	"bufio"
@@ -89,12 +104,8 @@ func TestShellTimedAllowances_NarrowSubjects(t *testing.T) {
 		assert.False(t, s.HasNetworkGrant(chat2, jim), "D17#8")
 	})
 	t.Run("instrument exact-token live proxy and original running command", testNarrowLiveProxy)
-	t.Run("D17#9 automatic timed-address expiry", func(t *testing.T) {
-		t.Fatal("BLOCKED: C-26 automatic timed-address expiry sweep/clock wiring is not implemented — required by D17#9; manual revocation in the separate control proves the live instrument, not expiry or native kernel acceptance (ST-29/ST-30)")
-	})
-	t.Run("D17#12 actual timed later-end-wins", func(t *testing.T) {
-		t.Fatal("BLOCKED: duration-bearing shell-family recording and controlled monotonic clock are not implemented — required by C-26/D17#12; no callback may return the expected coverage boolean")
-	})
+	t.Run("D17#9 timed address ends during a running command", testNarrowTimedAddressExpiry)
+	t.Run("D17#12 a shorter second answer never shortens a running allowance", testNarrowTimedLaterEndWins)
 	t.Run("D17#13 ordinary card covers other arguments for that agent", func(t *testing.T) {
 		s := security.NewApprovalGrantStore()
 		a, b := map[string]any{"task_id": "t1"}, map[string]any{"task_id": "t2"}
@@ -110,7 +121,19 @@ const narrowUpstreamBody = "S121-UPSTREAM-9Z"
 
 // No internet, DNS, synthetic verdict or test proxy: requests go through the
 // actual production EgressProxy to a real loopback HTTP server.
-func testNarrowLiveProxy(t *testing.T) {
+// narrowLiveRig is the instrument the manual-revocation control and the D17#9
+// expiry test share: a real loopback HTTP upstream behind the real production
+// EgressProxy. Sharing it is what lets the control vouch for the expiry test:
+// the 403 the expiry test reads comes from the very rig that the control shows
+// to refuse a revoked token and to serve a granted one.
+type narrowLiveRig struct {
+	upstreamURL string
+	host        string
+	proxy       *sandbox.EgressProxy
+}
+
+func newNarrowLiveRig(t *testing.T) *narrowLiveRig {
+	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, err := io.WriteString(w, narrowUpstreamBody)
 		assert.NoError(t, err)
@@ -123,6 +146,31 @@ func testNarrowLiveProxy(t *testing.T) {
 	proxy, err := sandbox.NewEgressProxy(nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, proxy.Close()) })
+	return &narrowLiveRig{upstreamURL: upstream.URL, host: host, proxy: proxy}
+}
+
+// request opens one new connection through the proxy with token as the run
+// token and returns the status and body the upstream path answered.
+func (r *narrowLiveRig) request(t *testing.T, token string) (int, string) {
+	t.Helper()
+	proxyURL := &url.URL{Scheme: "http", Host: r.proxy.Addr()}
+	if token != "" {
+		proxyURL.User = url.User(token)
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	response, requestErr := client.Get(r.upstreamURL + "/instrument")
+	require.NoError(t, requestErr, "a transport failure is not a policy refusal")
+	body, readErr := io.ReadAll(response.Body)
+	require.NoError(t, readErr)
+	require.NoError(t, response.Body.Close())
+	return response.StatusCode, string(body)
+}
+
+func testNarrowLiveProxy(t *testing.T) {
+	rig := newNarrowLiveRig(t)
+	host, proxy := rig.host, rig.proxy
 	store := security.NewApprovalGrantStore()
 	require.True(t, store.RecordNetworkGrantWithHosts("live-command-session", "mia", []string{host}))
 	token := store.SessionEgressToken("live-command-session", "mia")
@@ -133,19 +181,7 @@ func testNarrowLiveProxy(t *testing.T) {
 	require.Equal(t, token, store.SessionEgressToken("live-command-session", "mia"), "the issued token is stable for this run")
 	request := func(token string) (int, string) {
 		t.Helper()
-		proxyURL := &url.URL{Scheme: "http", Host: proxy.Addr()}
-		if token != "" {
-			proxyURL.User = url.User(token)
-		}
-		transport := &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}
-		defer transport.CloseIdleConnections()
-		client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-		response, requestErr := client.Get(upstream.URL + "/instrument")
-		require.NoError(t, requestErr, "a transport failure is not a policy refusal")
-		body, readErr := io.ReadAll(response.Body)
-		require.NoError(t, readErr)
-		require.NoError(t, response.Body.Close())
-		return response.StatusCode, string(body)
+		return rig.request(t, token)
 	}
 	status, body := request(token)
 	require.Equal(t, http.StatusForbidden, status, "instrument: an issued but ungranted token is denied")
@@ -162,7 +198,7 @@ func testNarrowLiveProxy(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	require.Equal(t, narrowUpstreamBody, body)
 
-	command := newNarrowCurlLoop(t, proxy.Addr(), token, upstream.URL)
+	command := newNarrowCurlLoop(t, proxy.Addr(), token, rig.upstreamURL)
 	status, body = command.request(t, "before")
 	require.Equal(t, http.StatusOK, status)
 	require.Equal(t, narrowUpstreamBody, body)
@@ -175,6 +211,120 @@ func testNarrowLiveProxy(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "the unrelated token is not revoked as a substitute")
 	require.Equal(t, narrowUpstreamBody, body)
 	t.Log("PROXY_INSTRUMENT: exact-issued-token new-connection=403, unrelated-token=200, original-command=alive")
+}
+
+// testNarrowTimedAddressExpiry is Dataset D17 row 9 (S-121; C-26 "Decision time" and "End"): "as row
+// 6; the test clock passes the hour during a running `curl` loop that opens a new connection to
+// `example.com`". The row expects: "the new connection is refused; the command is not killed", and
+// the token is revoked. Row 6 is a network card naming one address; the one-hour length is the
+// answer "Allow for 1 hour" this test records.
+//
+// The named address is the rig's real loopback host where the row says example.com: example.com is
+// the row's stand-in for the named address. The clock is the store's own injected wall and
+// monotonic input. The sweep is the production SweepEndedNetwork. Its caller half (hand each
+// returned token to EgressProxy.RevokeRunToken) is written out below the way
+// AgentLoop.SweepEndedAllowances does it; that production caller is pinned in pkg/agent
+// (timed_allowance_sweep_red_test.go), and that the gateway starts the sweep is pinned by no test
+// (see the header above). The test also asserts the sweep returns NOTHING before
+// the end and EXACTLY Mia's token at it, so a sweep that revokes nothing, the wrong token, Jim's
+// token as well, or one nanosecond early, fails here.
+func testNarrowTimedAddressExpiry(t *testing.T) {
+	rig := newNarrowLiveRig(t)
+	clock := &allowanceStoreClock{wall: allowanceStoreStart()}
+	store := newTimedStoreWithClock(t, clock)
+	end, ok := store.RecordNetworkGrantFor("mia", []string{rig.host}, time.Hour)
+	require.True(t, ok, "the store takes Mia's timed answer for the named address")
+	require.Equal(t, time.Date(2026, time.November, 22, 13, 0, 0, 0, time.UTC), end,
+		"C-26 Length: one hour on the server clock, reported in wall-clock time")
+	miaToken := store.SessionEgressToken("running-curl-session", "mia")
+	jimToken := store.SessionEgressToken("jim-session", "jim")
+	require.NotEmpty(t, miaToken, "the store minted the running command's token")
+	require.NotEmpty(t, jimToken)
+	require.NotEqual(t, miaToken, jimToken)
+	// What a bash call does when it starts: it pushes the agent's allowed addresses onto its token.
+	rig.proxy.GrantRunHosts(miaToken, store.NetworkHostsFor("running-curl-session", "mia"))
+	// Jim holds a grant of his own on his own token, with no end. Only a revocation of the wrong
+	// token could end it.
+	rig.proxy.GrantRunHosts(jimToken, []string{rig.host})
+
+	command := newNarrowCurlLoop(t, rig.proxy.Addr(), miaToken, rig.upstreamURL)
+	status, body := command.request(t, "before-the-end")
+	require.Equal(t, http.StatusOK, status, "instrument: the running command reaches the upstream while the allowance runs")
+	require.Equal(t, narrowUpstreamBody, body)
+
+	clock.advance(time.Hour - time.Nanosecond)
+	require.Empty(t, store.SweepEndedNetwork(), "one nanosecond before the end nothing has ended: no token is named for revocation")
+	status, body = command.request(t, "last-nanosecond")
+	require.Equal(t, http.StatusOK, status, "the allowance still runs one nanosecond before its end")
+	require.Equal(t, narrowUpstreamBody, body)
+
+	clock.advance(time.Nanosecond)
+	ended := store.SweepEndedNetwork()
+	require.Equal(t, []string{miaToken}, ended, "at the end the sweep names exactly Mia's live token, never Jim's")
+	for _, token := range ended {
+		rig.proxy.RevokeRunToken(token) // The caller's part, as AgentLoop.SweepEndedAllowances does it.
+	}
+	status, body = command.request(t, "after-the-end")
+	require.Equal(t, http.StatusForbidden, status, "D17#9: the SAME running command's NEW connection with its EXACT token is refused")
+	require.NotContains(t, body, narrowUpstreamBody)
+	command.assertAlive(t) // Same process: the command was not killed.
+	status, body = rig.request(t, jimToken)
+	require.Equal(t, http.StatusOK, status, "Jim's token, with a grant of its own, is not revoked as a substitute")
+	require.Equal(t, narrowUpstreamBody, body)
+
+	assert.Empty(t, store.NetworkHostsFor("running-curl-session", "mia"), "the ended address is no longer allowed for Mia")
+	assert.Empty(t, store.SweepEndedNetwork(), "the end is handled once; a later sweep names nothing, so an answer given after the end is not revoked again")
+	// C-26 Decision time: "the agent's next command gets a fresh token with the addresses still
+	// allowed". Mia's only address ended, so the next command's token carries no address.
+	nextToken := store.SessionEgressToken("next-command-session", "mia")
+	require.NotEqual(t, miaToken, nextToken, "another command session gets a token of its own")
+	rig.proxy.GrantRunHosts(nextToken, store.NetworkHostsFor("next-command-session", "mia"))
+	status, body = rig.request(t, nextToken)
+	require.Equal(t, http.StatusForbidden, status, "the next command has no address left to reach")
+	require.NotContains(t, body, narrowUpstreamBody)
+	t.Log("PROXY_EXPIRY: store clock at the end → sweep named exactly Mia's token → new connection=403, original-command=alive, Jim's token=200")
+}
+
+// testNarrowTimedLaterEndWins is Dataset D17 row 12 (S-121): "`delete_task` card A answered 'Allow for 3
+// hours', then a second card answered 'Allow for 1 hour'" → "end stays at 3 hours" (C-26 "A second
+// answer for the same subject": the later end time wins; an answer never shortens a running
+// allowance). The row names the whole-tool kind; the three narrow shell kinds follow the same
+// rule and run here too. Expected ends are literals derived from C-26's lengths, never read from
+// the store's reply to an earlier call.
+func testNarrowTimedLaterEndWins(t *testing.T) {
+	start := allowanceStoreStart()
+	for _, kind := range []string{"tool", "shell_family", "path", "network_hosts"} {
+		t.Run(kind, func(t *testing.T) {
+			subject := allowanceStoreSubjectOfKind(t, kind)
+			clock := &allowanceStoreClock{wall: start}
+			store := newTimedStoreWithClock(t, clock)
+			first := recordActualTimedStore(t, store, "mia", subject, "3h")
+			require.Equal(t, time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC), first, "instrument: the first answer ends at 15:00")
+			clock.advance(30 * time.Minute)
+			second := recordActualTimedStore(t, store, "mia", subject, "1h")
+			assert.Equal(t, time.Date(2026, time.November, 22, 15, 0, 0, 0, time.UTC), second,
+				"D17#12: the second answer reports the end that stays, not its own 13:30")
+			clock.advance(time.Hour) // 13:30, the end the shorter second answer would have had.
+			assertActualStoreSubject(t, store, "chat-2-mia", "mia", subject, true)
+			assertActualStoreSubject(t, store, "chat-2-jim", "jim", subject, false) // D17#8: running allowance, still Mia's alone
+			clock.advance(90*time.Minute - time.Nanosecond)                         // one nanosecond before 15:00
+			assertActualStoreSubject(t, store, "chat-2-mia", "mia", subject, true)
+			clock.advance(time.Nanosecond)
+			assertActualStoreSubject(t, store, "chat-2-mia", "mia", subject, false)
+		})
+	}
+}
+
+// allowanceStoreSubjectOfKind returns the shared fixture subject of one kind.
+func allowanceStoreSubjectOfKind(t *testing.T, kind string) allowanceStoreSubject {
+	t.Helper()
+	for _, subject := range allowanceStoreSubjects(t.TempDir()) {
+		if subject.kind == kind {
+			return subject
+		}
+	}
+	t.Fatalf("fixture: no allowance subject of kind %q", kind)
+	return allowanceStoreSubject{}
 }
 
 type narrowCurlLoop struct {

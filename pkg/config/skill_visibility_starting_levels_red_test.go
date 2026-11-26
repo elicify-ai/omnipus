@@ -17,18 +17,20 @@ package config
 // stored per server as visibility["mcp_<server>_*"] (C-6); skills start at
 // name_and_description (D7 row 14); a second start writes nothing (row 15).
 //
-// The conversion does not exist at this commit. Per the qa-lead RED rule the
-// test fails LOUD with BLOCKED until it lands; visibilityConversionPlanOf is
-// the test-local seam the fix wires to. D7 row 16's request-surface half
-// (ToolSearch "offered in the normal request after the conversion, absent
-// before") is order 56 (TestToolSurface_ConversionToolSearch); this test
-// pins only the stored level.
+// visibilityConversionPlanOf below calls the production planner the real
+// upgrade uses (pkg/skillperm/plan.go::applyConfigPlan calls
+// PlanToolVisibilityConversion), so these rows run against production code.
+// That the real upgrade WRITES the levels and a second start writes nothing is
+// the real-path test TestVisibilityStartingLevels_Upgrade_StartupWritesTheConversion
+// (skill_upgrade_startup_red_test.go, package config_test: pkg/skillperm
+// imports pkg/config, so an internal test here cannot import it). D7 row 16's
+// request-surface half (ToolSearch "offered in the normal request after the
+// conversion, absent before") is order 56 (TestToolSurface_ConversionToolSearch);
+// these tests pin only the stored level.
 
 import (
 	"reflect"
 	"testing"
-
-	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
 )
 
 // mcpServerOldCfg is one server's pre-upgrade state.
@@ -139,12 +141,26 @@ var d7Table = []conversionOldState{
 	},
 }
 
-// visibilityConversionPlanOf is the test-local seam for the C-19 step 3
-// conversion plan. The GREEN step wires it to the production entry point;
-// it stays nil here so the RED run fails with BLOCKED instead of panicking.
-// Raw pre-upgrade inputs only: no case name or expected output reaches the
-// production conversion. These are provisional test bindings, not spec APIs.
-var visibilityConversionPlanOf func(compressed, previewAllLazy, discoveryEnabled, discoverySet bool, staticTool string, servers map[string]*bool, offline map[string]bool, skills []string) map[string]string
+// visibilityConversionPlanOf computes the C-19 step 3 plan from the raw
+// pre-upgrade inputs through the production planner. Raw inputs only: no case
+// name or expected output reaches it. Two inputs have no counterpart in the
+// planner and are deliberately not passed on: discoverySet (the planner reads
+// the stored boolean, and every D7 row that leaves the key out also leaves
+// discoveryEnabled false) and offline (the plan is computed from stored
+// config, never from a running server, so D7 row 13 is row 5 for the planner;
+// the real-path test keeps its server unreachable to cover the offline half).
+func visibilityConversionPlanOf(compressed, previewAllLazy, discoveryEnabled, _ bool, staticTool string, servers map[string]*bool, _ map[string]bool, skills []string) map[string]string {
+	in := VisibilityConversionInput{
+		Compressed: compressed, PreviewAllLazy: previewAllLazy, DiscoveryEnabled: discoveryEnabled, Skills: skills,
+	}
+	if staticTool != "" {
+		in.StaticTools = []string{staticTool}
+	}
+	for id, deferred := range servers {
+		in.Servers = append(in.Servers, VisibilityConversionServer{ID: id, Deferred: deferred})
+	}
+	return PlanToolVisibilityConversion(in)
+}
 
 func invokeVisibilityConversionPlan(old conversionOldState) map[string]string {
 	servers, offline := map[string]*bool{}, map[string]bool{}
@@ -157,8 +173,6 @@ func invokeVisibilityConversionPlan(old conversionOldState) map[string]string {
 // TestVisibilityStartingLevels_Upgrade drives Dataset D7 rows 1–16.
 // Traces to: BDD S-41; spec C-6 (starting levels), C-19 step 3; Dataset D7.
 func TestVisibilityStartingLevels_Upgrade(t *testing.T) {
-	nativebinding.Require(t, "pkg/config", visibilityConversionPlanOf,
-		"C-6/C-19/S-41/D7: native starting-level conversion; post-GREEN boot-path re-audit required")
 	for _, tc := range d7Table {
 		t.Run(tc.name, func(t *testing.T) {
 			got := invokeVisibilityConversionPlan(tc)
@@ -174,29 +188,4 @@ func TestVisibilityStartingLevels_Upgrade(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestVisibilityStartingLevels_Upgrade_StartupWritesTheConversion is the
-// native-path binding obligation for visibilityConversionPlanOf (CHECK round 4,
-// false-green table row 9). TestVisibilityStartingLevels_Upgrade hands the
-// conversion raw old switches and compares the returned map; its "second start
-// writes nothing" check (D7 row 15) only calls the same pure function twice. It
-// cannot show that the real C-19 upgrade (step 3) writes the converted levels,
-// or that a second start leaves them alone. This can only be checked after
-// GREEN, so it is a loud BLOCKED leaf (never a skip); the test author replaces
-// it at test-side reconciliation with a real upgrade run on a seeded home that
-// carries the D7 old switches, read back from config.json after two starts, and
-// CHECK then mutates the bound function and requires it to fail. Real-path
-// observers of the stored levels today: none cited (the
-// TestSkillPermissionsUpgrade_StopAtEveryStep fixture seeds compressed and
-// discovery switches but its persisted-value assertions do not name the
-// visibility maps); TestToolSurface_ConversionToolSearch observes only D7
-// row 16's request surface.
-func TestVisibilityStartingLevels_Upgrade_StartupWritesTheConversion(t *testing.T) {
-	t.Fatal("BLOCKED: the real C-19 upgrade (step 3) is not shown to write the " +
-		"starting levels of the function visibilityConversionPlanOf binds to " +
-		"into config.json from the old switches, nor to leave them untouched on " +
-		"a second start — required by C-6, C-19 step 3, S-41 and Dataset D7 " +
-		"(rows 1-16); a conversion function only this adapter calls must never " +
-		"turn this green")
 }
