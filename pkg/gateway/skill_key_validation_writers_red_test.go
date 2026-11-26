@@ -287,7 +287,7 @@ func requireGoneKeyStoredEverywhere(t *testing.T, api *restAPI, mountedKey strin
 	state := readGoneKeyState(t, api.homePath)
 	require.Contains(t, state.policies, mountedKey, "Given: the key is in sandbox.skill_policies")
 	require.Contains(t, state.visibility, mountedKey, "Given: the key is in sandbox.skill_visibility")
-	ids := []string{}
+	ids := make([]string, 0, len(state.agents))
 	for id := range state.agents {
 		ids = append(ids, id)
 	}
