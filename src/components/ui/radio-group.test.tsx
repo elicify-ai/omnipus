@@ -183,6 +183,42 @@ describe('RadioGroup — keyboard navigation, disabled items, and misc contract'
     expect(onValueChange).toHaveBeenLastCalledWith('c')
   })
 
+  it('with loop={false} an arrow at either end does nothing, and the arrows between ends still select', () => {
+    const onValueChange = vi.fn()
+    const { rerender } = render(
+      <RadioGroup value="c" onValueChange={onValueChange} aria-label="Choice" loop={false}>
+        <RadioGroupItem value="a">A</RadioGroupItem>
+        <RadioGroupItem value="b">B</RadioGroupItem>
+        <RadioGroupItem value="c">C</RadioGroupItem>
+      </RadioGroup>,
+    )
+    const c = screen.getByRole('radio', { name: 'C' })
+    c.focus()
+    fireEventKeyDown(c, 'ArrowRight')
+    fireEventKeyDown(c, 'ArrowDown')
+    expect(onValueChange).not.toHaveBeenCalled()
+    expect(c).toHaveFocus()
+    fireEventKeyDown(c, 'ArrowLeft')
+    expect(onValueChange).toHaveBeenCalledWith('b')
+
+    onValueChange.mockClear()
+    rerender(
+      <RadioGroup value="a" onValueChange={onValueChange} aria-label="Choice" loop={false}>
+        <RadioGroupItem value="a">A</RadioGroupItem>
+        <RadioGroupItem value="b">B</RadioGroupItem>
+        <RadioGroupItem value="c">C</RadioGroupItem>
+      </RadioGroup>,
+    )
+    const a = screen.getByRole('radio', { name: 'A' })
+    a.focus()
+    fireEventKeyDown(a, 'ArrowLeft')
+    fireEventKeyDown(a, 'ArrowUp')
+    expect(onValueChange).not.toHaveBeenCalled()
+    expect(a).toHaveFocus()
+    fireEventKeyDown(a, 'End')
+    expect(onValueChange).toHaveBeenCalledWith('c')
+  })
+
   it('a non-navigation key is ignored', () => {
     const onValueChange = vi.fn()
     render(

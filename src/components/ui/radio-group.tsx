@@ -8,7 +8,10 @@ import { cn } from '@/lib/utils'
  * the checked one — is a Tab stop) and arrow-key navigation that moves focus
  * AND immediately selects the adjacent option, matching how a native
  * `<input type="radio">` group behaves. Home/End jump to the first/last
- * enabled option.
+ * enabled option. Arrows wrap past the ends by default; `loop={false}` stops
+ * them at the first and last option instead (a group where passing through
+ * an option on the way round would save it, e.g. the Skills & Tools trust
+ * block, ruling 2026-11-26).
  *
  * Four real call sites drove this API, in two shapes:
  *   - AltitudeToggle.tsx and WorkspaceTasksTab.tsx's `ViewSwitcher` already
@@ -36,6 +39,8 @@ interface RadioGroupContextValue {
   value: string
   onValueChange: (value: string) => void
   disabled?: boolean
+  /** Whether arrow keys wrap past the first and last option. */
+  loop: boolean
   /** The value that should carry the group's one Tab stop (WAI-ARIA APG
    *  roving tabindex): normally the checked value, but when `value` matches
    *  no rendered item — a group whose initial/external value hasn't landed
@@ -78,10 +83,16 @@ export type RadioGroupProps = Omit<
      * Sets `aria-orientation` for assistive technology. Default: `'horizontal'`.
      */
     orientation?: 'horizontal' | 'vertical'
+    /**
+     * Whether ArrowRight/ArrowDown on the last option and ArrowLeft/ArrowUp on
+     * the first wrap round. With `false` those keys do nothing there: no focus
+     * move and no `onValueChange`. Home and End are unchanged. Default: `true`.
+     */
+    loop?: boolean
   }
 
 const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
-  ({ value, onValueChange, disabled, orientation = 'horizontal', className, children, ...props }, ref) => {
+  ({ value, onValueChange, disabled, orientation = 'horizontal', loop = true, className, children, ...props }, ref) => {
     // Computed from the rendered items themselves (their own `value`/
     // `disabled` props), the same source the keyboard navigation already
     // reads via the DOM (`RADIO_SELECTOR`) — see the interface doc above.
@@ -100,8 +111,8 @@ const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
       return matched ? value : firstEnabled
     }, [children, value, disabled])
     const contextValue = React.useMemo(
-      () => ({ value, onValueChange, disabled, activeTabValue }),
-      [value, onValueChange, disabled, activeTabValue],
+      () => ({ value, onValueChange, disabled, loop, activeTabValue }),
+      [value, onValueChange, disabled, loop, activeTabValue],
     )
     return (
       <RadioGroupContext.Provider value={contextValue}>
@@ -155,16 +166,22 @@ const RadioGroupItem = React.forwardRef<HTMLButtonElement, RadioGroupItemProps>(
       const currentIndex = options.indexOf(event.currentTarget)
       if (currentIndex === -1 || options.length === 0) return
 
+      const step = (offset: 1 | -1) => {
+        event.preventDefault()
+        const next = currentIndex + offset
+        // Without loop an arrow at either end stays put: no focus move, no selection.
+        if (!ctx.loop && (next < 0 || next >= options.length)) return
+        selectAndFocus(options[(next + options.length) % options.length])
+      }
+
       switch (event.key) {
         case 'ArrowRight':
         case 'ArrowDown':
-          event.preventDefault()
-          selectAndFocus(options[(currentIndex + 1) % options.length])
+          step(1)
           break
         case 'ArrowLeft':
         case 'ArrowUp':
-          event.preventDefault()
-          selectAndFocus(options[(currentIndex - 1 + options.length) % options.length])
+          step(-1)
           break
         case 'Home':
           event.preventDefault()

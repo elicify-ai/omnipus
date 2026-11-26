@@ -32,6 +32,7 @@
         "Default",
         "Disabled",
         "ArrowKeyNavigation",
+        "NoLoop",
         "NarrowViewport"
       ]
     }
@@ -58,6 +59,14 @@
       "file": "src/components/ui/radio-group.stories.tsx",
       "test": "Disabled",
       "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-no-loop-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/radio-group.stories.tsx",
+      "test": "No Loop",
+      "story": "NoLoop",
       "applicable": true
     },
     {

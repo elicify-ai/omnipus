@@ -3,10 +3,10 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
 import { RadioGroup, RadioGroupItem } from './radio-group'
 
-function Fixture() {
+function Fixture({ loop = true }: { loop?: boolean }) {
   const [value, setValue] = useState('top-level')
   return (
-    <RadioGroup value={value} onValueChange={setValue} aria-label="Board depth">
+    <RadioGroup value={value} onValueChange={setValue} aria-label="Board depth" loop={loop}>
       <RadioGroupItem value="top-level" data-testid="radio-top-level">Top-level</RadioGroupItem>
       <RadioGroupItem value="show-all" data-testid="radio-show-all">Show all</RadioGroupItem>
       <RadioGroupItem value="disabled" data-testid="radio-disabled" disabled>Disabled</RadioGroupItem>
@@ -30,6 +30,22 @@ export const ArrowKeyNavigation: Story = {
     const canvas = within(canvasElement)
     const first = canvas.getByTestId('radio-top-level')
     first.focus()
+    await userEvent.keyboard('{ArrowRight}')
+    await expect(canvas.getByTestId('radio-show-all')).toHaveFocus()
+    await expect(canvas.getByTestId('radio-show-all')).toHaveAttribute('aria-checked', 'true')
+  },
+}
+export const NoLoop: Story = {
+  render: () => <Fixture loop={false} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const first = canvas.getByTestId('radio-top-level')
+    first.focus()
+    await userEvent.keyboard('{ArrowLeft}')
+    await expect(first).toHaveFocus()
+    await expect(first).toHaveAttribute('aria-checked', 'true')
+    await userEvent.keyboard('{ArrowRight}')
+    await expect(canvas.getByTestId('radio-show-all')).toHaveFocus()
     await userEvent.keyboard('{ArrowRight}')
     await expect(canvas.getByTestId('radio-show-all')).toHaveFocus()
     await expect(canvas.getByTestId('radio-show-all')).toHaveAttribute('aria-checked', 'true')
