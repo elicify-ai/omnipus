@@ -28,15 +28,16 @@ func seedResolvedWebTask(t *testing.T, store *task.Store) *task.Task {
 	t.Helper()
 	one := 1
 	tk := &task.Task{
-		Title:       "test task",
-		Prompt:      "do something",
-		Action:      task.ActionLLM,
-		AgentID:     "agent-a",
-		CreatedBy:   "agent-a",
-		WorkspaceID: "ws-1",
-		Status:      task.StatusNext,
-		Provenance:  []string{"web"},
-		MaxAttempts: &one,
+		Title:            "test task",
+		Prompt:           "do something",
+		Action:           task.ActionLLM,
+		AgentID:          "agent-a",
+		CreatedBy:        "agent-a",
+		CreatedByAgentID: "agent-a", // the creating AGENT: update_task authorises definition edits (max_attempts) by it alone
+		WorkspaceID:      "ws-1",
+		Status:           task.StatusNext,
+		Provenance:       []string{"web"},
+		MaxAttempts:      &one,
 	}
 	if err := store.Create(tk); err != nil {
 		t.Fatalf("seedResolvedWebTask: create: %v", err)
@@ -47,6 +48,9 @@ func seedResolvedWebTask(t *testing.T, store *task.Store) *task.Task {
 	}
 	if want := []string{"web"}; !reflect.DeepEqual(got.Provenance, want) {
 		t.Fatalf("instrument: the seed must record %v, got %v", want, got.Provenance)
+	}
+	if !got.CreatedByAgent("agent-a") {
+		t.Fatalf("instrument: agent-a must be the creating agent, or the creator-only gate refuses definition edits before any join")
 	}
 	return got
 }
