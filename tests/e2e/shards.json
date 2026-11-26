@@ -229,13 +229,14 @@
       ]
     },
     {
-      "_comment": "Chat links (TDD row 22) and Skills & Tools (#1963 order 31). Two render specs, with Skills & Tools on private native gateways/scripted external edges; top up this smallest same-character shard rather than the ~6-spec render shards. Kept off the solo list.",
+      "_comment": "Chat links (TDD row 22), Skills & Tools (#1963 order 31) and the design-system browser checks of the five Skills & Tools surfaces (fix round 4, Part G). Three render specs, with both Skills & Tools specs on private native gateways/scripted external edges; top up this smallest same-character shard rather than the ~6-spec render shards. Kept off the solo list.",
       "group": "ui-chat-links",
       "key_slot": "a",
       "port": 6084,
       "specs": [
         "tests/e2e/chat-links.spec.ts",
-        "tests/e2e/skills-tools.spec.ts"
+        "tests/e2e/skills-tools.spec.ts",
+        "tests/e2e/skills-tools-surfaces.spec.ts"
       ]
     },
     {
