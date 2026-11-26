@@ -27,15 +27,16 @@ export const LEVEL_MEANINGS: Record<ModelVisibility, string> = {
   full: 'the whole definition, every turn',
 }
 
+/** Category names as the spec (Assumptions, built-in categories) and the approved wireframe write them. */
 export const SKILL_CATEGORY_WORDS: Record<SkillCategory, string> = {
   tools: 'Tools',
   business: 'Business',
   development: 'Development',
-  testing_security: 'Testing and security',
-  data_ai: 'Data and AI',
+  testing_security: 'Testing & Security',
+  data_ai: 'Data & AI',
   devops: 'DevOps',
   documentation: 'Documentation',
-  content_media: 'Content and media',
+  content_media: 'Content & Media',
   research: 'Research',
   lifestyle: 'Lifestyle',
   databases: 'Databases',
