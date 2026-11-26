@@ -7,9 +7,11 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { browserEdgesU2, cleanupNavigationU2, hashAppU2 } from '../../../tests/helpers/settings-u2-navigation'
 import { transportG1 } from '../../../tests/helpers/settings-gate-g1'
+import { navigationU44 } from '../../../tests/helpers/settings-u44-navigation'
 
-beforeEach(browserEdgesU2)
-afterEach(cleanupNavigationU2)
+let p2Navigation: ReturnType<typeof navigationU44> | undefined
+beforeEach(() => { browserEdgesU2(); vi.stubGlobal('navigation', undefined) })
+afterEach(() => { p2Navigation?.restore(); p2Navigation = undefined; cleanupNavigationU2() })
 
 async function typedGatewayAfterRouterEntries() {
   const t = transportG1()
@@ -54,13 +56,17 @@ it('one Back from a typed Gateway onto a router entry (router step count 2) — 
   await stayAndExpectGateway({ address, length }, t)
 })
 
-const hasNavigationApi = typeof window !== 'undefined' && 'navigation' in window
-it.skipIf(!hasNavigationApi)(
-  'a history-menu jump two entries back from a typed Gateway — Stay returns to Gateway '
-    + '(runs only with the browser Navigation API; jsdom has none, so the hands-on re-test covers it)',
-  async () => {
-    const { t, address, length } = await typedGatewayAfterRouterEntries()
-    await act(async () => { window.history.go(-2) })
-    await stayAndExpectGateway({ address, length }, t)
-  },
-)
+it('P2 / U5-C1 — a history-menu jump two entries back from a typed Gateway returns to its exact entry with the eager Navigation API', async () => {
+  p2Navigation = navigationU44()
+  const { t, address, length } = await typedGatewayAfterRouterEntries()
+  const home = p2Navigation.navigation.currentEntry
+  expect(p2Navigation.navigation.entries().map((entry) => new URL(entry.url).hash), 'P2 instrument: all four actual browser entries are represented').toEqual([
+    '#/settings?tab=about', '#/settings?tab=limits', '#/settings?tab=memory', '#/settings?tab=gateway',
+  ])
+  expect(p2Navigation.navigation.canGoBack).toBe(true)
+  expect(p2Navigation.navigation.canGoForward).toBe(false)
+  await act(async () => { window.history.go(-2) })
+  await stayAndExpectGateway({ address, length }, t)
+  expect(p2Navigation.navigation.currentEntry.key, 'G-06: the entry key, not only the address, is restored').toBe(home.key)
+  expect(p2Navigation.navigation.currentEntry.index).toBe(home.index)
+})
