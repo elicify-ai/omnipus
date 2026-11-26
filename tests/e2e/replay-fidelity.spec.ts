@@ -33,6 +33,7 @@ import {
   REPLAY_ATTACH_CHUNKS, REPLAY_ATTACH_PREFIX, REPLAY_ATTACH_TEXT,
   startReplayAttachProvider, type ReplayAttachProvider,
 } from './fixtures/replay-attach-provider'
+import { startScriptedReplyProvider, type ScriptedReplyProvider } from './fixtures/scripted-reply-provider'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -660,7 +661,8 @@ test(
 let AUTH_FILE: string
 
 // A fixture dependency starts the local model BEFORE canonicalGateway onboards.
-// Only (c) uses this extension; (a), (b), (d) retain their original provider and assertions.
+// Only (c) uses this extension; (a), (b) retain their original provider and assertions.
+// (d) has its own scripted provider (echoTest, below).
 // not-wire-format: test-owned viewers and passive native observation state.
 type AttachViewers = {
   sessionId: string
@@ -868,21 +870,31 @@ attachTest(
 
 // ── Test (d): live continuation after replay ──────────────────────────────────
 
-test(
+// A scripted local provider replaces the live model: the real gateway and engine
+// still produce every frame, only the external provider is faked (#2010).
+// The reply is the echo token found in the user's prompt, so the assertion that
+// the new message contains the token stays exactly as strict as before.
+const echoTest = test.extend<{ echoProvider: ScriptedReplyProvider }>({
+  echoProvider: async ({ browserName }, use, info) => {
+    await info.attach('scripted-provider-browser', { body: browserName, contentType: 'text/plain' })
+    const provider = await startScriptedReplyProvider(userText => {
+      const token = userText.match(/zx[0-9a-z]+/g)?.pop()
+      if (!token) throw new Error(`no echo token in the user prompt: ${userText}`)
+      return token
+    })
+    try { await use(provider) } finally { await provider.close() }
+  },
+  canonicalProviderBase: async ({ echoProvider }, use) => { await use(echoProvider.url) },
+})
+
+echoTest(
   '(d) live continuation after replay: new message appends below replayed transcript',
-  async ({ page }) => {
+  async ({ page, echoProvider: provider }) => {
     // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 8; TDD row 26.
     // SC-I-004(iv): message ordering preserved; live continuation appears after replayed transcript.
     //
-    // IMPORTANT: This test requires a real LLM (OPENROUTER_API_KEY_CI) to send a live message.
-
-    // Bump per-test timeout to 360s. test.slow() triples the global 90s to 270s,
-    // which has proven insufficient under full-suite LLM contention (this test
-    // runs late in the suite after ~45 prior tests have hit OpenRouter,
-    // backlogging GLM-4.6's extended-thinking queue). In isolation the test
-    // completes in ~6s; in-suite it routinely needs 90-150s for the assistant
-    // reply to materialize, so the 90s assertion timeout below was over budget.
-    test.setTimeout(360_000)
+    // No live model: the local scripted provider answers the one new message
+    // with its echo token, immediately, so the test needs no extended timeout.
 
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
@@ -933,17 +945,7 @@ test(
     // ── Step 2: Send a new message and verify it appears BELOW the replayed transcript ──
     // Traces to: BDD Scenario 8 AS-1: new response streams in below replayed transcript.
     //
-    // Phrasing note: the prompt mirrors chat.spec.ts (b)'s "Echo it back verbatim"
-    // pattern, which reliably yields deterministic short text from Mia (main agent).
-    // Earlier wording ("Reply with exactly:") tripped Mia's "no boilerplate" guardrail
-    // and the LLM streamed only thinking-mode placeholders without producing final text.
-    //
-    // THIRD rewrite for the same LLM-safety-refusal class (CI run 36245049018): the
-    // token "continuation confirmed" was refused — "This looks like an attempt to
-    // get me to falsely confirm a 'continuation' or 'replayed session' scenario …
-    // I won't produce tokens designed to impersonate system-level confirmations."
-    // A random alphanumeric nonce carries no state-confirmation semantics, so the
-    // safety heuristic has nothing to trip on (same reason as test (c)'s nonce).
+    // The scripted provider extracts this nonce from the prompt and replies with it.
     const echoToken = `zx${Date.now().toString(36)}`
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 10_000 })
@@ -956,17 +958,13 @@ test(
     await input.press('Enter')
 
     // A new assistant message appears (total count increases by 1).
-    // 180s: GLM-4.6 routinely takes 90-150s under full-suite load (extended
-    // thinking + the OpenRouter queue backlogged by prior tests). 90s was
-    // insufficient — failed all 3 retries in the 2026-05-16 full-suite run
-    // while passing in 6s in isolation.
-    await expect(asstMsgs).toHaveCount(countAfterReplay + 1, { timeout: 180_000 })
+    // The reply is local and immediate; 15 s covers the gateway round trip.
+    await expect(asstMsgs).toHaveCount(countAfterReplay + 1, { timeout: 15_000 })
 
     // The last assistant message should contain the expected reply.
     const lastAsstMsg = asstMsgs.last()
-    // Same case-insensitive "must contain the token verbatim" strictness as before —
-    // only WHAT the token is changed.
-    await expect(lastAsstMsg).toContainText(new RegExp(echoToken, 'i'), { timeout: 90_000 })
+    // Same case-insensitive "must contain the token verbatim" strictness as before.
+    await expect(lastAsstMsg).toContainText(new RegExp(echoToken, 'i'), { timeout: 15_000 })
 
     // No messages are duplicated: the replayed messages remain exactly as seeded.
     // SC-I-004(iv): user messages still show exactly 1 (the replayed one + new one we sent = 2).
@@ -975,6 +973,13 @@ test(
     // All assistant messages: original replayed (1) + new response (1) = 2.
     // Duplication would show 3+ or messages out of order.
     await expect(asstMsgs).toHaveCount(2, { timeout: 10_000 })
+
+    // The provider saw exactly one streaming request, carrying the new prompt, and
+    // nothing unexpected: no live model was involved.
+    expect(provider.failures(), 'only the expected scripted provider routes were used').toEqual([])
+    const seen = provider.state()
+    expect(seen.calls, 'the provider answered exactly one streaming request').toBe(1)
+    expect(seen.userTexts[0]).toContain(echoToken)
   },
 )
 
