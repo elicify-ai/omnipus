@@ -18,17 +18,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// toolLevelTurnPlan is the turn plan of one tool stored at level (C-1, C-15),
-// read through the same tools.ToolSurface a turn builds from its stored
-// levels (readTurnToolSurface): whether its definition is sent, its "More
-// tools" line and whether ToolSearch finds it. Level "deny" stands for the
-// tool's effective deny, which overrides every level.
-func toolLevelTurnPlan(level, name, description string) (inRequest bool, manifestLine string, searchable bool) {
-	surface := tools.ToolSurface{Levels: map[string]string{name: level}}
-	p := surface.Plan(name, description, level == string(config.ToolPolicyDeny))
-	return p.InRequest, p.ManifestLine, p.Searchable
-}
-
 // readTurnToolSurface returns the tool levels of the loaded config for one
 // turn (C-15, C-16: a saved change applies to running agents once the config
 // is reloaded). A loop without a loaded config reads the stored levels; an

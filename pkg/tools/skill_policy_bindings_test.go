@@ -10,5 +10,4 @@ package tools
 
 func init() {
 	discardStagedInstallSkill = (*InstallSkillTool).DiscardStaged
-	skillOutcomeOf = SkillOutcomeOf
 }
