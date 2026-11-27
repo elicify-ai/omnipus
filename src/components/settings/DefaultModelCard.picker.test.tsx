@@ -208,6 +208,7 @@ async function nameCut(name: HTMLElement) {
   const css = await compiledCssU43([name])
   return ENVIRONMENTS.map((env) => {
     const own = declarationsU44(css, name, env)
+    expect(own['white-space'], `U8-B: the distinguishing end stays visible on one line at ${env.width} ${env.pointer}: ${name.textContent}`).toBe('nowrap')
     return {
       env: `${env.width} ${env.pointer}`,
       keepsEnd: own.direction === 'rtl' && own['text-align'] === 'left'

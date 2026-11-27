@@ -85,8 +85,9 @@ it.each(['coarse', 'fine'] as const)('U7-2 — real recommended virtual rows can
     const slot = row.parentElement!
     expect(slot.parentElement, 'instrument: inspect the actual virtual allocation, not the list height').toBe(list)
     const result = virtualRowU45(css, row, slot, env)
+    expect(result.slotHeight, 'instrument: actual slot height is known before numeric comparison').not.toBeNull()
     expect.soft(result.slotHeight, 'instrument: actual slot height is positive').toBeGreaterThan(0)
-    expect.soft(result.upperBound, `U7-2: auto/content height is not evidence of a bounded row: ${row.textContent}`).not.toBeNull()
+    expect(result.upperBound, `U7-2: auto/content height is not evidence of a bounded row: ${row.textContent}`).not.toBeNull()
     expect.soft(result.upperBound, `U7-2: row border-box cannot be taller than its actual slot: ${row.textContent}`).toBeLessThanOrEqual(result.slotHeight!)
     expect.soft(result.clipsContents, `U7-2: oversized descendants cannot paint into the next model's visible hit area: ${row.textContent}`).toBe(true)
   }

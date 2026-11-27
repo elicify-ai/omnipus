@@ -39,7 +39,7 @@ it.each(['Input', 'accordion trigger', 'command search'] as const)('U7-4 fine pr
   const control = await screen.findByTestId('u46-width-control') // renderG1 mounts a real async router
   const css = await compiledCssU43([control, control.parentElement!])
   const coarse = fixedWidthU43(css, control, { width: 390, pointer: 'coarse' })
-  expect.soft(coarse.minimum, `${kind}/U7-4: an explicit coarse min-width is required, not a shrinkable preferred width`).not.toBeNull()
+  expect(coarse.minimum, `${kind}/U7-4: an explicit coarse min-width is required, not a shrinkable preferred width`).not.toBeNull()
   expect.soft(coarse.minimum, `${kind}/FR-070: coarse min-width is at least 44px`).toBeGreaterThanOrEqual(44)
   expect.soft(coarse.pass, `${kind}/U7-4: the touch minimum cannot shrink away`).toBe(true)
   for (const width of [390, 1280]) {
@@ -52,7 +52,6 @@ it.each(['Input', 'accordion trigger', 'command search'] as const)('U7-4 fine pr
     // active expression remains unknown and cannot certify fine preservation.
     const noFineTouchFloor = rawFineMinimum === undefined || rawFineMinimum === 'auto'
       || (fine.minimum !== null && fine.minimum < 44)
-    console.info('R46_WIDTH_SCOPE ' + JSON.stringify({ kind, width, coarse, fine, rawFineMinimum: rawFineMinimum ?? null }))
-    expect.soft(noFineTouchFloor, `${kind}/U7-4: the coarse minimum-width floor must not apply to fine pointers at ${width}px`).toBe(true)
+    expect.soft(noFineTouchFloor, `${kind}/U7-4: the coarse minimum-width floor must not apply to fine pointers at ${width}px; ${JSON.stringify({ coarse, fine, rawFineMinimum: rawFineMinimum ?? null })}`).toBe(true)
   }
 })

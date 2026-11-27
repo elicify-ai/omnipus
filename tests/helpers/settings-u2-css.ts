@@ -57,7 +57,18 @@ export function pseudoTouchU2(css: Root, target: Element) {
     // Match the ACTUAL control. A Switch-only rule is not evidence for Button.
     const selectors = rule.selector.split(',').map((selector) => selector.replace(/::?before\b/g, '').trim())
     if (!selectors.some((selector) => target.matches(selector))) return
-    const declarations = hasMediaU2(rule, /pointer:\s*coarse/) ? coarse : base
+    const coarseOnly = hasMediaU2(rule, /^\(pointer: coarse\)$/)
+    if (rule.selector.includes('[data-radio-target]')) {
+      // U8-A: an unknown/extra guard cannot certify a coarse-only radio area.
+      for (let parent: Root | Rule | AtRule | Document | undefined = rule.parent; parent; parent = parent.parent) {
+        if (parent.type === 'atrule' && (parent.name === 'supports'
+          || (parent.name === 'media' && parent.params !== '(pointer: coarse)'))) {
+          throw new Error(`U8-A radio tap scope must be exactly (pointer: coarse), not @${parent.name} ${parent.params}`)
+        }
+      }
+      if (!coarseOnly) throw new Error('U8-A radio tap scope must be exactly (pointer: coarse), not unscoped')
+    }
+    const declarations = coarseOnly ? coarse : base
     for (const node of rule.nodes) {
       if (node.type === 'decl') declarations.set(node.prop, node.value)
     }

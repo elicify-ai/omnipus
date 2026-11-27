@@ -10,9 +10,9 @@
  */
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, waitFor } from '@testing-library/react'
-import type { Rule } from 'postcss'
 import { jsonG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
 import { pseudoTouchU2, stylesheetU2 } from '../../../tests/helpers/settings-u2-css'
+import { expectRadioReachU47, fineBeforeU47 } from '../../../tests/helpers/settings-u47-radio'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -28,22 +28,6 @@ it('U8-A: every Sandbox radio has a coarse-only touch-sized tap area inside its 
   const names = new Set(radios.map((radio) => radio.name))
   expect([...names].sort()).toEqual(expect.arrayContaining(['sandbox-mode', 'workspace-limit']))
   const css = await stylesheetU2()
-  const fineBefore = (element: Element) => {
-    let found = false
-    css.walkRules((rule: Rule) => {
-      if (!/::?before\b/.test(rule.selector)) return
-      for (let parent: { type: string; name?: string; parent?: unknown } | undefined = rule.parent;
-        parent; parent = parent.parent as typeof parent) {
-        if (parent.type === 'atrule' && parent.name === 'media') return
-      }
-      // Only a rule that draws a hit region counts; the preflight's universal
-      // `*, ::before` reset (box-sizing, margin, border) matches everything.
-      if (!rule.nodes.some((node) => node.type === 'decl' && ['pointer-events', 'position'].includes(node.prop))) return
-      const selectors = rule.selector.split(',').map((selector) => selector.replace(/::?before\b/g, '').trim())
-      if (selectors.some((selector) => element.matches(selector))) found = true
-    })
-    return found
-  }
   for (const radio of radios) {
     const label = radio.labels?.[0]
     const target = radio.parentElement as HTMLElement
@@ -52,6 +36,7 @@ it('U8-A: every Sandbox radio has a coarse-only touch-sized tap area inside its 
     expect(label?.contains(target)).toBe(true)
     expect(target.classList.contains('relative'), `${radio.name}/${radio.value}`).toBe(true)
     expect(pseudoTouchU2(css, target), `${radio.name}/${radio.value}: coarse tap area`).toBe(true)
-    expect(fineBefore(target), `${radio.name}/${radio.value}: fine pointer unchanged`).toBe(false)
+    expect(fineBeforeU47(css, target), `${radio.name}/${radio.value}: fine pointer unchanged`).toBe(false)
+    expectRadioReachU47(css, target, label!, `${radio.name}/${radio.value}`)
   }
 })
