@@ -156,7 +156,7 @@ Each section and neighbor screen has one job.
 | Settings, Keys & secrets | The credential vault |
 | Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |
 | Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |
-| Settings, About | Version and build information |
+| Settings, About | Version and build information, including the **Build commit** (or the reason it could not be read); **Copy** puts the system information, build commit included, on the clipboard |
 | Profile | Your name, timezone, font size, password, workspace context, and Chat display (Verbose chat) |
 | Usage | Token totals by period for agent, model and provider; up to 50 sessions by recorded total tokens, independent of the period; cache-hit percentage by agent and provider |
 
