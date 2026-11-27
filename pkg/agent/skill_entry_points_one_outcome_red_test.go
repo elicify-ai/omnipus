@@ -60,16 +60,15 @@ package agent
 // fails with the entry point's own wrong behaviour; the first subtest also ends
 // with BLOCKED naming the missing keys.
 //
-// E5 and the ask_pending rows — UNVERIFIED, deliberately not asserted. C-11 E5
-// says "ask_pending raises the card in the root chat (interactive) or refuses
-// (unattended)", and spec line "delegate with requested_skill naming an Ask
-// skill: the child's load raises the card in the root chat". Whether the card
-// is raised by the launch gate or by the child's first load is not fixed by the
-// spec, so no assertion is written for ask_pending rows of E5; the allow, deny,
-// trust-deny and not-granted rows are (the delegate tool's own contract: "a hard
-// request, not a hint"). The same section says E5 gives "the instructions, in the
-// child"; no mechanism is named, so delivery of the instructions to the child is
-// not asserted either.
+// E5 and the ask_pending rows. This test takes the allow, deny, trust-deny and
+// not-granted rows of E5 (the delegate tool's own contract: "a hard request, not
+// a hint"). The four ask_pending rows (D1#3, #6, #9, #10) are
+// TestSkillPolicyResolution_DelegationAskPending in
+// skill_delegation_ask_pending_red_test.go (Part M, team-lead's order of
+// 2026-11-27); its header says what the spec fixes there and what it leaves
+// open. The same section says E5 gives "the instructions, in the child"; no
+// mechanism is named, so delivery of the instructions to the child is not
+// asserted here either.
 
 import (
 	"context"
@@ -719,7 +718,7 @@ func TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome(t *testing.T) {
 		{"E2 skill menu: listed exactly when the outcome is not deny", epCheckE2, nil},
 		{"E3 Skill search: found exactly when the outcome is not deny", epCheckE3, nil},
 		{"E4 the person's /name: consent for an ordinary Ask, never for a Deny or a trust Ask", epCheckE4, nil},
-		{"E5 delegation requested_skill: decided for the child (ask_pending rows UNVERIFIED, see the file header)", epCheckE5,
+		{"E5 delegation requested_skill: decided for the child (the ask_pending rows are TestSkillPolicyResolution_DelegationAskPending)", epCheckE5,
 			func(r epRow) bool { return r.want != "ask_pending" }},
 		{"E8 Full level: injected exactly when the outcome is allowed", epCheckE8, nil},
 		{"E9 ToolSearch skill hits: found exactly when the outcome is not deny, never loaded", epCheckE9, nil},
