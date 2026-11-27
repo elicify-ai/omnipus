@@ -12,15 +12,29 @@ package tools
 //
 // The production resolver ("one function beside
 // pkg/tools/compositor.go::resolveEffectivePolicyWith", C-11) does not exist
-// at this commit. Per the qa-lead RED rule the test is written anyway and
-// fails LOUD with BLOCKED until the symbol lands; skillOutcomeOf below is the
-// test-local seam the fix wires to the production entry point. Expected
-// values below come from the spec's datasets, never from the implementation.
+// at the landing base. Per the qa-lead RED rule the test is written anyway and
+// fails LOUD with BLOCKED until the symbol lands. Expected values below come
+// from the spec's datasets, never from the implementation.
+//
+// Part L, Ruling A (team-lead, 2026-11-26): skillOutcomeOf is bound to the
+// function every real entry point calls, tools.ResolveSkillDecision, in its
+// own shape (one input struct, one result struct) and not to a test-only
+// wrapper beside it: a second copy of the C-11 logic is what FR-066 forbids.
+// The datasets are unchanged; only the adapter around the call changed. The
+// production structs do not exist on a tree without the backend, so the seam is
+// an `any` checked by tests/helpers/nativebinding and called by field name
+// through tests/helpers/structcall: this file still compiles there, and the run
+// shows BLOCKED instead of a build error. skill_policy_decision_bindings_test.go
+// binds it. Whether every entry point of C-11 reaches that same function is
+// TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome
+// (skill_entry_points_one_outcome_red_test.go here, and its pkg/agent twin).
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+	"github.com/elicify-ai/omnipus/tests/helpers/structcall"
 )
 
 // skillOutcomeInput is one Dataset D1 input row: (global, agent override,
@@ -125,85 +139,91 @@ var d1ResolutionTable = []skillOutcomeInput{
 	{
 		name: "D1#14 a skill not granted is refused whatever its permission (S-14)",
 		// allow, none, ask, yes, not granted -> refused: not granted.
-		// C-11 puts the grant gate first, so the resolver's outcome is deny;
-		// the entry point (E1) words the refusal as not granted.
+		// C-11 puts the grant gate first, so the resolver's outcome is deny and
+		// the reason it reports reads as not granted.
 		granted: false, global: "allow", agentValue: "", trust: "ask", verified: true, godMode: false,
 		wantOutcome: "deny",
 		wantRefusal: "not granted",
 	},
 }
 
-// skillOutcomeOf is the test-local seam for the C-11 resolver
-// ("one function beside pkg/tools/compositor.go::resolveEffectivePolicyWith").
-// The GREEN step wires it to the production entry point; it stays nil here so
-// the RED run fails with BLOCKED instead of panicking.
-// Only raw inputs cross the native boundary. The spec's expected outcome and
-// refusal stay in the test table and are never handed to a resolver adapter.
-var skillOutcomeOf func(granted bool, global, agentValue, trust string, verified, godMode bool) (outcome string, refusal string)
+// skillOutcomeOf is the test-local seam for the C-11 resolver. The binding is
+// tools.ResolveSkillDecision, which takes one SkillDecisionInput and returns
+// one SkillDecision; it stays nil here so the RED run fails with BLOCKED
+// instead of panicking. Only raw inputs cross the native boundary: the spec's
+// expected outcome and refusal stay in the test table and are never handed to
+// the function.
+var skillOutcomeOf any
+
+// decideD1Row runs one Dataset D1 row through the bound function and returns
+// the outcome and the refusal reason it reports. The input struct is filled by
+// field name from the row's raw values. The key is any one skill's key: the
+// decision does not depend on which.
+func decideD1Row(t *testing.T, row skillOutcomeInput) (outcome, reason string) {
+	t.Helper()
+	got := structcall.Call(t, skillOutcomeOf, structcall.Fields{
+		"Key":      "deep-research",
+		"Granted":  row.granted,
+		"Global":   row.global,
+		"Agent":    row.agentValue,
+		"Trust":    row.trust,
+		"Verified": row.verified,
+		"GodMode":  row.godMode,
+	})
+	return got.Str(t, "Outcome"), got.Str(t, "Reason")
+}
+
+// readsAsNotGranted reports whether a refusal reason says the skill is not
+// granted, whatever its spelling (a code such as not_granted or a sentence).
+func readsAsNotGranted(reason string) bool {
+	return strings.Contains(strings.ReplaceAll(strings.ToLower(reason), "_", " "), "not granted")
+}
 
 // TestSkillPolicyResolution_Table drives Dataset D1 rows 1–14 through the
 // C-11 per-skill decision.
+//
+// Refusal column. The earlier seam returned a refusal only for a skill that is
+// not granted. The function every entry point calls reports a reason for every
+// deny, so the column is read as the spec states it: the not-granted row
+// reports a reason that reads as not granted (S-14), and no other row does.
+// The three refusals the spec words are three different sentences — S-09
+// "naming the skill setting", S-14 "refused as not granted", S-29 the trust
+// sentence — so the reasons of D1#4, D1#5 and D1#14 must differ, and the
+// refusals S-09, S-29 and S-14 describe (D1#2, D1#5, D1#14) must each carry
+// one. A function that returns one constant reason for every deny fails that.
+//
 // Traces to: BDD S-09, S-13, S-14, S-19, S-29, S-30, S-31, S-35; Dataset D1.
 func TestSkillPolicyResolution_Table(t *testing.T) {
 	nativebinding.Require(t, "pkg/tools", skillOutcomeOf,
-		"C-0/C-3/C-11/D1: actual per-skill resolver; post-GREEN every-consumer re-audit required")
+		"C-0/C-3/C-11/D1: the one per-skill decision function (the binding is ResolveSkillDecision); that every entry point reaches it is TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome")
+	reasons := map[string]string{}
 	for _, tc := range d1ResolutionTable {
 		t.Run(tc.name, func(t *testing.T) {
-			outcome, refusal := skillOutcomeOf(tc.granted, tc.global, tc.agentValue, tc.trust, tc.verified, tc.godMode)
+			outcome, reason := decideD1Row(t, tc)
 			if outcome != tc.wantOutcome {
 				t.Fatalf("outcome = %q, want %q (spec Dataset %s)", outcome, tc.wantOutcome, tc.name)
 			}
-			if tc.wantRefusal != "" && refusal == "" {
-				t.Fatalf("refusal reason empty, want it to name %q (spec Dataset %s)", tc.wantRefusal, tc.name)
+			if tc.wantRefusal != "" && !readsAsNotGranted(reason) {
+				t.Fatalf("refusal reason = %q, want it to name %q (spec Dataset %s)", reason, tc.wantRefusal, tc.name)
 			}
-			if tc.wantRefusal == "" && refusal != "" {
-				t.Fatalf("refusal reason = %q, want none (spec Dataset %s)", refusal, tc.name)
+			if tc.wantRefusal == "" && readsAsNotGranted(reason) {
+				t.Fatalf("refusal reason = %q, want it not to say not granted: the skill is granted (spec Dataset %s)", reason, tc.name)
 			}
+			reasons[strings.SplitN(tc.name, " ", 2)[0]] = reason
 		})
 	}
-}
+	if t.Failed() {
+		return // a row failed above; comparing reasons now would only repeat it
+	}
 
-// skillEntryPointRows is C-11's entry-point table (E1-E9) as the spec names the
-// entry points, with the real-path observer this pack already has for the row
-// (verified by test name and header comment), or "none cited".
-var skillEntryPointRows = []struct {
-	id, label, entry, observer string
-}{
-	{"E1", "skill load", "pkg/tools/skill.go::SkillTool.execLoad -> pkg/agent/skill_activation.go::loadSkillActivation",
-		"pkg/agent TestSkillLoad_AskUnattendedRefused (unattended; D1#10, D1#11, S-13)"},
-	{"E2", "skill menu", "pkg/skills/loader.go::BuildSkillsSummaryFuncWithProject",
-		"pkg/agent TestVisibilityTransitions row 6 (level only); none cited for the deny outcome"},
-	{"E3", "skill search", "pkg/tools/skill.go::SkillTool.execSearch", "none cited"},
-	{"E4", "slash command", "pkg/agent/loop_slash.go::applyExplicitSkillCommand", "none cited"},
-	{"E5", "delegation requested_skill", "pkg/agent/subturn_identity.go::resolveRequestedSkillForChild", "none cited"},
-	{"E6", "file tools on a skill folder", "pkg/tools/skill_turn_authority.go::resolveTurnSkillAuthority",
-		"pkg/tools TestSkillAuthority_FoldersFollowOutcome (S-85, S-86, S-87)"},
-	{"E7", "helper execution", "pkg/tools/shell_skill_operands.go::loadableSkillReadOrRun",
-		"pkg/tools TestSkillAuthority_FoldersFollowOutcome (S-85, S-86, S-87)"},
-	{"E8", "Full level", "C-1 Full level, C-14", "pkg/agent TestFullSkills_SentinelAndBudget (D9 rows 5-10)"},
-	{"E9", "unified search", "C-17 unified search", "pkg/agent TestToolSearch_FindsSkills (S-96)"},
-}
-
-// TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome is the native-path
-// binding obligation for skillOutcomeOf (CHECK round 4, false-green table row
-// 23). TestSkillPolicyResolution_Table drives Dataset D1 through one adapter
-// with the grant, global, agent, trust, verification and God Mode inputs handed
-// in; it cannot tell whether any of the nine entry points of C-11 reaches the
-// function the adapter binds to, so a resolver only that table calls passes it
-// while each entry point decides on its own. FR-066: every entry point E1-E9
-// MUST use the single per-skill outcome. This can only be checked after GREEN,
-// so each row is a loud BLOCKED leaf (never a skip); the test author replaces
-// each at test-side reconciliation with a check that seeds a stored per-skill
-// outcome (never the adapter) and enters through that entry point, and CHECK
-// then mutates the bound function and requires the check of every row to fail.
-func TestSkillPolicyResolution_EveryEntryPointUsesTheOneOutcome(t *testing.T) {
-	for _, row := range skillEntryPointRows {
-		t.Run(row.id+" "+row.label, func(t *testing.T) {
-			t.Fatalf("BLOCKED: %s (%s) is not shown to take its decision from the one "+
-				"function skillOutcomeOf binds to — required by C-11 %s and FR-066 (every "+
-				"entry point E1-E9 MUST use the single per-skill outcome); a resolver only "+
-				"the D1 table calls must never turn this green; known real-path observer: %s",
-				row.id, row.entry, row.id, row.observer)
-		})
+	for _, id := range []string{"D1#2", "D1#5", "D1#14"} {
+		if reasons[id] == "" {
+			t.Errorf("%s is a refusal the spec words (S-09, S-29, S-14), so the decision must report a reason for it; the reason is empty", id)
+		}
+	}
+	for _, pair := range [][2]string{{"D1#4", "D1#14"}, {"D1#4", "D1#5"}, {"D1#5", "D1#14"}} {
+		if reasons[pair[0]] == reasons[pair[1]] {
+			t.Errorf("%s and %s are refused for the same reason %q; the spec words them as different sentences (S-09/S-19, S-29, S-14)", pair[0], pair[1], reasons[pair[0]])
+		}
 	}
 }

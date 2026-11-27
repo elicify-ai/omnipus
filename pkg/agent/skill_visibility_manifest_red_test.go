@@ -16,17 +16,31 @@ package agent
 // (mid-chat transitions) are order 37 (TestVisibilityTransitions); row 10
 // (locked PATCH refused) is order 8 (Dataset D6#5).
 //
-// The stored levels and the one visibility authority do not exist at this
-// commit (today's shape comes from the fixed tier lists,
-// tools.ToolManifestTier). Per the qa-lead RED rule the test fails LOUD
-// with BLOCKED until the authority lands; levelTurnPlanOf is the test-local
-// seam the fix wires to.
+// The stored levels and the one visibility authority do not exist at the
+// landing base (that shape came from the fixed tier lists,
+// tools.ToolManifestTier). Per the qa-lead RED rule the test fails LOUD with
+// BLOCKED until the authority lands.
+//
+// Part L, Ruling A (team-lead, 2026-11-26): levelTurnPlanOf is bound to the
+// function the real turn calls, tools.ToolSurface.Plan (module pkg/tools, not
+// pkg/agent), and not to a test-only wrapper beside it: a second copy of the
+// C-15 logic is what FR-066 and FR-070 forbid. The datasets are unchanged;
+// only the adapter around the call changed. The production struct types do not
+// exist on a tree without the backend, so the seam is an `any` checked by
+// tests/helpers/nativebinding and called by field name through
+// tests/helpers/structcall: this file still compiles there and the run shows
+// BLOCKED instead of a build error. skills_tools_d9_levelplan_bindings_test.go
+// binds it. That the real turn builds its request, its ToolSearch membership
+// and its skill menu from this same function is
+// TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority
+// (skill_visibility_realturn_red_test.go).
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/tests/helpers/nativebinding"
+	"github.com/elicify-ai/omnipus/tests/helpers/structcall"
 )
 
 // levelTurnPlan is the visibility authority's outcome for one tool at one
@@ -38,15 +52,26 @@ type levelTurnPlan struct {
 	searchable   bool   // ToolSearch can still find (and load) it
 }
 
-// levelTurnPlanOf is the test-local seam for the C-15 authority. GREEN wires
-// it to the production entry point; nil keeps the RED run loud (BLOCKED).
-var levelTurnPlanOf func(level, name, description string) (inRequest bool, manifestLine string, searchable bool)
+// levelTurnPlanOf is the test-local seam for the C-15 authority. The binding is
+// tools.ToolSurface.Plan, a method of the stored levels taking (name,
+// description, denied); it stays nil here so the RED run fails loud (BLOCKED).
+var levelTurnPlanOf any
 
-// Test-owned representation only; the named native function returns raw facts,
-// not this private test type. Require checks that binding before invocation.
-func readNativeLevelTurnPlan(level, name, description string) levelTurnPlan {
-	inRequest, manifestLine, searchable := levelTurnPlanOf(level, name, description)
-	return levelTurnPlan{inRequest: inRequest, manifestLine: manifestLine, searchable: searchable}
+// readNativeLevelTurnPlan asks the bound authority what the turn does with one
+// tool stored at level. denied is the tool's effective deny (C-1: deny is not a
+// level; the tool's policy decides it and it overrides every level), so a row
+// that is not a deny passes false. The test-owned levelTurnPlan is built here
+// from raw facts; the native function returns its own struct.
+func readNativeLevelTurnPlan(t *testing.T, level, name, description string, denied bool) levelTurnPlan {
+	t.Helper()
+	got := structcall.Call(t, levelTurnPlanOf,
+		structcall.Fields{"Levels": map[string]string{name: level}},
+		name, description, denied)
+	return levelTurnPlan{
+		inRequest:    got.Bool(t, "InRequest"),
+		manifestLine: got.Str(t, "ManifestLine"),
+		searchable:   got.Bool(t, "Searchable"),
+	}
 }
 
 // capOverflowMarker sits at character 141 of the row-2 description, where
@@ -60,20 +85,20 @@ var longDescription = strings.Repeat("x", 140) + capOverflowMarker + " trailing"
 // TestManifest_LevelsShapeTurn drives Dataset D2 rows 1–6.
 // Traces to: BDD S-38, S-40; spec C-1, C-15; Dataset D2.
 func TestManifest_LevelsShapeTurn(t *testing.T) {
-	nativebinding.Require(t, "pkg/agent", levelTurnPlanOf,
-		"C-1/C-15/D2: native visibility authority; post-GREEN consumer re-audit required")
+	nativebinding.Require(t, "pkg/tools", levelTurnPlanOf,
+		"C-1/C-15/D2: the native visibility authority (the binding is ToolSurface.Plan); that the real turn reads it is TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority")
 	const name = "serve_web"
 	const shortDescription = "Serve the workspace."
 
 	t.Run("D2#1 full sends the definition every turn", func(t *testing.T) {
-		got := readNativeLevelTurnPlan("full", name, shortDescription)
+		got := readNativeLevelTurnPlan(t, "full", name, shortDescription, false)
 		if !got.inRequest {
 			t.Fatalf("full level must send the definition (S-38, C-1): %+v", got)
 		}
 	})
 
 	t.Run("D2#2 name_and_description lists one line, description cut to 140 characters", func(t *testing.T) {
-		got := readNativeLevelTurnPlan("name_and_description", name, longDescription)
+		got := readNativeLevelTurnPlan(t, "name_and_description", name, longDescription, false)
 		if got.inRequest {
 			t.Fatalf("name_and_description must not send the definition (C-1): %+v", got)
 		}
@@ -95,7 +120,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#3 empty description lists the name only", func(t *testing.T) {
-		got := readNativeLevelTurnPlan("name_and_description", name, "")
+		got := readNativeLevelTurnPlan(t, "name_and_description", name, "", false)
 		if got.inRequest {
 			t.Fatalf("name_and_description must not send the definition (C-1): %+v", got)
 		}
@@ -108,7 +133,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#4 name_only lists the name alone", func(t *testing.T) {
-		got := readNativeLevelTurnPlan("name_only", name, shortDescription)
+		got := readNativeLevelTurnPlan(t, "name_only", name, shortDescription, false)
 		if got.inRequest {
 			t.Fatalf("name_only must not send the definition (C-1): %+v", got)
 		}
@@ -121,7 +146,7 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#5 hidden is not listed but ToolSearch finds it", func(t *testing.T) {
-		got := readNativeLevelTurnPlan("hidden", name, shortDescription)
+		got := readNativeLevelTurnPlan(t, "hidden", name, shortDescription, false)
 		if got.inRequest || got.manifestLine != "" {
 			t.Fatalf("hidden must not be listed (S-38, C-1): %+v", got)
 		}
@@ -131,28 +156,13 @@ func TestManifest_LevelsShapeTurn(t *testing.T) {
 	})
 
 	t.Run("D2#6 effective deny removes the tool from request and search", func(t *testing.T) {
-		denied := readNativeLevelTurnPlan("deny", name, shortDescription)
-		if denied.inRequest || denied.manifestLine != "" || denied.searchable {
-			t.Fatalf("an effective deny overrides every level (S-40, C-1): %+v", denied)
+		// S-40: an effective deny overrides every level, so each of the four
+		// levels a tool can be stored at is checked, not one representative.
+		for _, level := range []string{"full", "name_and_description", "name_only", "hidden"} {
+			denied := readNativeLevelTurnPlan(t, level, name, shortDescription, true)
+			if denied.inRequest || denied.manifestLine != "" || denied.searchable {
+				t.Fatalf("an effective deny overrides the %s level (S-40, C-1): %+v", level, denied)
+			}
 		}
 	})
-}
-
-// TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority is the
-// native-path binding obligation for levelTurnPlanOf (CHECK round 4,
-// false-green table row 2). TestManifest_LevelsShapeTurn reads the output of
-// one adapter function: a function only that adapter calls passes it while the
-// real turn builds its request, its ToolSearch membership and its skill menu
-// some other way. C-15 and FR-070 require ONE visibility authority for all
-// three. This can only be checked after GREEN, so it is a loud BLOCKED leaf
-// (never a skip); the test author replaces it at test-side reconciliation with
-// real-loop checks, and CHECK then mutates the bound function and requires
-// them to fail. Real-loop observers in this pack today: TestVisibilityTransitions
-// (D11 rows 1, 2, 3, 6) and TestToolSearch_FindsSkills.
-func TestManifest_LevelsShapeTurn_RealTurnReadsTheLevelAuthority(t *testing.T) {
-	t.Fatal("BLOCKED: the real turn is not shown to take its request manifest, " +
-		"its ToolSearch membership and its skill menu from the one function " +
-		"levelTurnPlanOf binds to — required by C-15 and FR-070 (manifest, search " +
-		"membership and skill menu MUST read one visibility authority); wiring the " +
-		"seam, or adding a production function nothing calls, must never turn this green")
 }

@@ -47,10 +47,17 @@ import (
 
 // readInstalledSkillCategory is the test-local seam for Omnipus's own
 // category metadata store (C-5: outside the skill folder). It returns the
-// stored category of the named installed skill. GREEN wires it to the real
-// store the listing/grouping reads; nil keeps the RED run loud (BLOCKED),
-// never a skip.
-var readInstalledSkillCategory func(t testing.TB, globalSkillsDir, slug string) (category string, ok bool)
+// stored category of the named installed skill, or an error when the store
+// cannot be read.
+//
+// Part L: the seam is typed exactly as the production reader
+// pkg/skills/install_records.go::SkillCategoryOf (skillsDir, slug) (string,
+// error), the function the skill listing reads, so the binding is a direct
+// named production function. The earlier form took a testing.TB, which no
+// production function can have (Go assigns only identical function types), so
+// it could never be bound. skill_install_category_bindings_test.go binds it;
+// nil keeps a tree without that function loud (BLOCKED), never a skip.
+var readInstalledSkillCategory func(skillsDir, slug string) (category string, err error)
 
 // fakeRegistrySkillMD is the exact SKILL.md fakeSkillRegistry writes — the
 // original bytes the category write must leave untouched.
@@ -79,11 +86,12 @@ func TestInstallSkillCategoryParity(t *testing.T) {
 				"SKILL.md stays byte-identical to the registry's original")
 
 		nativebinding.Require(t, "pkg/skills", readInstalledSkillCategory,
-			"C-5/S-71: actual persisted metadata reader; post-GREEN inventory/store re-audit required")
-		category, ok := readInstalledSkillCategory(t, globalSkills, "weather")
-		require.True(t, ok, "S-71: the installed skill carries a stored category")
+			"C-5/S-71: actual persisted metadata reader (pkg/skills SkillCategoryOf); post-GREEN inventory/store re-audit required")
+		category, err := readInstalledSkillCategory(globalSkills, "weather")
+		require.NoError(t, err, "S-71: the stored category of the installed skill is readable")
 		require.Equal(t, "lifestyle", category,
-			"S-71: the operator's category is stored with the installed skill")
+			"S-71: the operator's category is stored with the installed skill — "+
+				"neither absent nor the uncategorised default (C-5)")
 	})
 
 	t.Run("S-72 an unknown category is refused naming the allowed ones", func(t *testing.T) {
