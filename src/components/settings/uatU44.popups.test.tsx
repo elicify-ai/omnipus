@@ -1,4 +1,5 @@
 // U6-6/7/9 independent oracles: fix-round-u6.md and part-44 width rules.
+// U7-1/2 supersede only the model popup's exact old width; see r45-plan.md.
 // Real default-model, Audit and web-search routes/portals; no mocked controls or boxes.
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, screen, waitFor, within } from '@testing-library/react'
@@ -6,9 +7,10 @@ import userEvent from '@testing-library/user-event'
 import type { ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { catalogG1, jsonG1, providersG1, renderG1, sectionG1, transportG1 } from '../../../tests/helpers/settings-gate-g1'
-import { openDefaultU43, openPopupU43, pointerU43 } from '../../../tests/helpers/settings-u43-popups'
+import { CATALOG_U43, largeModelsU43, openDefaultU43, openPopupU43, pointerU43 } from '../../../tests/helpers/settings-u43-popups'
 import { compiledCssU43 } from '../../../tests/helpers/settings-u43-css'
 import { declarationsU44, popupSizingU44, recommendationU44, wrapsLabelU44 } from '../../../tests/helpers/settings-u44-css'
+import { modelWidthU45, virtualRowU45 } from '../../../tests/helpers/settings-u45-css'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 const names = ['r44-provider/long-distinct-alpha-model-name', 'r44-provider/long-distinct-beta-model-name']
@@ -29,7 +31,23 @@ it.each(['coarse', 'fine'] as const)('U6-6 — recommended default-model rows ke
   expect(rows, 'instrument: cover both distinct recommended choices').toHaveLength(2)
   const css = await compiledCssU43([popup, ...popup.querySelectorAll('*')])
   const env = { width: pointer === 'coarse' ? 390 : 1280, pointer }
-  expect.soft(declarationsU44(css, popup, env).width, 'U6-6: valid trigger-width declaration, not an invalid bare custom-property name').toBe('var(--radix-popover-trigger-width)')
+  // U7-1 replaces the old exact trigger-only width with independent bounds.
+  // These are CSS environmental inputs, NEVER fabricated element rectangles.
+  for (const root of [14, 20]) {
+    const floor = 18 * root // U7-1: 18rem; page font settings change rem's px size.
+    const available = env.width
+    for (const trigger of [108, floor - 1, floor, floor + 1, available - 1, available, available + 1]) {
+      const result = modelWidthU45(css, popup, env, trigger, available, root)
+      const input = `root=${root}, trigger=${trigger}, available=${available}`
+      expect.soft(result.validWidth, `U6-6: valid CSS width, never a bare custom-property name; ${input}`).toBe(true)
+      expect.soft(result.used, `U7-1: width is numerically bounded; ${input}`).not.toBeNull()
+      expect.soft(result.used, `U7-1: popup is at least 18rem; ${input}`).toBeGreaterThanOrEqual(floor)
+      // When the trigger itself is wider than the available viewport, the cap
+      // necessarily wins. Ordinary in-viewport triggers retain their full width.
+      expect.soft(result.used, `U7-1: popup is at least its in-viewport trigger; ${input}`).toBeGreaterThanOrEqual(Math.min(trigger, available))
+      expect.soft(result.used, `U7-1: popup never exceeds the available viewport; ${input}`).toBeLessThanOrEqual(available)
+    }
+  }
   for (const id of names) {
     const text = within(popup).getByText(id, { exact: true })
     const row = text.closest<HTMLElement>('[role="option"]')!
@@ -41,6 +59,35 @@ it.each(['coarse', 'fine'] as const)('U6-6 — recommended default-model rows ke
     expect(text.textContent, 'U6-6: name is real row content, not badge-only').toBe(id)
     expect.soft(text, 'U6-6: full exact name remains available when visual text truncates').toHaveAttribute('title', id)
     expect.soft(recommendationU44(css, text, badge, env), 'U6-6: name retains at least half the row and the badge shrinks/truncates first').toEqual({ nameKeepsHalf: true, badgeYields: true })
+  }
+  expect(t.writes()).toEqual([])
+})
+
+it.each(['coarse', 'fine'] as const)('U7-2 — real recommended virtual rows cannot exceed their own slots (%s pointer)', async (pointer) => {
+  const t = transportG1()
+  pointerU43(pointer === 'coarse')
+  largeModelsU43(t) // Only the scroll viewport receives a size; rows never do.
+  t.on('GET', '/providers/catalog', () => jsonG1({ ...CATALOG_U43, providers: CATALOG_U43.providers.map((provider) => ({
+    ...provider, models: provider.models.map((model) => ({ ...model, context_window: 256000, release_date: '2026-11-01' })),
+  })) }))
+  const { client } = sectionG1('providers')
+  await waitFor(() => expect(client.isFetching()).toBe(0))
+  const popup = await openDefaultU43()
+  const list = await within(popup).findByTestId('model-selector-virtual-list')
+  await waitFor(() => expect(within(list).getAllByRole('option').length).toBeGreaterThan(1))
+  const rows = within(list).getAllByRole('option')
+  const recommended = rows.filter((row) => within(row).queryByText(/^Recommended\b/))
+  expect(recommended.length, 'instrument: the real virtual window contains multiple recommended rows').toBeGreaterThanOrEqual(2)
+  const css = await compiledCssU43([list, ...list.querySelectorAll('*')])
+  const env = { width: pointer === 'coarse' ? 390 : 1280, pointer }
+  for (const row of rows) {
+    const slot = row.parentElement!
+    expect(slot.parentElement, 'instrument: inspect the actual virtual allocation, not the list height').toBe(list)
+    const result = virtualRowU45(css, row, slot, env)
+    expect.soft(result.slotHeight, 'instrument: actual slot height is positive').toBeGreaterThan(0)
+    expect.soft(result.upperBound, `U7-2: auto/content height is not evidence of a bounded row: ${row.textContent}`).not.toBeNull()
+    expect.soft(result.upperBound, `U7-2: row border-box cannot be taller than its actual slot: ${row.textContent}`).toBeLessThanOrEqual(result.slotHeight!)
+    expect.soft(result.clipsContents, `U7-2: oversized descendants cannot paint into the next model's visible hit area: ${row.textContent}`).toBe(true)
   }
   expect(t.writes()).toEqual([])
 })
