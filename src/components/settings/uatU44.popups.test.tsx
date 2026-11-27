@@ -31,7 +31,7 @@ it.each(['coarse', 'fine'] as const)('U6-6 — recommended default-model rows ke
   expect(rows, 'instrument: cover both distinct recommended choices').toHaveLength(2)
   const css = await compiledCssU43([popup, ...popup.querySelectorAll('*')])
   const env = { width: pointer === 'coarse' ? 390 : 1280, pointer }
-  // U7-1 replaces the old exact trigger-only width with independent bounds.
+  // Part 46 pins U7-1's floor/trigger/cap formula, not merely its bounds.
   // These are CSS environmental inputs, NEVER fabricated element rectangles.
   for (const root of [14, 20]) {
     const floor = 18 * root // U7-1: 18rem; page font settings change rem's px size.
@@ -46,6 +46,7 @@ it.each(['coarse', 'fine'] as const)('U6-6 — recommended default-model rows ke
       // necessarily wins. Ordinary in-viewport triggers retain their full width.
       expect.soft(result.used, `U7-1: popup is at least its in-viewport trigger; ${input}`).toBeGreaterThanOrEqual(Math.min(trigger, available))
       expect.soft(result.used, `U7-1: popup never exceeds the available viewport; ${input}`).toBeLessThanOrEqual(available)
+      expect.soft(result.used, `U7-1: exact 18rem/trigger/viewport formula; ${input}`).toBe(Math.min(Math.max(floor, trigger), available))
     }
   }
   for (const id of names) {
