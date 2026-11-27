@@ -56,7 +56,7 @@ Omnipus is tested on Linux kernels 6.x. Kernel 5.13–5.18 (Landlock ABI v1) —
 
 Running Omnipus on such a kernel is not recommended. Use kernel 5.19 or newer for kernel-level file protection. On an older kernel you get application-level checks only: a program that ignores those checks is not contained by the operating system.
 
-To see what you have: open the Security screen (or the sandbox status), and look for the `sandbox.degraded` warning in the log.
+To see what you have: open **Settings → Sandbox & network** and its **Show capabilities** list, and look for the `sandbox.degraded` warning in the log.
 
 ## Permissive mode on kernels < 6.12
 

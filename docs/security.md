@@ -41,12 +41,12 @@ Auto-approve can be set in two places. On a new installation it is **on** global
 
 | Where | What it does | Example |
 |---|---|---|
-| **Settings → Protection → Auto-approve** | The default for every agent and chat. It carries a **Password** badge: a change waits for **Save changes**, which asks you to re-type your password once (with the prompt-injection Defense level and the rate limits, if you changed them too; those two need no password of their own). Turning God Mode on or off does not save it. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
+| **Settings → Protection → Auto-approve** | The default for every agent and chat. It carries a **Password** badge: a change waits for **Save changes**, which asks you to re-type your password once (with the prompt-injection Defense level and the rate limits, if you changed them too; those two need no password of their own). When you sign in through omnipus.ai, it asks for a confirmation instead of the password. Turning God Mode on or off does not save it. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
 | The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat. You can flip it before typing anything — a brand-new chat has no conversation yet, so the switch records your choice and applies it from your very first message, before any tool call in that first turn runs. In a chat that is already running, a flip applies from the agent's very next tool call, not just your next typed message — even mid-turn, while the agent is still working. A prompt that is already open when you flip the switch is not resolved for you; it has already asked, and stays open until you answer it. | Auto-approve is off globally, but you are watching this chat closely. You switch it on before typing your first message, and that first message already runs under it. In a chat that is already going, you switch it on mid-turn and the agent's next tool call already runs under it. |
 
-On the Security screen, the switch carries this description:
+In **Settings → Protection**, the Auto-approve switch carries this description:
 
-> Tools set to “Ask” run without a prompt when it's safe: they stay inside your workspace.
+> Tools set to “Ask” run without a prompt when it's safe: reading, listing and searching run anywhere except Omnipus's protected files, and writing runs without a prompt only inside your workspace and the folders mounted into it. Each chat can still turn it off with its Auto button.
 
 Below the switch, **Always asks when set to Ask** is a collapsed list — click it to expand. It groups the fixed list of tools that keep asking whenever they're set to Ask, even with Auto-approve on:
 
@@ -105,7 +105,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 ### God Mode
 
-God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings → Protection**, after Approvals, with the **Turn on God Mode…** / **Turn off God Mode…** control. It carries a **Password** badge and acts on its own: it asks for your password and offers its own restart, and it is never part of a **Save changes**. Settings → Gateway no longer has a God Mode control; old links to it open Protection.
+God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings → Protection**, after Approvals, with the **Turn on God Mode…** / **Turn off God Mode…** control. It carries a **Password** badge and acts on its own: with a local account it asks for your password (when you sign in through omnipus.ai, a confirmation instead), it offers its own restart, and it is never part of a **Save changes**. Settings → Gateway no longer has a God Mode control; old links to it open Protection.
 
 **In practice:** God Mode removes global tool-policy prompts, ordinary per-command resource hardening and Omnipus's shell network filtering. It does not remove stricter per-agent policies, operator deny rules, protected-path application checks or the configured shell workspace-path guard. Your account's operating-system permissions and external firewalls still apply. The programs those shell commands start — and the runs of `environment_setup` — receive your full gateway environment, including saved provider API keys and mailbox passwords. Use it only when you trust the agent with that wider access.
 
@@ -116,9 +116,9 @@ When an enforcing kernel sandbox is active, God Mode shell commands and `environ
 | Switch | Question it answers | How it is set |
 |---|---|---|
 | **Available** | Can this installation use God Mode at all? | Starting the gateway with the `--allow-god-mode` flag, or your first-ever enable through this screen |
-| **On** | Is it active right now? | The Danger-zone toggle, once available |
+| **On** | Is it active right now? | The **Turn on God Mode…** / **Turn off God Mode…** button in **Settings → Protection** |
 
-The first time you turn God Mode on through this screen, on an installation that was never started with `--allow-god-mode`, Omnipus saves that choice but needs a gateway restart before God Mode actually takes effect. The toggle shows "Authorized but not yet active — restart the gateway to activate god-mode," with a "Cancel authorization" link if you change your mind first, and Omnipus opens a dialog offering to restart right away or later. After that first restart — or on any installation already started with `--allow-god-mode` — switching God Mode on or off again applies immediately, with no restart. **Turning God Mode off never needs a restart**, on any installation.
+The first time you turn God Mode on through this screen, on an installation that was never started with `--allow-god-mode`, Omnipus saves that choice but needs a gateway restart before God Mode actually takes effect. The toggle shows "Authorized but not yet active — restart the gateway to activate god-mode," with a "Cancel authorization" link if you change your mind first, and Omnipus opens a dialog offering to restart right away or later. After that first restart — or on any installation already started with `--allow-god-mode` — switching God Mode on or off normally applies at once, with no restart, because the gateway reloads its running agents. If that reload fails, or does not confirm in time, the choice is saved but running agents can still work under the previous mode; the message on screen does not show this, and the gateway log records it ("reload after god_mode toggle failed" or "did not confirm within the poll window"). After turning God Mode off, check the log for those lines, and restart the gateway if one appears; do not assume God Mode has ended until then.
 
 #### What changes
 
@@ -145,7 +145,7 @@ The first time you turn God Mode on through this screen, on an installation that
 | Other tools' own protected-path check | Generic file access through tools such as `read_file`, `write_file` and `grep` still refuses protected internal paths, independently of the kernel sandbox. A general tool approval may precede this check but cannot override its refusal. |
 | The gateway boot values | The master-key and key-file variables and the web token are never passed to the programs your `bash` commands or `environment_setup` runs start — God Mode or not. |
 | The syscall filter (Linux) | Installed once when the gateway starts and shared by every process it spawns afterward — there is no way to switch it off for one command, so it applies to a God-Mode shell command exactly as it does to any other. |
-| Audit logging | Every God-Mode call is still recorded. |
+| Audit logging | God Mode does not turn audit logging off. A God-Mode call is recorded when audit logging is on (`sandbox.audit_log`) and its log is available; with audit logging off, no record is written. |
 | The prompt-injection guard | Unaffected. |
 | Rate limiting | Unaffected. |
 | Connected-server (MCP) tool assignment | A tool from a server your agent is not assigned to is still hidden, God Mode or not. |
@@ -155,7 +155,7 @@ God Mode is one flag for the whole gateway process, so a delegated or steered su
 
 #### Turning it on or off
 
-Changing God Mode always asks you to re-type your password. After that:
+Changing God Mode is a separate action, never part of **Save changes**. With a local account it asks you to re-type your password; when you sign in through omnipus.ai, it asks for a confirmation instead. After that:
 
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
@@ -351,7 +351,7 @@ The process sandbox offers three modes. **Enforce** blocks violations. **Permiss
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
-The Security screen reports the protection available on your current platform. If kernel-level protection is unavailable, Omnipus falls back to checks in the application. A program that ignores those checks is not contained by the operating system.
+**Settings → Sandbox & network** reports the protection available on your current platform (**Show capabilities** lists the details). If kernel-level protection is unavailable, Omnipus falls back to checks in the application. A program that ignores those checks is not contained by the operating system.
 
 ## Shell command rules
 
@@ -520,7 +520,7 @@ The application's default-deny rule also covers new internal locations before th
 | macOS | With Seatbelt available and the Process Sandbox enforcing, shell and environment-setup children receive a profile denying protected internal files, including in God Mode. File tools and the shell command-text check also apply. Programs that check website certificates through macOS itself, such as `gh` and other Go-built tools, can do so inside the profile, because it allows macOS's certificate-checking service. That access also lets a command read your certificate trust settings and clear that service's caches, which costs only performance. It does not reach the secrets stored in your keychain, and it cannot permanently change which certificates your Mac trusts, because that needs an authorization this sandbox does not grant. These limits come from Apple's published source code and were not checked against macOS 26 itself. |
 | Windows | There is no kernel sandbox. File tools refuse protected paths, and the command-text check refuses a shell command whose protected path it identifies. A command that builds its path at runtime can evade that text check. |
 
-On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
+On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the actual enforcement and capabilities in **Settings → Sandbox & network**, not just the operating-system name or version.
 
 An authorized `environment_setup` run can create and read new files directly inside its selected installation folder, as well as use its selected cache and temporary folders. This does not authorize writes to sibling workspaces or unrelated operator-granted folders.
 
@@ -684,7 +684,7 @@ If any entry cannot be authenticated during credential-file format conversion, t
 
 The viewer refreshes every 30 seconds. The log includes security events, policy decisions, and tool executions. It can show security-setting changes with their previous and new values, whether the value is text, a number, on/off, a list or a group of settings; a value that was not set shows as **(not set)**, and an empty text value as **(empty)**. If the viewer cannot read an entry, it does not list it, but it says how many entries it could not read, for example **1 entry could not be read and is not listed.**, and counts them in the total under the list.
 
-An entry that carries details has an arrow; open it to see them. An entry recorded with a group of named values shows them in a **Fields** block. For example, an external-worker run (event `external_cli.run`) shows the program, the standard parameters (`preset_args`), the model option dropped from them (`preset_flags_dropped`) and the flags dropped from the agent's own flags (`agent_flags_dropped`). A **Send a test message** entry (event `executor.smoke_test`) holds the program, the standard parameters and any model option dropped from them. The same entries are in the audit file `~/.omnipus/system/audit.jsonl` (one entry per line, these values under `fields`), and the web app's audit endpoint `GET /api/v1/audit-log` returns the newest 100 entries. In the event filter, a long event name wraps onto a second line instead of being cut off.
+An entry that carries details has an arrow; open it to see them. An external-worker run (event `external_cli.run`) shows its values in a **Fields** block: the program, the flags dropped from the agent's own flags (`agent_flags_dropped`) and, when they were used, the standard parameters (`preset_args`) and the model option dropped from them (`preset_flags_dropped`). In the audit file they are stored under `fields`. A **Send a test message** entry (event `executor.smoke_test`) shows the program and, when used, the standard parameters and any model option dropped from them, in a **Details** block; in the audit file they are stored under `details`. The audit file (by default `~/.omnipus/system/audit.jsonl`) holds one entry per line, and the web app's audit endpoint `GET /api/v1/audit-log` returns up to the newest 100 entries. In the event filter, a long event name wraps onto a second line instead of being cut off.
 
 Before an entry is written, Omnipus replaces recognised credentials with `[REDACTED]` in the command, tool parameters and event details. Recognised formats: `sk-…` and `key-…` keys, `Bearer …` tokens (in any letter case), GitHub `ghp_…`/`gho_…` tokens, Slack `xoxb-…`/`xoxp-…` tokens, AWS access-key IDs (`AKIA…`/`ASIA…`), Google `ya29.…` access tokens, JSON Web Tokens, and the password in a web address, such as `https://user:PASSWORD@host` or `redis://:PASSWORD@host` (only the password is replaced). A value is also replaced when its field is named exactly like a secret (`password`, `token`, `api_key`, `authorization` and a few similar names). This is always on and cannot be switched off. Email addresses are kept, so mail recipients and message IDs appear in full. Anything else is not caught: a plain password typed as a command argument, a raw `/` or `@` inside a web-address password, a scheme-less `user:pw@tcp(…)` connection string, an AWS secret access key, a GitHub fine-grained token (`github_pat_…`) or a Google API key (`AIza…`).
 
@@ -760,8 +760,8 @@ When the check passes, Omnipus runs exactly the file it checked, by the same pat
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
 - **Permissive** sandbox mode observes violations but does not stop them. **Off** removes operating-system protection.
-- Kernel-level protection varies by operating system and kernel capability. Trust the status shown on your Security screen for this installation.
-- On Linux, basic kernel-level file protection is available from Landlock's first interface, introduced in Linux 5.13. Later file and network rights depend on the detected interface. A kernel version alone does not prove enforcement: check the Security screen's actual status and capabilities. See [sandbox limitations](operations/sandbox-limitations.md).
+- Kernel-level protection varies by operating system and kernel capability. Trust the status shown in **Settings → Sandbox & network** for this installation.
+- On Linux, basic kernel-level file protection is available from Landlock's first interface, introduced in Linux 5.13. Later file and network rights depend on the detected interface. A kernel version alone does not prove enforcement: check the actual status and capabilities in **Settings → Sandbox & network**. See [sandbox limitations](operations/sandbox-limitations.md).
 - The Open filesystem model allows agents to read anything your account can read, except Omnipus's own files and other agents' work (see "Omnipus's own files are protected from every agent," above).
 - Personal secret folders outside Omnipus, such as `~/.ssh` and `~/.aws`, are not protected from reading and searching yet (issue [#921](https://github.com/elicify-ai/omnipus/issues/921)). See "What reading, searching and listing can reach" above.
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.

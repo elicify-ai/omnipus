@@ -263,6 +263,21 @@ Next to the outcome, `check_scope` says what the check actually proved and `not_
 
 Providers, connected servers and channels are shared by the whole installation, and both you (in Settings) and an agent can change them. The tools that list them return a `revision` for each entry (for channels, each connection — such as `telegram.eu` — has its own) — a short code that changes whenever the entry's settings change (it never contains a key or password). A missing entry has the revision `absent`. The tools that change these entries — `configure_provider`, `add_mcp_server`, `remove_mcp_server`, `enable_channel`, `configure_channel`, `connect_channel` and `disable_channel` — must send the revision they planned against (`expected_revision`); for `set_channel_outbound` it is optional, because that tool reads the current setting itself before its approval card. If the entry changed since, for example because you saved it in Settings while Omnipus was preparing its summary, the change is refused with `CONFLICT`, nothing is saved, and Omnipus re-reads the entry and asks you again. A tool change and a Settings save of these entries never run at the same time: they take turns.
 
+## Settings that set_config cannot change
+
+`set_config` changes ordinary settings in `config.json`. It cannot change the installation-wide values in **Settings → Limits**, or how long data is kept, which is in **Settings → Data & retention**. A request to change them from a chat is refused, not turned into an approval card:
+
+| What you want to change | Where to change it | What `set_config` answers |
+|---|---|---|
+| **Max tool calls per turn** (`agents.defaults.max_tool_iterations`) | **Settings → Limits → Agents and goals** | Refuses and names Settings as the place, with the per-agent route below. The refusal text still says "Settings → Performance", the old name of that section |
+| **Tool loading** (`tools.manifest.compressed`) | **Settings → Limits → Agents and goals** | Refuses and names Settings → Limits |
+| Other Limits values: context and tool-result sizes, **Model overrides** (`context.*`), agents at once (`performance.*`), goal timers (`planning.*`) | **Settings → Limits** | Refuses with "only known sections may be set via this tool"; it does not name a place |
+| Chat history and memory retention (`storage.retention.*`) | **Settings → Data & retention** | Refuses with the same "only known sections" message |
+
+In **Settings → Limits**, values in the **Agents and goals** group ask for your password with a local account, or for a confirmation when you sign in through omnipus.ai. The **Context and tool results** and **Model overrides** groups, and **Data & retention**, save with **Save changes** and no password.
+
+Limits for one agent are different: an agent can still lower one agent's own tool-call limit, or set its own context window, with `update_agent` (`max_tool_iterations`, `context_window_override`). See [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
+
 ## Limits and things to watch
 
 - **Built-in agents keep their identity, but their tool access is editable.** The ordinary built-in agents keep their identity and base instructions, but their supported tool policies, connector assignments and skills are editable. Judge and Plan Supervisor retain fixed capability surfaces. Open a built-in agent's Tools tab to tighten its access; creating a custom agent is not required for that change — see [agents](agents.md).

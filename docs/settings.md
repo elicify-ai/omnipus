@@ -19,7 +19,7 @@ Personal things are not sections here. Profile is its own screen, holding your n
 A changed value is not stored until you press **Save changes**. As soon as a value differs from the saved one, a Save bar appears with the number of unsaved changes, **Discard** and **Save changes**. Buttons that act at once (Test, Check, Rotate, Restart, God Mode, Delete, Clear) are not part of a Save.
 
 - Leaving a section, or following a link elsewhere in the app, with unsaved changes asks **Leave without saving 2 changes?** (with your number) first. **Stay** keeps you where you were; **Leave** drops the changes. On a phone the **Settings** back button asks the same. Closing or reloading the tab gets the browser's own question.
-- The same question appears when you use the browser's **Back** or **Forward** button, or type another Settings address into the address bar. **Stay** then puts you back on the section you left, with your changes, the same address and the same browser history. The page does not reload, and a second **Stay** later on the same page works the same way.
+- The same question appears when you use the browser's **Back** or **Forward** button, or type another Settings address into the address bar. **Stay** keeps your changes and returns you to the section you left, without reloading the page. An address that reloads the page or leaves the app gets the browser's own question instead. Two limits, only in browsers that do not offer the Navigation API (the browser feature that tells a page which history entry it is on): a jump of several entries at once through the browser's history list, to or from a typed address, can end on the wrong entry; and after a typed address, a slow device can show the leave question a second time.
 - Settings marked **Password** ask for your password once per Save, listing what the Save stores. If you cancel, nothing is stored and your changes stay on the page. When you sign in through omnipus.ai, a confirmation replaces the password field.
 - Settings marked **Needs restart** are stored at once but used only after a gateway restart. Right after such a Save, **Restart now?** offers to restart. **Later** keeps a banner at the top of every section, "N saved changes wait for a gateway restart", with **Restart now** and **Show changes** (each change with the value running now and the saved value it gets after the restart; "saved, not applied" means the gateway could not apply it).
 
@@ -46,7 +46,7 @@ The page can only talk to the address it was opened from. When a restart moves t
 
 ### Keyboard, touch screens and reduced motion
 
-- **Keyboard.** On a fresh Settings page the first Tab stop is **Skip to settings content**. It moves the keyboard focus to the open section and leaves the address as it is. When you choose **Later** in **Restart now?**, or close it with Escape, the focus moves to **Restart now** in the banner.
+- **Keyboard.** On a fresh Settings page the first Tab stop is **Skip to settings content**. It moves the keyboard focus to the open section and leaves the address as it is. When **Save changes** opens **Restart now?** and you choose **Later** or press Escape, the focus moves to **Restart now** in the banner; while the banner is still loading, the section heading holds the focus first. God Mode opens its own **Restart now?** window, and closing that one returns the focus to the button that opened it.
 - **Touch screens.** On a phone or tablet, every button and icon button can be tapped anywhere inside an area of at least 44 by 44 pixels. Every item in a menu or a pop-up list is at least 44 pixels high. In Settings the same applies to each option card in a choice and its round option button (for example in Sandbox & network), the rows of the provider list, and links such as **Set it in Limits**. With a mouse or trackpad these controls keep their normal size.
 - **Reduced motion.** When your device asks for reduced motion, no loading spinner turns and no loading placeholder pulses, in Settings or anywhere else in the app. They stay in place, still.
 
@@ -156,7 +156,7 @@ Each section and neighbor screen has one job.
 | Settings, Keys & secrets | The credential vault |
 | Settings, Gateway | Bind address, port, gateway token, preview server, log level; restarting the gateway |
 | Settings, Data & retention | How long chat history and memory are kept, storage numbers, clearing all chat history |
-| Settings, About | Version and build information, including the **Build commit** (or the reason it could not be read); **Copy** puts the system information, build commit included, on the clipboard |
+| Settings, About | Version and build information, including the **Build commit**, or a line saying it is still loading or could not be read. **Copy** puts the system information on the clipboard, with the build commit when it has loaded |
 | Profile | Your name, timezone, font size, password, workspace context, and Chat display (Verbose chat) |
 | Usage | Token totals by period for agent, model and provider; up to 50 sessions by recorded total tokens, independent of the period; cache-hit percentage by agent and provider |
 
@@ -342,7 +342,7 @@ The gateway log carries a warning at start-up, and the Limits section shows a wa
 Only Settings, Limits changes this limit, because it asks for your password and shows you which agents a lowering affects. Other ways in are refused:
 
 - The general configuration endpoint, `PUT /api/v1/config`, refuses a body that includes `agents.defaults.max_tool_iterations` with status 403 and "agents.defaults.max_tool_iterations is a blocked path — use the dedicated endpoint". Nothing in that body is saved. Other changes to `agents.defaults` through this endpoint keep the saved limit as it is.
-- The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings, Limits. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
+- The `set_config` tool that agents use to change configuration from a chat refuses the key and points to Settings; its message still uses the old section name, "Settings → Performance", which is now Settings, Limits. To limit one agent from a chat, ask for that agent's own value instead; see [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
 
 ### If you are upgrading
 
