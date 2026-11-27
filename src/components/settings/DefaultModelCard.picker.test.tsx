@@ -132,7 +132,8 @@ describe('U6-6 a recommended row still shows its model name', () => {
     await openPicker()
     const list = document.querySelector('[cmdk-list]') as HTMLElement
     const popup = list.closest('[data-radix-popper-content-wrapper] > *') as HTMLElement
-    expect(popup.className).toContain('var(--radix-popover-trigger-width)')
+    expect(popup.className.split(/\s+/), 'U6-6 / U7-1: exact valid width token, not a matching substring')
+      .toContain('w-[max(18rem,var(--radix-popover-trigger-width))]')
     expect(popup.className).not.toMatch(/w-\[--/)
     const recommended = [...document.querySelectorAll<HTMLElement>('[cmdk-item][data-recommended]')]
     expect(recommended.length).toBeGreaterThan(0)
