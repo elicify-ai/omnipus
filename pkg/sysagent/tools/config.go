@@ -98,7 +98,7 @@ func NewConfigSetTool(d *Deps) *ConfigSetTool   { return &ConfigSetTool{deps: d}
 func (t *ConfigSetTool) Name() string           { return "set_config" }
 func (t *ConfigSetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigSetTool) Description() string {
-	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. The Performance values agents.defaults.max_tool_iterations and tools.manifest.compressed (and its parent tools.manifest) are refused too: they are changed only in Settings → Limits. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
+	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. The Performance value agents.defaults.max_tool_iterations is refused too: it is changed only in Settings → Limits. tools.manifest.compressed, tools.manifest.preview_all_lazy and an MCP server's deferred are refused: they were replaced by levels in Skills & Tools. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
 }
 
 func (t *ConfigSetTool) Parameters() map[string]any {
@@ -913,7 +913,6 @@ var performanceOnlyConfigKeys = []struct {
 }{
 	{string(config.AgentsDefaultsMaxToolIterations), performanceOnlyConfigReason},
 	{string(config.AgentsDefaultsMaxToolIterationsEnvImported), performanceOnlyConfigReason},
-	{manifestCompressedConfigKey, manifestCompressedConfigReason},
 }
 
 // retiredToolLoadingText is the C-22 refusal of the tool-loading keys the
@@ -940,25 +939,21 @@ func validateRetiredConfigKey(cfg *config.Config, key string) error {
 	return nil
 }
 
-// manifestCompressedConfigKey is the compressed tool list switch, a
-// Performance value with one write path (Settings redesign #1519, C-7 / #936,
-// FR-100): Settings → Limits, PUT /api/v1/performance.
+// manifestCompressedConfigKey is the retired tool-loading switch (Skills &
+// Tools C-6, C-22): the levels replaced it, so no write path sets it. A write
+// at its parent tools.manifest, or a section write that would change it, is
+// refused with retiredToolLoadingText.
 const (
 	manifestCompressedConfigKey = "tools.manifest.compressed"
 	manifestConfigKey           = "tools.manifest"
 )
 
-// manifestCompressedConfigReason is the refusal text for
-// tools.manifest.compressed and its parent tools.manifest.
-const manifestCompressedConfigReason = "the compressed tool list (tools.manifest.compressed) is changed only in " +
-	"Settings → Limits (PUT /api/v1/performance), which asks for the admin's password"
-
 // validatePerformanceOnlyConfigKey refuses a key at or under a
 // performance-only key, in any case spelling. A write AT tools.manifest, the
-// parent of tools.manifest.compressed, is refused too, whatever the value
-// carries (D-16 row 8); its sibling tools.manifest.preview_all_lazy stays
-// writable, and a write at the tools section is checked by value after the
-// merge (checkPerformanceOnlyConfigUnchanged).
+// parent of the retired tools.manifest.compressed, is refused too, whatever
+// the value carries, with retiredToolLoadingText (C-22); a write at the tools
+// section is checked by value after the merge
+// (checkPerformanceOnlyConfigUnchanged).
 func validatePerformanceOnlyConfigKey(cfg *config.Config, key string) error {
 	for _, k := range performanceOnlyConfigKeys {
 		if configKeyCovers(cfg, key, k.key) {
@@ -966,7 +961,7 @@ func validatePerformanceOnlyConfigKey(cfg *config.Config, key string) error {
 		}
 	}
 	if configKeyCovers(cfg, key, manifestConfigKey) && configKeyCovers(cfg, manifestConfigKey, key) {
-		return fmt.Errorf("config key %q is not writable via this tool: %s", key, manifestCompressedConfigReason)
+		return fmt.Errorf("config key %q is not writable via this tool: %s", key, retiredToolLoadingText)
 	}
 	return nil
 }
@@ -994,9 +989,9 @@ func checkPerformanceOnlyConfigUnchanged(key string, before performanceOnlyConfi
 		return nil
 	}
 	if after.manifestCompressed != before.manifestCompressed {
-		return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
+		return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s (%s); "+
 			"leave manifest.compressed out of the object",
-			key, manifestCompressedConfigKey, manifestCompressedConfigReason)
+			key, manifestCompressedConfigKey, retiredToolLoadingText)
 	}
 	return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
 		"leave max_tool_iterations out of the object",

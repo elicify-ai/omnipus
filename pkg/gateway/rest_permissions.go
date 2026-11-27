@@ -387,7 +387,7 @@ func applyPermissionChanges(m map[string]any, changes []permissionChange) {
 }
 
 // sandboxSection is the part of config.json this page reads.
-type sandboxSection struct {
+type sandboxSection struct { // not-wire-format: the server reads its own config.json sandbox section here; GET and PATCH /security/permissions return the generated gen.PermissionSettings.
 	ToolPolicies    map[string]string `json:"tool_policies"`
 	SkillPolicies   map[string]string `json:"skill_policies"`
 	ToolVisibility  map[string]string `json:"tool_visibility"`
