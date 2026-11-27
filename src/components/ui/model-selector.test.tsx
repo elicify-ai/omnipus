@@ -4,6 +4,8 @@ import * as React from 'react'
 import { ModelSelector, type ModelGroup } from './model-selector'
 import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import type { CatalogModel } from '@/lib/api/generated/openapi-types'
+import { compiledCssU43 } from '../../../tests/helpers/settings-u43-css'
+import { declarationsU44 } from '../../../tests/helpers/settings-u44-css'
 
 // cmdk (used by Command) uses ResizeObserver and scrollIntoView which are not
 // available in jsdom. Provide stubs so tests can mount the component.
@@ -1611,9 +1613,36 @@ describe('ModelSelector — U7-1 long names in grouped and flat rows', () => {
 // ("anthropic/claude-opus-..." seven times). jsdom has no layout, so the
 // test models what a row shows: VISIBLE_CHARS characters (the 50 % name
 // floor of an 18rem popup at the monospace caption size, conservatively),
-// taken from the side the name keeps, read from its classes: a name that
-// shortens at its start ([direction:rtl] text-left truncate) keeps its end.
+// taken from the side the name keeps, read from its compiled CSS.
 // =====================================================================
+
+// The name keeps its END when its compiled CSS shortens it at the start:
+// right-to-left base direction, left-aligned, clipped with an ellipsis.
+// A leading "~" or a trailing ")" is a bidi neutral; under a right-to-left
+// base it would be drawn at the other end, so the name brackets the id with
+// a left-to-right mark (U+200E) before and after. With strong
+// left-to-right characters at both ends and no right-to-left letter in the
+// id, every neutral resolves left-to-right and the id is drawn in order.
+const LRM = '\u200E'
+const RTL_LETTERS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/
+const ENVIRONMENTS = [{ width: 390, pointer: 'coarse' }, { width: 1280, pointer: 'fine' }] as const
+function isMark(value: string | undefined) {
+  const inner = (value ?? '').trim().replace(/^(['"])(.*)\1$/, '$2')
+  return inner === LRM || inner.toLowerCase() === '\\200e'
+}
+async function nameCut(name: HTMLElement) {
+  const css = await compiledCssU43([name])
+  return ENVIRONMENTS.map((env) => {
+    const own = declarationsU44(css, name, env)
+    return {
+      env: `${env.width} ${env.pointer}`,
+      keepsEnd: own.direction === 'rtl' && own['text-align'] === 'left'
+        && own.overflow === 'hidden' && own['text-overflow'] === 'ellipsis',
+      inOrder: isMark(declarationsU44(css, name, env, 'before').content)
+        && isMark(declarationsU44(css, name, env, 'after').content),
+    }
+  })
+}
 
 const VISIBLE_CHARS = 17
 const SHARED_PREFIX = [
@@ -1621,25 +1650,49 @@ const SHARED_PREFIX = [
   'anthropic/claude-opus-4.8', 'anthropic/claude-opus-4.8-fast', 'anthropic/claude-opus-4.5-fast',
   'openai/gpt-4o', 'openai/gpt-4o-mini', 'openai/o4-mini',
 ]
+const NEUTRAL_ENDS = [
+  '~anthropic/claude-fable-5', '~anthropic/claude-fable-5 (beta)', 'meta-llama/llama-4-scout:free',
+  'qwen/qwen3-coder (preview)', '~openai/gpt-6.1-sol)',
+]
 
-function shownText(id: string) {
-  const name = screen.getByText(id, { selector: '[cmdk-item] span', exact: true })
+function nameOf(id: string) {
+  const name = screen.getByText(id, { selector: '[cmdk-item] span', exact: true, normalizer: (text) => text })
   expect(name.title, id).toBe(id)
-  const keepsEnd = name.classList.contains('[direction:rtl]') && name.classList.contains('text-left')
-  return keepsEnd ? id.slice(-VISIBLE_CHARS) : id.slice(0, VISIBLE_CHARS)
+  return name
+}
+
+function renderShape(shape: 'grouped' | 'flat', ids: string[]) {
+  const groups: ModelGroup[] = [
+    { providerName: 'OpenRouter', providerId: 'openrouter', models: ids },
+    { providerName: 'Other', providerId: 'other', models: ['x/y'] },
+  ]
+  if (shape === 'grouped') renderSelector([...ids, 'x/y'], '', vi.fn(), groups)
+  else renderSelector(ids, '', vi.fn())
 }
 
 describe('ModelSelector — U8-B rows that share a long prefix stay distinguishable', () => {
   for (const shape of ['grouped', 'flat'] as const) {
-    it(`${shape} rows never show the same text for two models`, () => {
-      const groups: ModelGroup[] = [
-        { providerName: 'OpenRouter', providerId: 'openrouter', models: SHARED_PREFIX },
-        { providerName: 'Other', providerId: 'other', models: ['x/y'] },
-      ]
-      if (shape === 'grouped') renderSelector([...SHARED_PREFIX, 'x/y'], '', vi.fn(), groups)
-      else renderSelector(SHARED_PREFIX, '', vi.fn())
-      const shown = SHARED_PREFIX.map(shownText)
-      expect(new Set(shown).size, JSON.stringify(shown)).toBe(SHARED_PREFIX.length)
+    it(`${shape} rows never show the same text for two models (390 coarse, 1280 fine)`, async () => {
+      renderShape(shape, SHARED_PREFIX)
+      const cuts = await Promise.all(SHARED_PREFIX.map((id) => nameCut(nameOf(id))))
+      for (const index of [0, 1]) {
+        const shown = SHARED_PREFIX.map((id, row) =>
+          cuts[row][index].keepsEnd ? id.slice(-VISIBLE_CHARS) : id.slice(0, VISIBLE_CHARS))
+        expect(new Set(shown).size, `${cuts[0][index].env}: ${JSON.stringify(shown)}`).toBe(SHARED_PREFIX.length)
+      }
+    })
+
+    it(`${shape} rows draw ids with neutral ends ("~", ")", ":free") in their own order`, async () => {
+      renderShape(shape, NEUTRAL_ENDS)
+      for (const id of NEUTRAL_ENDS) {
+        const name = nameOf(id)
+        expect(name.textContent, `${id}: exact text, no added marks`).toBe(id)
+        expect([...name.childNodes].map((node) => node.nodeType), `${id}: one text node`).toEqual([Node.TEXT_NODE])
+        expect(RTL_LETTERS.test(id), `instrument: ${id} has no right-to-left letters`).toBe(false)
+        for (const cut of await nameCut(name)) {
+          expect(cut, `${id} at ${cut.env}`).toEqual({ env: cut.env, keepsEnd: true, inOrder: true })
+        }
+      }
     })
   }
 })

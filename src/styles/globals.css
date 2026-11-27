@@ -252,6 +252,23 @@ html {
   }
 }
 
+/* U8-B: model ids that share a long prefix (anthropic/claude-opus-4.x)
+   must stay apart when a name is too long for its row. An element with
+   data-id-start-cut shortens at its START: right-to-left base direction,
+   left-aligned while it fits, so the ellipsis (from truncate) lands on the
+   provider side and the end of the id stays visible. A leading "~" or a
+   trailing ")" is a bidi neutral that a right-to-left base would draw at
+   the other end; the left-to-right marks before and after keep the id's
+   own character order. textContent stays exactly the id. */
+[data-id-start-cut] {
+  direction: rtl;
+  text-align: left;
+}
+[data-id-start-cut]::before,
+[data-id-start-cut]::after {
+  content: '\200E';
+}
+
 body {
   margin: 0;
   background-color: var(--color-primary);
