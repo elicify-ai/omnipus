@@ -222,17 +222,21 @@ export function AuthMethodControl({
                       className="flex pointer-coarse:min-h-[var(--target-touch-minimum)] cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
-                      <input
-                        id={inputId}
-                        type="radio"
-                        tabIndex={0}
-                        name={`${testId}-signin-provider`}
-                        value={option.providerId}
-                        checked={providerId === option.providerId}
-                        aria-describedby={helperId}
-                        onChange={() => chooseProvider(option.providerId)}
-                        className="mt-[var(--space-1)]"
-                      />
+                      {/* U8-A / FR-070: coarse-pointer tap area around the glyph
+                          (globals.css [data-radio-target]); it reaches 2.5 px
+                          above this card, inside the 4 px gap to the card above. */}
+                      <span data-radio-target="" className="relative mt-[var(--space-1)] inline-flex shrink-0">
+                        <input
+                          id={inputId}
+                          type="radio"
+                          tabIndex={0}
+                          name={`${testId}-signin-provider`}
+                          value={option.providerId}
+                          checked={providerId === option.providerId}
+                          aria-describedby={helperId}
+                          onChange={() => chooseProvider(option.providerId)}
+                        />
+                      </span>
                       <span className="flex flex-col">
                         <span style={{ color: 'var(--color-secondary)' }}>{option.label}</span>
                         {helper && (
