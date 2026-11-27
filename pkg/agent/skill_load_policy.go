@@ -84,6 +84,30 @@ func (ex *agentLoopRunTurnToolsExecute) composeSkillLoadPolicy() string {
 	return ""
 }
 
+// resolvedSkillDecision is the C-11 decision of a resolved skill for agentID
+// in workspaceID, read from the live config exactly as a Skill load reads it
+// (composeSkillLoadPolicy): tools.SkillLoadDecision, so the one decision
+// function tools.ResolveSkillDecision. decided is false with no loaded config
+// or when neither side carries skill values yet (not upgraded): the grant
+// alone decides, as for a Skill load.
+func (al *AgentLoop) resolvedSkillDecision(agentID, workspaceID string, resolved skills.ResolvedSkill) (d tools.SkillDecision, decided bool, err error) {
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return tools.SkillDecision{}, false, nil
+	}
+	agentSkills := agentSkillsCfg(cfg, agentID)
+	if cfg.Sandbox.SkillPolicies == nil && (agentSkills == nil || len(agentSkills.Policies) == 0) {
+		return tools.SkillDecision{}, false, nil
+	}
+	project := resolved.Shelf == skills.ShelfProject
+	key := config.NormalizeSkillKey(resolved.Slug)
+	if project {
+		key = config.ProjectSkillKey(workspaceID, resolved.Slug)
+	}
+	d, err = tools.SkillLoadDecision(omnipusHome(), skillSettingsOf(cfg), agentSkills, key, resolved.Slug, filepath.Dir(resolved.Path), project)
+	return d, true, err
+}
+
 // skillSearchInputs gives ToolSearch's skill search (C-17) the live values a
 // Skill load decides from (composeSkillLoadPolicy): the global skill
 // settings and the agent's own skill values. ok is false with no loaded

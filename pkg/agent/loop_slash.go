@@ -109,10 +109,11 @@ func (al *AgentLoop) handleCommand(
 // populated it one-shot, per turn — never via the agent's static grant list,
 // which only gates WHICH skills may be loaded (skillAllowed/D5), not which
 // ones are.
-// See pkg/agent/subturn_identity.go::resolveRequestedSkillForChild's own doc
-// comment for the ADR-091 fix lane RX-SUBTURN finding that requested_skill's
-// grant/deny/unresolvable enforcement has no confirmed production caller
-// today — this ForcedSkills append may be part of the same gap.
+// Delegation does not use ForcedSkills either: SteerLauncher.Launch decides
+// requested_skill for the child before any write and puts an allowed or
+// approved skill's instructions in the child's first message
+// (subturn_identity.go::resolveRequestedSkillForChild,
+// skill_delegation_load.go::requestedSkillGate).
 func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	if agent == nil {
 		return nil

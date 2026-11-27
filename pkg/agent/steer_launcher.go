@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -166,8 +167,9 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	// so pkg/tools/delegate_run.go's errors.Is discrimination — and its
 	// existing, spec-worded result helpers — need no package-local
 	// duplicate on this side of the boundary.
+	var requestedResolved *skills.ResolvedSkill
 	if requestedSkill := strings.TrimSpace(req.RequestedSkill); requestedSkill != "" {
-		_, outcome := resolveRequestedSkillForChild(targetAgent.ContextBuilder, requestedSkill)
+		resolved, outcome := resolveRequestedSkillFull(targetAgent.ContextBuilder, requestedSkill)
 		if outcome != requestedSkillGranted {
 			sentinel := tools.ErrRequestedSkillNotFound
 			if outcome == requestedSkillDenied {
@@ -177,6 +179,7 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 				"steer: launch: %w: skill %q requested for agent %q",
 				sentinel, requestedSkill, req.TargetAgentID)
 		}
+		requestedResolved = &resolved
 	}
 	// #948: a delegated worker whose message_parent is denied can finish its
 	// work and then has no way to report it — a silent hang. Refuse at launch,
@@ -214,6 +217,18 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 			}
 		}
 	}
+	// C-11 E5: the delegation loads the requested skill FOR the child, so
+	// the child's one outcome decides, after every other refusal above (a
+	// card is raised only for a launch nothing else refuses) and before any
+	// write (skill_delegation_load.go).
+	var skillPreload *requestedSkillPreload
+	if requestedResolved != nil {
+		preload, err := l.requestedSkillGate(ctx, req, targetAgent, *requestedResolved)
+		if err != nil {
+			return steer.LaunchResult{}, err
+		}
+		skillPreload = preload
+	}
 	lifecycle := l.al.GetSessionLifecycleStore()
 	sessions := l.al.GetSessionStore()
 	if lifecycle == nil || sessions == nil {
@@ -227,13 +242,13 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	sessionType := launchSessionType(req.Origin.Kind)
 
 	if req.SteeringSessionID == "" {
-		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType, targetIs3P)
+		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType, targetIs3P, skillPreload)
 	}
 	// #891: the launching tool's ctx carries AutoDenyAsk when the parent runs
 	// unattended (task/trigger/headless). The child's turn is rebuilt later from
 	// its lifecycle record on a detached context, so the posture is persisted
 	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
-	result, err := l.launchSteered(ctx, sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx), targetIs3P)
+	result, err := l.launchSteered(ctx, sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx), targetIs3P, skillPreload)
 	if err == nil {
 		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
@@ -357,6 +372,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	title string,
 	sessionType session.UnifiedSessionType,
 	is3P bool,
+	skillPreload *requestedSkillPreload,
 ) (steer.LaunchResult, error) {
 	meta, identityErr := sessions.NewSession(sessionType, "", req.TargetAgentID)
 	if identityErr != nil {
@@ -365,10 +381,11 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	childID := meta.ID
 	rollback := func() { _ = sessions.DeleteSession(childID) }
 
-	if err := l.writeChildMetaAndHistory(sessions, childID, title, req.WorkspaceID, req.Owner, "", req); err != nil {
+	if err := l.writeChildMetaAndHistory(sessions, childID, title, req.WorkspaceID, req.Owner, "", withSkillPreload(req, skillPreload)); err != nil {
 		rollback()
 		return steer.LaunchResult{}, err
 	}
+	skillPreload.recordLoaded(l.al, childID)
 	goalID, goalErr := l.createLaunchGoal(req, childID, title, req.TargetAgentID)
 	if goalErr != nil {
 		rollback()
@@ -431,6 +448,7 @@ func (l *SteerLauncher) launchSteered(
 	sessionType session.UnifiedSessionType,
 	unattended bool,
 	is3P bool,
+	skillPreload *requestedSkillPreload,
 ) (steer.LaunchResult, error) {
 	if req.WorkspaceID != "" || req.Owner != "" {
 		return steer.LaunchResult{}, fmt.Errorf(
@@ -556,10 +574,11 @@ func (l *SteerLauncher) launchSteered(
 			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
 				return nil, fmt.Errorf("steer: launch: %w: identity: %w", steer.ErrStoreWrite, err)
 			}
-			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, req); err != nil {
+			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, withSkillPreload(req, skillPreload)); err != nil {
 				_ = sessions.DeleteSession(childID)
 				return nil, err
 			}
+			skillPreload.recordLoaded(l.al, childID)
 			var goalErr error
 			goalID, goalErr = l.createLaunchGoal(req, childID, title, parentAgentID)
 			if goalErr != nil {
@@ -801,6 +820,16 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 		}
 	}
 	return nil
+}
+
+// withSkillPreload returns req with the requested skill's instructions
+// after the task, for the child's first message only (the span label and
+// the title keep the task as given).
+func withSkillPreload(req steer.LaunchRequest, p *requestedSkillPreload) steer.LaunchRequest {
+	if p != nil {
+		req.Task = p.firstMessage(req.Task)
+	}
+	return req
 }
 
 // firstMessageWithSnapshot is the child's first user message: the task text,

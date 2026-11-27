@@ -1632,6 +1632,9 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 				// the SAME per-shelf grant model `load` consults, exposed
 				// separately so the search path can filter the ranked
 				// match list without loading every candidate's full body.
+				// A granted skill whose C-11 outcome is deny is not found
+				// (C-11 E3): the search reads the one decision
+				// (resolvedSkillDecision), never its own.
 				func(ctx context.Context, slug string) bool {
 					callerID := tools.ToolAgentID(ctx)
 					if callerID == "" {
@@ -1642,8 +1645,17 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 						return false
 					}
 					workspaceID := tools.ToolWorkspaceID(ctx)
-					_, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug)
-					return resolvedOK
+					resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug)
+					if !resolvedOK {
+						return false
+					}
+					d, decided, err := rw.rs.al.resolvedSkillDecision(callerID, workspaceID, resolved)
+					if err != nil {
+						logger.ErrorCF("agent", "skill search: decision unreadable; the skill is left out of the results",
+							map[string]any{"agent_id": callerID, "skill": resolved.Slug, "error": err.Error()})
+						return false
+					}
+					return !decided || d.Outcome != tools.SkillOutcomeDeny
 				},
 				// corpus returns every installed skill's slug+description
 				// across every shelf visible to the acting agent's

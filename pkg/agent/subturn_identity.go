@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
 // ====================== Helper Functions ======================
@@ -109,16 +110,11 @@ func composeDelegateInput(al *AgentLoop, task, actualSystem, targetAgentID strin
 // execSource's builder, never the delegating parent's, so the parent's own
 // grant list has no bearing on the outcome by construction, not convention.
 //
-// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged): pre-
-// ADR-091 the deleted spawnSubTurn called this on the native delegate
-// dispatch path. Grep finds no production caller today (every current call
-// site is in subturn_identity_test.go) — ErrRequestedSkillDenied/
-// ErrRequestedSkillNotFound (pkg/tools/delegate_run.go) are likewise
-// declared but, as far as grep shows, never raised by production code
-// either. Whether requested_skill grant/deny/unresolvable enforcement is
-// still wired into the current native dispatch path some other way, or is
-// a functional gap opened by the ADR-091 migration, needs a team check —
-// flagged, not determined or fixed here.
+// Production caller: SteerLauncher.Launch (steer_launcher.go), on the real
+// delegate launch path before any write. It raises ErrRequestedSkillDenied /
+// ErrRequestedSkillNotFound (pkg/tools/delegate_run.go) from the outcome;
+// a granted skill then goes through the child's C-11 outcome
+// (skill_delegation_load.go::requestedSkillGate).
 //
 // Distinguishes three outcomes (spec FR-053/FR-054, never conflated):
 // granted (with the canonical slug the child may load), denied (the slug
@@ -140,9 +136,17 @@ func composeDelegateInput(al *AgentLoop, task, actualSystem, targetAgentID strin
 // IS the grant, no per-agent list applies), so a failed resolution already
 // implies it is not on the project shelf either.
 func resolveRequestedSkillForChild(cb *ContextBuilder, requested string) (canonical string, outcome requestedSkillOutcome) {
+	resolved, outcome := resolveRequestedSkillFull(cb, requested)
+	return resolved.Slug, outcome
+}
+
+// resolveRequestedSkillFull is resolveRequestedSkillForChild returning the
+// whole resolved skill (shelf and path) on a granted outcome, so the launch
+// can read the skill's C-11 decision for the child.
+func resolveRequestedSkillFull(cb *ContextBuilder, requested string) (resolved skills.ResolvedSkill, outcome requestedSkillOutcome) {
 	trimmed := strings.TrimSpace(requested)
 	if cb == nil || cb.skillsLoader == nil || trimmed == "" {
-		return "", requestedSkillUnresolvable
+		return skills.ResolvedSkill{}, requestedSkillUnresolvable
 	}
 	// Fetch the installed-skill list ONCE (ADR-072 Finding D). ListSkills()
 	// is an uncached, full-directory scan, and this function previously
@@ -152,12 +156,12 @@ func resolveRequestedSkillForChild(cb *ContextBuilder, requested string) (canoni
 	// the fallback membership check share this single fetch.
 	allSkills := cb.skillsLoader.ListSkills()
 	if resolved, ok := cb.resolveSkillNameWithList(allSkills, trimmed); ok {
-		return resolved.Slug, requestedSkillGranted
+		return resolved, requestedSkillGranted
 	}
 	for _, s := range allSkills {
 		if strings.EqualFold(s.ID, trimmed) || strings.EqualFold(s.Name, trimmed) {
-			return "", requestedSkillDenied
+			return skills.ResolvedSkill{}, requestedSkillDenied
 		}
 	}
-	return "", requestedSkillUnresolvable
+	return skills.ResolvedSkill{}, requestedSkillUnresolvable
 }

@@ -57,6 +57,17 @@ type DelegateProgramRefusalError struct{ Text string }
 
 func (e *DelegateProgramRefusalError) Error() string { return e.Text }
 
+// RequestedSkillRefusalError is returned by the session launcher when the
+// skill a delegation names in requested_skill is granted to the target but
+// its C-11 outcome for that target is deny, or the outcome could not be read
+// (C-11 E5, C-12). Text names the setting that refuses it and ends with
+// "Nothing was started."; it is returned to the parent as the tool error as
+// written. No child session exists. Declared here for the same
+// tools<->agent-cycle reason as above.
+type RequestedSkillRefusalError struct{ Text string }
+
+func (e *RequestedSkillRefusalError) Error() string { return e.Text }
+
 // delegateTargetCannotReportResult is the visible refusal for
 // ErrDelegateTargetCannotReport. It names the agent and the policy, and says
 // plainly that this is a policy configuration problem, not a lifecycle
@@ -283,6 +294,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		var programRefusal *DelegateProgramRefusalError
 		if errors.As(err, &programRefusal) {
 			return ErrorResult(programRefusal.Text).WithError(err)
+		}
+		var skillRefusal *RequestedSkillRefusalError
+		if errors.As(err, &skillRefusal) {
+			return ErrorResult(skillRefusal.Text).WithError(err)
 		}
 		if result := steeringUnavailableResult(err); result != nil {
 			return result
