@@ -27,7 +27,7 @@ Use a fallback chain when an agent must keep working through temporary failures.
 1. Open **Settings**, then select **Providers**.
 2. Select **Connect a provider**. You see popular choices, recent choices, search, **All providers**, and **Custom endpoint**.
 3. Choose a provider. If it has variants, choose the plan, region, and authentication method shown.
-4. Enter the API key, or select **Sign in** when the provider offers it. Sign-in is offered only where Omnipus can actually sign you in. For OpenAI, that is the **ChatGPT (subscription)** provider; the plain **OpenAI** provider takes an API key only.
+4. Enter the API key, or select **Sign in** when the provider offers it. Sign-in is offered only where Omnipus can actually sign you in. For OpenAI, that is the **ChatGPT (subscription)** provider; the plain **OpenAI** provider takes an API key only. A list of sign-in methods to choose from appears only when a company offers more than one. Today each company offers at most one, so no such list appears.
 5. Select **Continue**, then complete the connection step. The provider appears in your configured provider list.
 6. Choose a model in the **Default model** card, or open an agent and choose its model there.
 
@@ -42,6 +42,17 @@ For a custom endpoint, choose either the `openai-compatible` or `anthropic` prot
 The model pickers — next to the chat message box, on an agent's profile, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
+
+### Long model names
+
+The same rules apply to every model picker: next to the chat message box, on an agent's profile (main model and **Add fallback**), on the **Default model** card, in **Memory & recaps**, in **Remove provider** and during onboarding.
+
+- **Width.** The list is at least as wide as the button that opened it, and never narrower than 18 rem (about 250 pixels at the default text size; more with a larger text size). It is never wider than the screen.
+- **Where a name is shortened.** A name too long for its row is shortened at its **start**, so the end that tells similar models apart stays visible. For example, `anthropic/claude-opus-4.8-fast` can read `…claude-opus-4.8-fast`, and the provider part is the one hidden. Characters keep their order: a name that starts with `~` or ends with `)` reads the same as the model's name.
+- **The full name.** With a mouse, point at a row to see the whole name. Screen readers read the whole name.
+- **Recommended models.** On the **Default model** card the name keeps at least half of the row, and the **Recommended** label is shortened first.
+
+One limit: two models from different vendors with the same long model name, for example `vendor-a/some-very-long-model-name` and `vendor-b/some-very-long-model-name`, can look the same when the vendor part is hidden. With a mouse, point at the row to see the full name before you pick it.
 
 ### The model a chat keeps
 
