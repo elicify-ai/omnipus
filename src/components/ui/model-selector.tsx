@@ -808,8 +808,10 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
         />
         {/* U6-6: the name keeps at least half the row and the badge gives way
             first (it truncates), so a recommended row is never badge-only.
-            The title carries the full name when it is cut short. */}
-        <span title={row.model.id} className="min-w-[50%] flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
+            The title carries the full name when it is cut short.
+            U8-B: the name is cut at its START (rtl direction, left-aligned),
+            so the end of the id that tells models apart stays visible. */}
+        <span title={row.model.id} className="min-w-[50%] flex-1 truncate text-left [direction:rtl] font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
         {row.recommended && (
           <span
             className="ml-[var(--space-2)] min-w-0 truncate rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
@@ -1020,8 +1022,9 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                             className="mr-[var(--space-2)] shrink-0"
                             style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                           />
-                          {/* U7-1: a long name is cut short with an ellipsis; the full name stays on the row. */}
-                          <span title={model} className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                          {/* U7-1: a long name is cut short with an ellipsis; the full name stays on the row.
+                              U8-B: cut at the start, so the distinguishing end stays visible. */}
+                          <span title={model} className="min-w-0 flex-1 truncate text-left [direction:rtl] font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                           {isAgentDefaultRow(model, group.providerId) && renderDefaultChip()}
                         </CommandItem>
                       )
@@ -1060,7 +1063,8 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                           className="mr-[var(--space-2)] shrink-0"
                           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                         />
-                        <span title={model} className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                        {/* U8-B: cut at the start, like the grouped rows. */}
+                        <span title={model} className="min-w-0 flex-1 truncate text-left [direction:rtl] font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                         {isAgentDefaultRow(model, undefined) && renderDefaultChip()}
                       </CommandItem>
                     )

@@ -1605,3 +1605,41 @@ describe('ModelSelector — U7-1 long names in grouped and flat rows', () => {
     }
   })
 })
+
+// =====================================================================
+// U8-B: an end ellipsis cut off exactly the part that tells models apart
+// ("anthropic/claude-opus-..." seven times). jsdom has no layout, so the
+// test models what a row shows: VISIBLE_CHARS characters (the 50 % name
+// floor of an 18rem popup at the monospace caption size, conservatively),
+// taken from the side the name keeps, read from its classes: a name that
+// shortens at its start ([direction:rtl] text-left truncate) keeps its end.
+// =====================================================================
+
+const VISIBLE_CHARS = 17
+const SHARED_PREFIX = [
+  'anthropic/claude-opus-4', 'anthropic/claude-opus-4.1', 'anthropic/claude-opus-4.5',
+  'anthropic/claude-opus-4.8', 'anthropic/claude-opus-4.8-fast', 'anthropic/claude-opus-4.5-fast',
+  'openai/gpt-4o', 'openai/gpt-4o-mini', 'openai/o4-mini',
+]
+
+function shownText(id: string) {
+  const name = screen.getByText(id, { selector: '[cmdk-item] span', exact: true })
+  expect(name.title, id).toBe(id)
+  const keepsEnd = name.classList.contains('[direction:rtl]') && name.classList.contains('text-left')
+  return keepsEnd ? id.slice(-VISIBLE_CHARS) : id.slice(0, VISIBLE_CHARS)
+}
+
+describe('ModelSelector — U8-B rows that share a long prefix stay distinguishable', () => {
+  for (const shape of ['grouped', 'flat'] as const) {
+    it(`${shape} rows never show the same text for two models`, () => {
+      const groups: ModelGroup[] = [
+        { providerName: 'OpenRouter', providerId: 'openrouter', models: SHARED_PREFIX },
+        { providerName: 'Other', providerId: 'other', models: ['x/y'] },
+      ]
+      if (shape === 'grouped') renderSelector([...SHARED_PREFIX, 'x/y'], '', vi.fn(), groups)
+      else renderSelector(SHARED_PREFIX, '', vi.fn())
+      const shown = SHARED_PREFIX.map(shownText)
+      expect(new Set(shown).size, JSON.stringify(shown)).toBe(SHARED_PREFIX.length)
+    })
+  }
+})

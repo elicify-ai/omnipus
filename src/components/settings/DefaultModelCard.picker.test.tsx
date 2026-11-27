@@ -185,3 +185,31 @@ describe('U7-2 no row is taller than its virtual slot', () => {
     })
   }
 })
+
+describe('U8-B catalog rows that share a long prefix stay distinguishable', () => {
+  // Same model as the ModelSelector U8-B case: a row shows VISIBLE_CHARS
+  // characters from the side its name keeps (read from its classes).
+  const VISIBLE_CHARS = 17
+  it('no two rendered rows show the same text (ids sharing "anthropic/claude-opus-")', async () => {
+    pointer(false)
+    const ids = Array.from({ length: 120 }, (_, i) => `anthropic/claude-opus-4.${i}${i % 2 ? '-fast' : ''}`)
+    const shared: ProvidersCatalog = {
+      ...catalog,
+      providers: catalog.providers.map((entry) => entry.id !== 'openrouter' ? entry : {
+        ...entry, models: ids.map((id, i) => ({ ...template, id, name: `Opus ${i}` })),
+      }),
+    }
+    await openPicker({ catalog: shared, defaultModel: { ...defaultModel, model: ids[0] } })
+    const items = [...document.querySelectorAll<HTMLElement>('[cmdk-item][data-model]')]
+    expect(items.length).toBeGreaterThan(1)
+    const shown = items.map((item) => {
+      const id = item.getAttribute('data-model') ?? ''
+      const name = [...item.querySelectorAll('span')].find((span) => span.title === id)
+      expect(name, id).toBeDefined()
+      expect(name?.textContent).toBe(id)
+      const keepsEnd = name!.classList.contains('[direction:rtl]') && name!.classList.contains('text-left')
+      return keepsEnd ? id.slice(-VISIBLE_CHARS) : id.slice(0, VISIBLE_CHARS)
+    })
+    expect(new Set(shown).size, JSON.stringify(shown.slice(0, 8))).toBe(shown.length)
+  })
+})
