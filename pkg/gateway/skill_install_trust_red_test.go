@@ -24,6 +24,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,7 +93,7 @@ func TestInstall_TrustDenyRefusesUnverified(t *testing.T) {
 		require.Contains(t, w.Body.String(), wantText, "the refusal carries the C-3 text")
 		// Nothing on disk afterwards (S-28).
 		_, err := os.Stat(filepath.Join(api.homePath, "skills", "notes-helper"))
-		require.True(t, os.IsNotExist(err), "no folder for the refused skill may exist")
+		require.True(t, errors.Is(err, os.ErrNotExist), "no folder for the refused skill may exist")
 	})
 
 	t.Run("S-28b install_skill of an unverified skill is refused", func(t *testing.T) {
@@ -106,7 +107,7 @@ func TestInstall_TrustDenyRefusesUnverified(t *testing.T) {
 		require.True(t, result.IsError, "trust deny must refuse the install_skill call (C-3); got %+v", result)
 		require.Contains(t, result.ForLLM, wantText, "the refusal carries the C-3 text")
 		_, err := os.Stat(filepath.Join(globalSkills, "notes-helper"))
-		require.True(t, os.IsNotExist(err), "no folder for the refused skill may exist")
+		require.True(t, errors.Is(err, os.ErrNotExist), "no folder for the refused skill may exist")
 	})
 
 	t.Run("S-27 the install review refuses an unverified skill under trust deny", func(t *testing.T) {

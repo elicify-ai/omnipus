@@ -14,6 +14,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -409,7 +410,7 @@ func testTimedCardTreeObserver(t *testing.T) {
 func readAllAuditEntries(t *testing.T, auditDir string) []map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)
