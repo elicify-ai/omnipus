@@ -265,7 +265,7 @@ Providers, connected servers and channels are shared by the whole installation, 
 
 ## Settings that set_config cannot change
 
-`set_config` changes ordinary settings in `config.json`. It cannot change the installation-wide values in **Settings → Limits**, or how long data is kept, which is in **Settings → Data & retention**. A request to change them from a chat is refused, not turned into an approval card:
+`set_config` changes ordinary settings in `config.json`. It cannot change the installation-wide values in **Settings → Limits**, or how long data is kept, which is in **Settings → Data & retention**. A request to change them from a chat is refused by `set_config`. You may still see the tool's normal approval card first, but approving it does not let one of these changes through:
 
 | What you want to change | Where to change it | What `set_config` answers |
 |---|---|---|
