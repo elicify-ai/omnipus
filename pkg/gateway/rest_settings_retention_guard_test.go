@@ -449,6 +449,10 @@ func TestUpdateConfig_RetentionGuardByEffect(t *testing.T) {
 // TestUpdateConfig_PerformanceGuardByEffect — order 6a, #936 / FR-100,
 // Dataset D-16 REST rows: PUT /config must refuse any body whose merged
 // result changes an effective Performance value, naming PUT /api/v1/performance.
+//
+// Row 4 (tools.manifest.compressed) is the exception since the Skills & Tools
+// redesign (#1963, C-22 row 3): the key left the Performance guard list and
+// PUT /config refuses it with the C-22 text instead; see the leaf.
 func TestUpdateConfig_PerformanceGuardByEffect(t *testing.T) {
 	putPerformance := func(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -488,11 +492,30 @@ func TestUpdateConfig_PerformanceGuardByEffect(t *testing.T) {
 		requireByteIdenticalConfig(t, api, before)
 	})
 
+	// Row 4 is re-aimed by the Skills & Tools redesign (#1963, epic #1519), C-22
+	// row 3 "Moves the guard": PUT /config refuses tools.manifest.compressed
+	// with "This setting was replaced by levels in Skills & Tools." and the
+	// Settings entry for the key (the FR-100 guard list) is removed in the same
+	// change, so the leaf no longer expects performanceMsgR. C-21: the new
+	// refusal replaces the one that names Settings → Limits, and C-22 drops the
+	// switch from PUT /api/v1/performance, so a refusal that names that
+	// endpoint sends the caller nowhere. Kept: that the write is refused and
+	// that config.json stays byte-identical. Not kept: the exact 400. C-22 names
+	// no status and the 400 came from the Settings guard this row leaves; ruled
+	// 2026-11-28 (team-lead) that any 4xx is accepted for the PUT /config
+	// refusal of a retired tool-loading key.
 	t.Run("D16 row 4 tools.manifest.compressed leaf", func(t *testing.T) {
+		const c22Refusal = "This setting was replaced by levels in Skills & Tools."
 		api := newTestRestAPIWithHome(t)
 		before, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
 		require.NoError(t, err)
-		putPerformance(t, api, `{"tools":{"manifest":{"compressed":false}}}`)
+		w := putConfigBody(api, `{"tools":{"manifest":{"compressed":false}}}`)
+		require.True(t, w.Code >= http.StatusBadRequest && w.Code < http.StatusInternalServerError,
+			"a change to tools.manifest.compressed must be refused with a client error (4xx; C-22 names no status); got %d, body=%s", w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), c22Refusal,
+			"C-22 row 3: the refusal must carry the spec's text; body=%s", w.Body.String())
+		assert.NotContains(t, w.Body.String(), "/api/v1/performance",
+			"C-21/C-22: the refusal must not name the retired Settings guard's endpoint (PUT /api/v1/performance); body=%s", w.Body.String())
 		requireByteIdenticalConfig(t, api, before)
 	})
 
