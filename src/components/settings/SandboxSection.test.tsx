@@ -235,35 +235,53 @@ describe('allowed folders editor', () => {
     await screen.findByText(/Saved at/)
   })
 
-  it('a refused Save keeps the typed draft and shows the server message under the field; the bar says the change could not be saved (FR-015, FR-020 outcome 3)', async () => {
+  it.each([
+    { survivor: 'none', hasModeDraft: false },
+    { survivor: 'one mode change', hasModeDraft: true },
+  ])('a refused new path returns to its own Add input; Save-bar survivor: $survivor (FR-015a)', async ({ hasModeDraft }) => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
-      allowed_paths: ['./foo'],
+      allowed_paths: ['/saved'],
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(
-      new ApiError(400, 'allowed_paths[1]: must be absolute — `./foo` is relative'),
-    )
+    const reason = 'must be absolute — `./foo` is relative'
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(400, `allowed_paths[1]: ${reason}`))
     const { requestPassword } = promptRecorder()
     await renderSectionWithShell(requestPassword)
 
-    await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
-    })
-
-    const input = screen.getByRole('textbox', { name: /new allowed path/i })
-    fireEvent.change(input, { target: { value: '/valid' } })
+    const input = await screen.findByRole('textbox', { name: /new allowed path/i })
+    fireEvent.change(input, { target: { value: './foo' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
-    fireEvent.click(await screen.findByRole('button', { name: /save changes/i }))
+    if (hasModeDraft) fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    // Two distinct changed fields, not two entries in the same field: the
+    // count must drop from two to one when the refused path is recovered.
+    expect(screen.getByText(hasModeDraft ? '2 unsaved changes' : '1 unsaved change')).toBeVisible()
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    await waitFor(() => expect(updateSandboxConfig).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
+      hasModeDraft ? { allowed_paths: ['/saved', './foo'], mode: 'off' } : { allowed_paths: ['/saved', './foo'] },
+      'reauth-tok',
+    ])
 
-    await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
-    })
-    // FR-015: the server's message under the field, the draft kept at its
-    // typed value, and the bar naming the failure — the old oracle (an inline
-    // error after an immediate write) is replaced by the refused-Save outcome.
-    expect((await screen.findAllByText(/must be absolute/i)).length).toBeGreaterThan(0)
-    expect(await screen.findByText(/1 change could not be saved/)).toBeInTheDocument()
-    expect(screen.getByText('/valid')).toBeInTheDocument()
+    // FR-015a keeps all typed content but moves this unsaved new entry back
+    // into its own list's Add input, with the server's literal reason there.
+    const addArea = input.parentElement!.parentElement!
+    expect(await within(addArea).findByText(reason, { exact: false })).toBeVisible()
+    expect(input, 'FR-015a: no typed path is lost during recovery').toHaveValue('./foo')
+    expect(screen.queryByRole('button', { name: 'Delete path ./foo' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^Delete path / }).map(button => button.getAttribute('aria-label'))).toEqual([
+      'Delete path /saved',
+    ])
+    expect(screen.queryByText(/^Saved at /), 'FR-020: a refused value must never look saved').toBeNull()
+    if (hasModeDraft) {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i }), 'FR-015a: the other draft survives recovery').toBeChecked()
+      const bar = screen.getByTestId('settings-save-bar')
+      expect(within(bar).getByText(/changes? could not be saved/).textContent, 'FR-015a Q2 A: recovered input is excluded; only the mode draft still failed').toBe('1 change could not be saved')
+    } else {
+      expect(screen.queryByTestId('settings-save-bar'), 'FR-015a Q2 A: no staged draft remains, so the bar closes').toBeNull()
+    }
+    expect(within(addArea).getByText(reason, { exact: false }), 'FR-015a: the input message remains after the bar settles').toBeVisible()
+    expect(updateSandboxConfig, 'FR-010/015a: refusal and recovery never cause an automatic resend').toHaveBeenCalledTimes(1)
   })
 
   it('Delete stages the draft and stores nothing; Save changes sends exactly the surviving list (FR-010, FR-015)', async () => {
