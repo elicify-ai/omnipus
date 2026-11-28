@@ -61,6 +61,13 @@ func trustDenyAPI(t *testing.T) *restAPI {
 	// C-3 vocabulary value after the migration; today's enum does not know
 	// it (string-typed, so this compiles), which is the gap under test.
 	cfg.Sandbox.SkillTrust = config.SkillTrustLevel("deny")
+	// A slug install or review needs an enabled skill marketplace: without one
+	// the handler answers 409 "no skill marketplace is enabled" before it ever
+	// reaches the trust rule, so S-27 below would fail for the wrong reason.
+	// Same entry as newTestRestAPIWithClawHub.
+	cfg.Tools.Skills.Marketplaces = []config.MarketplaceConfig{
+		{Name: "clawhub", Type: "clawhub", Enabled: true, BaseURL: "https://clawhub.ai"},
+	}
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
@@ -73,6 +80,9 @@ func trustDenyAPI(t *testing.T) *restAPI {
 		homePath:      tmpDir,
 		taskStore:     task.New(tmpDir + "/tasks"),
 		taskLock:      task.TaskFileLock,
+		// The registry a slug install downloads from: an unverified skill (no
+		// registry hash), like S-28b's. Never reaches the network.
+		skillRegistry: &fakeSkillRegistry{},
 	}
 }
 
