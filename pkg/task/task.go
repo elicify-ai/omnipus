@@ -311,6 +311,13 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// D1/D4). Same-workspace FK — validated at the tool/gateway layer, not the
 	// store (the store accepts and persists whatever value it is given).
 	PlanID string `json:"plan_id,omitempty"`
+	// Provenance is where the work this task carries came from
+	// (connected-programs I-2, FR-041): the origins ("web", "independent",
+	// "connector:<id>") of the writer that created it, joined with every
+	// agent turn that later changed its instructions. Empty is unresolved,
+	// so its runs get no connected-program tokens (fail closed). A person's
+	// later edit leaves it unchanged. Server-set only; not on the wire.
+	Provenance []string `json:"provenance,omitempty"`
 	// WriteSet is the set of concrete paths this PLAN MEMBER task creates or
 	// edits (ADR-053 §Contract Surface, US-11/G-16/FR-156). plan-lint
 	// (pkg/plan.Lint) reads this at approve to reject overlapping parallel

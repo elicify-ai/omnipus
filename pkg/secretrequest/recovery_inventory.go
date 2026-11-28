@@ -88,6 +88,10 @@ func (r *Registry) recoverPendingLocked(rec Record) (Record, error) {
 		}
 		rec.Card.State, rec.Card.ReferenceNames = "submitted", receipt.References
 		rec.Card.UpdatedAt = receipt.SubmittedAt.Format(time.RFC3339Nano)
+		if receipt.ProgramGeneration > 0 {
+			generation := receipt.ProgramGeneration
+			rec.Card.ProgramGeneration = &generation
+		}
 	} else {
 		rec.Card.State, rec.Card.UpdatedAt = "interrupted", time.Now().UTC().Format(time.RFC3339Nano)
 	}

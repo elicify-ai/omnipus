@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -86,6 +87,10 @@ type asyncToolCallbackGate struct {
 	ready   bool
 	pending *tools.ToolResult
 	handle  func(*tools.ToolResult)
+	// loop, when set, admits a completion that arrives after the turn as an
+	// active request, so Close drains its transcript and bus writes before the
+	// stores are torn down, and refuses one that arrives after intake closed.
+	loop *AgentLoop
 }
 
 func (g *asyncToolCallbackGate) callback(result *tools.ToolResult) {
@@ -96,6 +101,17 @@ func (g *asyncToolCallbackGate) callback(result *tools.ToolResult) {
 		return
 	}
 	g.mu.Unlock()
+	// The background tool's own goroutine runs this, outside any turn: without
+	// the admission a completion (for example a killed background job) kept
+	// writing the session transcript after Close returned.
+	if g.loop != nil {
+		if !g.loop.beginActiveRequest() {
+			logger.WarnCF("agent", "Async tool completion dropped: the agent loop is shutting down",
+				map[string]any{"is_error": result != nil && result.IsError})
+			return
+		}
+		defer g.loop.endActiveRequest()
+	}
 	g.handle(result)
 }
 
@@ -1193,6 +1209,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		handle: func(result *tools.ToolResult) {
 			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
 		},
+		loop: ex.rx.rr.rq.ri.rf.rt.al,
 	}
 	ex.asyncCallbackGate = gate
 	ex.asyncCallback = func(_ context.Context, result *tools.ToolResult) {
@@ -1319,6 +1336,11 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 						"error":   pubErr.Error(),
 					})
 			}
+			persisted := userContent
+			if cfg := ex.rx.rr.rq.ri.rf.rt.al.GetConfig(); cfg != nil {
+				persisted = cfg.FilterSensitiveData(persisted)
+			}
+			persistAsyncToolFeedback(ts, toolCallID, persisted, result.IsError)
 		}
 	}
 
@@ -1355,8 +1377,10 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
-		finishedToolName:    toolName,
-		finishedToolCallID:  session.ToolCallID(toolCallID),
+		// I-2: the background callback carries the turn that started it.
+		Provenance:         ex.rx.rr.rq.ri.rf.rt.ts.origin.Provenance(),
+		finishedToolName:   toolName,
+		finishedToolCallID: session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
 		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
 		// warning. A second raw-cause log here would duplicate that reporting and
@@ -1746,12 +1770,14 @@ func toolResultUserContent(toolName, channel string, suppress bool, result *tool
 	if result == nil || result.Silent || result.ForUser == "" {
 		return ""
 	}
+	// B2 (FR-020): the always-on program-token pass, whatever the general
+	// filter switch says.
 	if !suppress {
-		return result.ForUser
+		return programs.MaskTokens(result.ForUser)
 	}
 	channelType, _ := config.ParseInstanceKey(channel)
 	if result.IsError && isMessagingChannel(channelType) {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1764,7 +1790,7 @@ func asyncToolResultUserContent(toolName, channel string, suppress bool, result 
 		return content
 	}
 	if suppress && channel == "webchat" && result != nil && !result.Silent && result.IsError && result.ForUser != "" {
-		return attributedToolErrorNotice(toolName, result.ForUser)
+		return attributedToolErrorNotice(toolName, programs.MaskTokens(result.ForUser))
 	}
 	return ""
 }
@@ -1783,7 +1809,7 @@ func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
 		AgentID:   ts.resolveActiveAgentID(),
-		Content:   content,
+		Content:   programs.MaskTokens(content), // B3 (FR-020)
 		Timestamp: now,
 		Status:    "error",
 		TurnID:    ts.turnID,

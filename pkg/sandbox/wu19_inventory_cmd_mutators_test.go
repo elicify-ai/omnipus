@@ -23,6 +23,9 @@ func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr
 		return false // an unproved cycle is not a safe mutation boundary.
 	}
 	list := p.funcs[key]
+	if len(list) == 0 && key == "github.com/elicify-ai/omnipus/pkg/sandbox.ChildAttachment.AttachTo" {
+		list = p.funcs["github.com/elicify-ai/omnipus/pkg/programs.ResolvedPrograms.AttachTo"]
+	}
 	if len(list) == 0 {
 		if key == "github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe.PipeOptions.ModifyCmd" {
 			return p.browserModifierCallbacksPreserveEnv()

@@ -1,0 +1,19 @@
+title: ProgramList
+description: >
+  The program catalog as listed by GET /programs (spec FR-002). Independent
+  work follows `web_chat_allowed` (founder Q1 = A).
+type: object
+required:
+  - entries
+  - web_chat_allowed
+  - revision
+additionalProperties: false
+properties:
+  entries:
+    type: array
+    items:
+      $ref: './ProgramEntry.yaml'
+  web_chat_allowed:
+    type: boolean
+  revision:
+    $ref: './ConfigurationRevision.yaml'

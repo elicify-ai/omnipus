@@ -338,6 +338,8 @@ func (a *restAPI) handleChannelAction(w http.ResponseWriter, r *http.Request, ch
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	case "programs":
+		a.handleChannelPrograms(w, r, channelID)
 	case "outbound":
 		// FR-021 / FR-022: the read is authenticated like the other
 		// channel reads; the write is admin-gated (RequireNotBypass).
@@ -642,6 +644,15 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			ch, _ := channels[scr.channelID].(map[string]any)
 			if ch == nil {
 				ch = map[string]any{}
+			}
+			// Connected-programs FR-009: binding the connection to another
+			// workspace or main agent switches its programs setting off in
+			// this same write.
+			prevIdentity, _ := ch["identity"].(map[string]any)
+			prevAgent, _ := prevIdentity["id"].(string)
+			prevWorkspace, _ := ch["workspace_id"].(string)
+			if prevWorkspace != scr.workspaceID || prevAgent != agentID {
+				delete(ch, "programs_allowed")
 			}
 			ch["workspace_id"] = scr.workspaceID
 			ch["identity"] = map[string]any{

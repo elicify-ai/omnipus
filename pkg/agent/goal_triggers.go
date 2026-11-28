@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
 
@@ -457,10 +458,10 @@ func (al *AgentLoop) recordGoalRouting(sessionID, goalID, channel, chatID, sessi
 	if goalID == "" {
 		return
 	}
-	if _, uerr := resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+	if _, uerr := resolveGoalRecordStore().Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.SetRoute(channel, chatID)
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		logger.WarnCF("agent", "goal trigger: could not persist goal routing onto the goal record",
 			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": uerr.Error()})
 	}
@@ -1127,7 +1128,7 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGo
 	// the record too (GOAL-FR-006); its Round++ is then pinned back to
 	// `newRound`, which is exactly the value the old SetMeta wrote, so the
 	// exhaustion gate's arithmetic is unchanged.
-	if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, func(cur *goal.Goal) error {
+	if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if aa.ag.verdict != nil {
 			if rerr := cur.RecordVerdict(aa.ag.verdict, aa.ag.reasonText, time.Now().UTC()); rerr != nil {
 				return rerr
@@ -1139,7 +1140,7 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGo
 		cur.LatestReason = aa.ag.reasonText
 		cur.LastActivityAt = time.Now().UTC()
 		return nil
-	}); perr != nil {
+	}}); perr != nil {
 		// silent-M3 (Phase-2 review): do NOT silently continue on an
 		// un-persisted round counter. The exhaustion gate (attempt >=
 		// maxRounds) re-reads the record's Round on the next adjudication;
@@ -1205,11 +1206,11 @@ func (ag *agentLoopRunGoalAdjudication) projectVerdict() {
 		// and are safe to fall back to.
 		ag.projectedCriteria, ag.projectedDoD = fresh.Criteria, fresh.DoD
 		if pstats.Applied > 0 {
-			if _, uerr := ag.gstore.Update(fresh.GoalID, func(cur *goal.Goal) error {
+			if _, uerr := ag.gstore.Update(fresh.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 				cur.Criteria = uc
 				cur.DoD = ud
 				return nil
-			}); uerr != nil {
+			}}); uerr != nil {
 				logger.WarnCF("agent",
 					"goal trigger: could not persist the verdict projection onto the goal record (GOAL-FR-036) — emitting the durable (unprojected) criterion statuses instead",
 					map[string]any{"session_id": ag.sessionID, "goal_id": fresh.GoalID, "error": uerr.Error()})
@@ -1224,13 +1225,13 @@ func (ag *agentLoopRunGoalAdjudication) projectVerdict() {
 
 // finishMetGoal persists a met verdict and completes the goal's terminal transition.
 func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudicationFlow {
-	if _, perr := ag.gstore.Update(ag.rec.GoalID, func(cur *goal.Goal) error {
+	if _, perr := ag.gstore.Update(ag.rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if rerr := cur.RecordVerdict(ag.verdict, ag.reasonText, time.Now().UTC()); rerr != nil {
 			return rerr
 		}
 		cur.Round = ag.attempt
 		return nil
-	}); perr != nil {
+	}}); perr != nil {
 		// Same discipline as the unmet branch's silent-M3 abort: do NOT
 		// terminate a goal whose winning verdict the store refused, or the
 		// record is frozen `met` with no evidence of why, permanently.
@@ -1973,7 +1974,10 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUpReserved(sessionID, goalID, source
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
-		Metadata:            metadata,
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
+		Metadata:   metadata,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
@@ -2038,10 +2042,10 @@ func (s *goalTriggerState) routeFor(sessionID string) (goalRoute, error) {
 			logger.WarnCF("agent", "goal trigger: no routing available (neither in-memory nor persisted) — keeper cannot reach the goal's channel",
 				map[string]any{"session_id": sessionID})
 			if g != nil {
-				if _, werr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+				if _, werr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 					cur.RecordRoutingLost()
 					return nil
-				}); werr != nil {
+				}}); werr != nil {
 					logger.WarnCF("agent", "goal trigger: could not persist routing-lost reason",
 						map[string]any{"session_id": sessionID, "goal_id": g.GoalID, "error": werr.Error()})
 				}
@@ -2109,6 +2113,7 @@ func (al *AgentLoop) handleBareGoalClaim(
 				Sender:    bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
 				Content:   goalStatusBareClaimSteer,
 				SessionID: sessionID, SessionKey: opts.SessionKey,
+				Provenance: tools.ToolTurnProvenance(ctx),
 			})
 		}
 		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
@@ -2152,12 +2157,12 @@ func (al *AgentLoop) handleBareGoalClaim(
 	}
 	// ADR-086: the round counter and the steering reason live on the goal
 	// record (Round / LatestReason), not the retired session-meta fields.
-	if _, perr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+	if _, perr := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = newRound
 		cur.LatestReason = reason
 		cur.LastActivityAt = time.Now().UTC()
 		return nil
-	}); perr != nil {
+	}}); perr != nil {
 		// bare-claim M3 sibling (gate honesty): the SAME persist-and-WARN
 		// defect Fix-1's silent-M3 fixed in runGoalAdjudication. Do NOT
 		// silently continue on an un-persisted round counter — the exhaustion
@@ -2189,6 +2194,7 @@ func (al *AgentLoop) handleBareGoalClaim(
 					"A second bare completion claim cost a round (%d/%d). Provide [goal:evidence] before GOAL_STATUS: met, or keep working.\n",
 				rec.Prompt, newRound, maxRounds),
 			SessionID: sessionID, SessionKey: opts.SessionKey,
+			Provenance: tools.ToolTurnProvenance(ctx),
 		})
 	}
 	return true
@@ -2240,6 +2246,9 @@ func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, 
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
+		// I-2 / S-109: a goal wake carries the goal's recorded origin,
+		// joined with the session's stored lineage.
+		Provenance: al.goalWakeProvenance(sessionID, goalID),
 		Metadata: map[string]any{
 			"steer_message_id": messageID,
 			"steer_generation": rec.Generation,

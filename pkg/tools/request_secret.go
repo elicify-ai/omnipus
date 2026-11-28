@@ -25,11 +25,11 @@ func (*RequestSecretTool) Name() string           { return "request_secret" }
 func (*RequestSecretTool) Scope() ToolScope       { return ScopeGeneral }
 func (*RequestSecretTool) Category() ToolCategory { return CategoryCommunication }
 func (*RequestSecretTool) Description() string {
-	return "Ask the person to enter a secret on a secure web card and pause this turn. Supply purpose and exactly one recipient: endpoint or provider for an API key; server + env_key for an existing stdio MCP server; instance + field for an existing channel connection; or variable + workspace_id + agent_id for one agent's private environment variable. The server builds the card and field list. Never pass a secret value or ask the person to type it into chat. Submit stores a new version and starts one continuation containing reference names only; configuring an integration requires its approved change tool. Channel-triggered or unattended turns cannot raise a card. Ordinary helpers ask their parent; an Omnipus helper's card appears in the Omnipus main chat."
+	return "Ask the person to enter a secret on a secure web card and pause this turn. Supply purpose and exactly one recipient: endpoint or provider for an API key; server + env_key for an existing stdio MCP server; instance + field for an existing channel connection; or variable + workspace_id + agent_id for one agent's private environment variable; or program for the token of a program in Settings → Programs (its id, for example github). The server builds the card and field list. Never pass a secret value or ask the person to type it into chat. Submit stores a new version and starts one continuation containing reference names only; configuring an integration requires its approved change tool. Channel-triggered or unattended turns cannot raise a card. Ordinary helpers ask their parent; an Omnipus helper's card appears in the Omnipus main chat."
 }
 func (*RequestSecretTool) Parameters() map[string]any {
 	props := make(map[string]any)
-	for _, key := range []string{"purpose", "endpoint", "provider", "server", "env_key", "instance", "field", "variable", "workspace_id", "agent_id"} {
+	for _, key := range []string{"purpose", "endpoint", "provider", "server", "env_key", "instance", "field", "variable", "workspace_id", "agent_id", "program"} {
 		props[key] = map[string]any{"type": "string"}
 	}
 	return map[string]any{"type": "object", "properties": props, "required": []string{"purpose"}, "additionalProperties": false}
@@ -64,7 +64,7 @@ func (t *RequestSecretTool) Execute(ctx context.Context, args map[string]any) *T
 	text := func(key string) string { value, _ := args[key].(string); return value }
 	rec, err := reg.Create(ctx, ToolTranscriptSessionID(ctx), ToolAgentID(ctx), ToolChatID(ctx), ToolTurnOrigin(ctx).Label(), secretrequest.Input{
 		Purpose: text("purpose"), Endpoint: text("endpoint"), Provider: text("provider"), Server: text("server"), EnvKey: text("env_key"), Instance: text("instance"), Field: text("field"),
-		Variable: text("variable"), WorkspaceID: text("workspace_id"), AgentID: text("agent_id"),
+		Variable: text("variable"), WorkspaceID: text("workspace_id"), AgentID: text("agent_id"), Program: text("program"),
 	})
 	if err != nil {
 		auditRefusal("request_refused")

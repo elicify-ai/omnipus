@@ -15,6 +15,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -87,6 +88,24 @@ func SyncTaskGoalRecord(
 	dod []task.AcceptanceCriterion, dodProvided bool,
 	goalMaxRoundsFn func() int,
 ) error {
+	return SyncTaskGoalRecordJoining(gs, t, criteriaProvided, dod, dodProvided, goalMaxRoundsFn, nil)
+}
+
+// SyncTaskGoalRecordJoining is SyncTaskGoalRecord for an agent's edit of the
+// task's criteria or DoD (I-2, S-111): joinProvenance is the task write's
+// Patch.JoinProvenance and lands on the paired goal in the same goal write
+// (on a legacy task's newly created goal it is the goal's first provenance),
+// because a running task session's goal wakes read the goal's provenance.
+// Nil (fresh creation, a person's edit) joins nothing; an empty set (an
+// unresolved turn) makes the goal unresolved.
+func SyncTaskGoalRecordJoining(
+	gs *goal.Store,
+	t *task.Task,
+	criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+	goalMaxRoundsFn func() int,
+	joinProvenance *[]string,
+) error {
 	if !criteriaProvided && !dodProvided {
 		return nil
 	}
@@ -119,9 +138,12 @@ func SyncTaskGoalRecord(
 		if nErr != nil {
 			return fmt.Errorf("build goal record: %w", nErr)
 		}
+		if joinProvenance != nil {
+			g.Provenance = append([]string(nil), *joinProvenance...)
+		}
 		return gs.Create(g)
 	}
-	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(existing.GoalID, goal.Write{Provenance: joinProvenance, Mutate: func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
 				return sErr
@@ -133,7 +155,7 @@ func SyncTaskGoalRecord(
 			}
 		}
 		return nil
-	})
+	}})
 	return err
 }
 
@@ -240,9 +262,9 @@ func RemoveTaskGoalRecords(gs *goal.Store, taskID string) error {
 			continue
 		}
 		goalID := goals[i].GoalID
-		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
+		if _, uErr := gs.Update(goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 			return terminateGoalForOwnerDeletion(g, now)
-		}); uErr != nil {
+		}}); uErr != nil {
 			// Record the fault and still remove the record: a goal that cannot
 			// be transitioned must not therefore be left behind ACTIVE and
 			// unreferenced, which is the worse of the two outcomes.
@@ -415,7 +437,7 @@ func TerminateTaskGoalRecord(
 	now := time.Now().UTC()
 	terminalReason := TerminalGoalReasonForTask(status, reason)
 	transitioned := false
-	updated, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	updated, uErr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive {
 			// Another writer ended it between the read above and this
 			// lock-held mutate. Not a fault — see the idempotence note.
@@ -426,7 +448,7 @@ func TerminateTaskGoalRecord(
 		}
 		transitioned = true
 		return nil
-	})
+	}})
 	if uErr != nil {
 		slog.Warn("task goal: the paired goal record of a terminated task could not be transitioned — "+
 			"it is still ACTIVE (GOAL-FR-015)",
@@ -1441,6 +1463,8 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	// CreatedByAgentID. The parent link is refused for the same reason.
 	if !foreign {
 		tc.entity.OriginSessionID = strings.TrimSpace(ToolTranscriptSessionID(tc.ctx))
+		// FR-041 / S-77: the task carries the creating turn's provenance.
+		tc.entity.Provenance = provenanceStrings(ToolTurnProvenance(tc.ctx))
 		tc.entity.OriginCallID = strings.TrimSpace(ToolCallID(tc.ctx))
 		if tc.t.initiatorFn != nil {
 			tc.entity.Initiator = tc.t.initiatorFn(tc.ctx)
@@ -2331,7 +2355,20 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the criteria/dod change lands on the task record
 	// (dual-write) and then on the paired goal record — creating one if this
 	// is a legacy task's first-ever criteria/dod (see SyncTaskGoalRecord).
-	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent}
+	if tu.patch.Prompt != nil || tu.patch.Description != nil || tu.patch.Title != nil ||
+		tu.criteriaProvided || tu.dodProvided ||
+		tu.patch.Trigger != nil || tu.patch.AgentID != nil || tu.patch.MaxAttempts != nil {
+		// FR-041 / S-111: an agent change to the task's instructions —
+		// prompt, description, title, criteria, DoD, max_attempts (set or
+		// clear: the retry limit is in task.GroupDefinition), trigger (when
+		// it runs) or agent_id (who runs it) — joins its turn's provenance
+		// in the same write (an unresolved turn joins an empty set: fail
+		// closed). applyTriggerField, applyReassignment and applyRetryLimit
+		// set those patch fields only on an accepted change.
+		joined := provenanceStrings(ToolTurnProvenance(tu.ctx))
+		tu.patch.JoinProvenance = &joined
+	}
+	req := TaskWriteRequest{Patch: tu.patch, Prior: tu.triggerSent, Provenance: ToolTurnProvenance(tu.ctx)}
 	if tu.triggerSent {
 		// r17 TK-30: every update that carries a trigger reconciles the live
 		// scheduler under the same lock hold (step 3).
@@ -2342,8 +2379,8 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	}
 	if tu.criteriaProvided || tu.dodProvided {
 		req.SyncGoalDefinition = func(updated *task.Task) error {
-			return SyncTaskGoalRecord(GoalStoreForTasks(tu.t.store), updated,
-				tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn)
+			return SyncTaskGoalRecordJoining(GoalStoreForTasks(tu.t.store), updated,
+				tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn, tu.patch.JoinProvenance)
 		}
 	}
 	out, wErr := WriteTaskReconciled(tu.t.store, tu.taskID, req)
@@ -2588,4 +2625,18 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// delete and a failure returned above, so reaching here means both the
 	// goal record and the task are gone.
 	return NewToolResult(fmt.Sprintf(`{"deleted":%q}`, taskID))
+}
+
+// provenanceStrings is the stored form of a provenance (its origin strings;
+// nil when unresolved).
+func provenanceStrings(p bus.Provenance) []string {
+	origins := p.Origins()
+	if len(origins) == 0 {
+		return nil
+	}
+	out := make([]string, len(origins))
+	for i, o := range origins {
+		out[i] = string(o)
+	}
+	return out
 }

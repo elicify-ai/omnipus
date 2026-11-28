@@ -25,7 +25,7 @@ func TestL1WU1GoalFollowUp_MissingCanonicalOwnerEndsFailedWithVisibleReason(t *t
 		t.Run(owner, func(t *testing.T) {
 			_, sid := newGoalTestSession(t, al, owner)
 			gid := activateTestGoalRecord(t, sid, "do not reassign this goal")
-			_, err := gs.Update(gid, func(g *goal.Goal) error { g.SetRoute("webchat", "operator"); return nil })
+			_, err := gs.Update(gid, goal.Write{Mutate: func(g *goal.Goal) error { g.SetRoute("webchat", "operator"); return nil }})
 			require.NoError(t, err)
 			al.recordGoalRouting(sid, gid, "webchat", "operator", "agent:"+owner+":session:"+sid, owner)
 			t.Cleanup(func() {

@@ -2040,6 +2040,7 @@ components:
             - channel_credential
             - mailbox_password
             - agent_private
+            - program
             - unbound
           description: Recipient kind.
         lines:
@@ -2051,6 +2052,13 @@ components:
             minLength: 1
             maxLength: 500
           description: Display lines, in order. Never null, never empty.
+        program_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: >
+            Id of the program the card stores a token for. Present when `kind` is
+            `program`, absent otherwise (spec cli-credentials FR-051).
     SecretRequestField:
       title: SecretRequestField
       description: >
@@ -2266,6 +2274,14 @@ components:
             - stopped
             - interrupted
             - refused
+        program_generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Present when the request is `submitted` and its recipient kind is
+            `program`: the program credential generation the submission
+            committed (spec cli-credentials FR-051).
         continuation_unconfirmed:
           type: boolean
           description: >

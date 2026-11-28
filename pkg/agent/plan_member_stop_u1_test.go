@@ -66,9 +66,9 @@ func u1ActivateTaskGoal(t *testing.T, taskID, boundSessionID string) string {
 	if cerr := gs.Create(g); cerr != nil {
 		t.Fatalf("u1ActivateTaskGoal: Create: %v", cerr)
 	}
-	if _, uerr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(boundSessionID, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("u1ActivateTaskGoal: Activate: %v", uerr)
 	}
 	return g.GoalID

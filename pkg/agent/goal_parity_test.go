@@ -542,12 +542,12 @@ func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 	// the seven-day calendar brake and sweep.
 	now := time.Now().UTC()
 	expiredAt := now.Add(-time.Duration(config.DefaultIdleExpiryDays) * 24 * time.Hour)
-	if _, err := resolveGoalRecordStore().Update(gid, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = expiredAt
 		started := expiredAt
 		cur.StartedAt = &started
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("aging the goal record past the idle-expiry brake: %v", err)
 	}
 

@@ -158,6 +158,14 @@ func Open(dir string, opts ...Option) (*Repo, error) {
 		}
 	}
 
+	// H55 v2: the repo's own local config refuses pushes that would move or
+	// delete its refs, whatever global config the agent's shell sets. Written
+	// on every Open (new or existing repo); a repo whose pins cannot be
+	// written is not handed out.
+	if err := pinReceiveConfig(gitRepo, dir); err != nil {
+		return nil, err
+	}
+
 	// D17 (FR-152 caveat 3): a repo produced purely via go-git is byte-for-
 	// byte indistinguishable from one built by the real `git` binary, so an
 	// agent with bash access could tamper with it directly (commit --amend,

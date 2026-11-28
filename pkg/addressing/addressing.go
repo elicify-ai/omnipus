@@ -144,6 +144,11 @@ type Capture struct {
 	// for a request a person sent from a chat, so delivery of a held request can
 	// move that message's row on. Empty for an agent sender or a connector.
 	SenderMessageID string `json:"sender_message_id,omitempty"`
+	// Provenance is the sending turn's provenance origins (connected
+	// programs I-2), recorded with the request so its wake — at admission,
+	// after a restart or on held delivery — joins it into the receiving turn.
+	// Empty is unresolved (fail closed). Origins are bus.Origin strings.
+	Provenance []string `json:"provenance,omitempty"`
 }
 
 // Validate checks a capture is complete enough to route an answer.

@@ -95,6 +95,13 @@ type InboundMessage struct {
 	// task/scheduled inbound messages never set this field, so it is empty
 	// there structurally — not by a runtime guard.
 	AsyncOriginAgentID string `json:"async_origin_agent_id,omitempty"`
+	// Provenance is where the work this message feeds came from (connected
+	// programs, I-2): set from nothing only by a channel adapter
+	// ({connector:<id>}), the web-chat handler ({web}) and the heartbeat
+	// and person-created work ({independent}); every other producer copies
+	// or joins the provenance of the turn that produced it. The zero value is
+	// unresolved, which never makes a turn eligible (fail closed).
+	Provenance Provenance `json:"provenance,omitzero"`
 	// AsyncTranscriptSessionID is the transcript-store session ID the
 	// originating turn was persisting to (turnState.transcriptSessionID). Set
 	// ONLY by AsyncNotifier.Notify (FIX 5d), mirroring AsyncOriginAgentID

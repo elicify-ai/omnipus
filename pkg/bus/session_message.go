@@ -52,6 +52,9 @@ type SessionMessageEvent struct {
 	// parent_to_child kind — a valid child naming another valid child (or an
 	// event with no principal at all) is refused.
 	Principal session.Principal
+	// Provenance is the publishing turn's provenance (I-2); a steer message
+	// joins it into the receiving turn. Zero value = unresolved.
+	Provenance Provenance
 }
 
 // PublishSessionMessage publishes evt on the bus's dedicated session-message

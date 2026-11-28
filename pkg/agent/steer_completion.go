@@ -700,6 +700,7 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 			SourceKind:          "steer_goal_loop",
 			SenderCanonicalID:   followUp.Sender.CanonicalID,
 			Content:             followUp.Content,
+			Provenance:          followUp.Provenance,
 			Metadata: map[string]any{
 				"steer_message_id": uuid.NewString(),
 				"steer_generation": rec.Generation,

@@ -74,9 +74,9 @@ func mustCreateCapTestGoal(t *testing.T, s *goal.Store, ownerKind generated.Goal
 		return g
 	}
 	sessionID := "sess-" + ownerID
-	updated, err := s.Update(g.GoalID, func(gg *goal.Goal) error {
+	updated, err := s.Update(g.GoalID, goal.Write{Mutate: func(gg *goal.Goal) error {
 		return gg.Activate(sessionID, time.Now())
-	})
+	}})
 	if err != nil {
 		t.Fatalf("goal store Update/Activate(%s/%s): %v", ownerKind, ownerID, err)
 	}
@@ -171,9 +171,9 @@ func TestTaskGoalsExemptFromActiveLoopCap(t *testing.T) {
 		if len(firstActive) == 0 {
 			t.Fatal("test setup: expected at least one active session-owned goal to terminate")
 		}
-		if _, err := s.Update(firstActive[0].GoalID, func(gg *goal.Goal) error {
+		if _, err := s.Update(firstActive[0].GoalID, goal.Write{Mutate: func(gg *goal.Goal) error {
 			return gg.Terminate(generated.GoalStateCleared, "test cleanup", time.Now())
-		}); err != nil {
+		}}); err != nil {
 			t.Fatalf("Terminate one chat goal to free a slot: %v", err)
 		}
 		ok2, active2, _ := h.pe.Admit("goal")

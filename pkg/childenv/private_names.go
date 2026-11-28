@@ -6,6 +6,7 @@ package childenv
 
 import (
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -31,6 +32,14 @@ var setupLayerNames = map[string]struct{}{
 	"TMPDIR": {}, "NPM_CONFIG_CACHE": {}, "PIP_CACHE_DIR": {},
 }
 
+// gitLoginNames are the git environment-configuration names Omnipus sets for
+// connected git logins (connected-programs spec FR-013): a private variable or
+// a program token variable must never set them.
+var gitLoginNames = map[string]struct{}{"GIT_CONFIG_COUNT": {}, "GIT_CONFIG_PARAMETERS": {}}
+
+// gitLoginPrefixes are the indexed git environment-configuration families.
+var gitLoginPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+
 // protectedPrivatePrefixes are whole families no private variable may use.
 var protectedPrivatePrefixes = []string{"OMNIPUS_", "LD_", "DYLD_"}
 
@@ -40,6 +49,32 @@ var privateNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 // the grammar ^[A-Z][A-Z0-9_]{0,63}$ and the protected set. The returned
 // error message names the rule that refused the name (US-7 AS-5).
 func CheckPrivateVariableName(name string) error {
+	return checkPrivateVariableNameFor(name, runtime.GOOS == "windows")
+}
+
+// windowsSystemNames are the Windows system variables every Windows child's
+// base environment carries (ruling WU19-win 2). None carries a secret; they
+// play the role HOME and TMPDIR play on Unix. Windows matches them
+// case-insensitively.
+var windowsSystemNames = []string{
+	"SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP", "USERPROFILE",
+}
+
+// isWindowsSystemName reports whether name is one of windowsSystemNames,
+// ignoring case.
+func isWindowsSystemName(name string) bool {
+	for _, key := range windowsSystemNames {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkPrivateVariableNameFor is CheckPrivateVariableName with the platform
+// made explicit: on Windows the Windows system variables are protected too
+// (#1960 S1 security round 2, F-win).
+func checkPrivateVariableNameFor(name string, windows bool) error {
 	if !privateNamePattern.MatchString(name) {
 		if upper := strings.ToUpper(name); upper != name && privateNamePattern.MatchString(upper) {
 			return privateNameError(name + " is refused: private variable names are uppercase only (A-Z, 0-9 and _)")
@@ -52,8 +87,19 @@ func CheckPrivateVariableName(name string) error {
 	if _, ok := allowedEnvKeys[name]; ok {
 		return privateNameError(name + " is a protected name: it is part of every command's base environment")
 	}
+	if windows && isWindowsSystemName(name) {
+		return privateNameError(name + " is a protected name: it is part of every command's base environment on Windows")
+	}
 	if _, ok := setupLayerNames[name]; ok {
 		return privateNameError(name + " is a protected name: environment_setup sets it")
+	}
+	if _, ok := gitLoginNames[name]; ok {
+		return privateNameError(name + " is a protected name: Omnipus sets it for connected git logins")
+	}
+	for _, prefix := range gitLoginPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return privateNameError(name + " is a protected name: Omnipus sets it for connected git logins")
+		}
 	}
 	for _, prefix := range append(append([]string(nil), allowedEnvPrefixes...), protectedPrivatePrefixes...) {
 		if strings.HasPrefix(name, prefix) {

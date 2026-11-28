@@ -50,10 +50,10 @@ func r6SignalGapHoldFifth(t *testing.T, f *r6PublicFixture) chan struct{} {
 	require.NotNil(t, current.ExecutionID)
 	require.NotEqual(t, prior.ExecutionID.RunID, current.ExecutionID.RunID)
 	require.Equal(t, prior.Generation+1, current.Generation)
-	_, err = goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, func(g *goal.Goal) error {
+	_, err = goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.ZeroOutputPushes = 4 // four completed outcomes; the fifth is still running
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 	return gate
 }

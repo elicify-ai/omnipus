@@ -666,6 +666,10 @@ func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *conf
 	// agent's actual effective value.
 	memEnabled := ac.MemoryEnabledEffective()
 	ag.MemoryEnabled = &memEnabled
+	// programs (connected-programs FR-007): always present, [] for an agent
+	// with every program off.
+	programsOn := append([]string{}, ac.Programs...)
+	ag.Programs = &programsOn
 	// voice: echo the persisted persona identifier. Previously decoded and
 	// counted as changed on PUT but never written or read back.
 	if v := strings.TrimSpace(ac.Voice); v != "" {

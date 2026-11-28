@@ -1,0 +1,13 @@
+{
+  "id": "github",
+  "kind": "preset",
+  "display_name": "GitHub",
+  "program_words": ["gh", "git"],
+  "token_variables": ["GH_TOKEN", "GITHUB_TOKEN"],
+  "network_sites": ["github.com", "api.github.com", "uploads.github.com",
+                    "codeload.github.com", "objects.githubusercontent.com",
+                    "raw.githubusercontent.com"],
+  "git": {"host": "github.com", "username": "x-access-token"},
+  "identity_check": {"program_word": "gh", "args": ["api", "user", "--jq", ".login"],
+                     "timeout_seconds": 20, "max_output_bytes": 4096}
+}

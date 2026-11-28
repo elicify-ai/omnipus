@@ -48,6 +48,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // emitPreflightEscalation writes the FR-032(b)/FR-046 shell.preflight_
@@ -641,6 +642,7 @@ const onceEgressTokenPrefix = "once-"
 // failure — the caller treats that as "grant nothing", same fail-closed
 // posture as every token-minting path in this file.
 func newOnceEgressToken() string {
+	testseam.EgressTokenMinted(testseam.EgressTokenOnce) // no-op outside the s1seams test build
 	buf := make([]byte, 16)
 	if _, err := cryptorand.Read(buf); err != nil {
 		return ""
@@ -684,10 +686,48 @@ func (t *ExecTool) grantEgressHosts(sessionID, agentID string, hosts []string, s
 // (turnKernelPolicy) applies this via applyAutoNetworkPosture — and the D-13
 // egress-proxy token (see grantEgressHosts) this call's child should present,
 // "" when there is none to present.
+//
+// Connected programs (FR-015): a segment whose visible program word belongs
+// to an eligible switched-on entry is a known-host need. The union of those
+// entries' sites is granted for this run without a prompt; only the other
+// segments are classified as today (deny rules ran before this, FR-015).
 func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, sessionID, agentID, toolCallID string) (granted bool, egressToken string, result *ToolResult) {
+	sites, residual := programSiteSplit(turnProgramsFrom(ctx), command)
+	granted, egressToken, result = t.networkPreflightFor(ctx, residual, command, sessionID, agentID, toolCallID)
+	if result != nil || len(sites) == 0 {
+		return granted, egressToken, result
+	}
+	return true, t.grantProgramSites(egressToken, sites, sessionID, agentID), nil
+}
+
+// grantProgramSites adds the program sites to this run's egress token. A
+// single-use token gets them directly; a session-scoped one is never widened
+// (the grant is for this run only), so a fresh single-use token carries the
+// session's approved hosts plus the sites.
+func (t *ExecTool) grantProgramSites(token string, sites []string, sessionID, agentID string) string {
+	if t.proxy == nil {
+		return token
+	}
+	if strings.HasPrefix(token, onceEgressTokenPrefix) {
+		t.proxy.GrantRunHosts(token, sites)
+		return token
+	}
+	once := newOnceEgressToken()
+	hosts := append([]string(nil), sites...)
+	if token != "" {
+		hosts = append(hosts, t.approvalGrants.NetworkHostsFor(sessionID, agentID)...)
+	}
+	t.proxy.GrantRunHosts(once, hosts)
+	return once
+}
+
+// networkPreflightFor is the D8 orchestration over classify (the command, or
+// its segments that name no connected program); command is what the approval
+// and audit show.
+func (t *ExecTool) networkPreflightFor(ctx context.Context, classify, command, sessionID, agentID, toolCallID string) (granted bool, egressToken string, result *ToolResult) {
 	hasGrant := t.approvalGrants.HasNetworkGrant(sessionID, agentID)
 	approvedHosts := t.approvalGrants.NetworkHostsFor(sessionID, agentID)
-	verdict := EvaluateNetworkPreflight(command, hasGrant, approvedHosts)
+	verdict := EvaluateNetworkPreflight(classify, hasGrant, approvedHosts)
 	if !verdict.NeedsEscalation() {
 		// Re-push (idempotent) rather than assume a prior call already
 		// registered this session's hosts with the proxy — cheap, and

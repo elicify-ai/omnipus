@@ -1560,6 +1560,7 @@ type ValidationReport = {
   types?: Array<string> | undefined;
 };
 type Agent = {
+  programs?: Array<string> | undefined;
   revision: ConfigurationRevision;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
@@ -1787,6 +1788,7 @@ type ExecutorConfigCreate = {
   cli_args?: string | undefined;
 };
 type AgentUpdateRequest = {
+  programs?: Array<string> | undefined;
   revision: ConfigurationRevision;
   mcp_servers?: Array<AgentMCPBinding> | undefined;
   tool_policy_changes?: ToolPolicyChanges | undefined;
@@ -1825,6 +1827,7 @@ type ExecutorConfigUpdate = Partial<{
   cli_args: string;
 }>;
 type AgentDetail = {
+  programs?: Array<string> | undefined;
   id: string;
   name?: string | undefined;
   description?: string | undefined;
@@ -2454,6 +2457,63 @@ type ChannelOutboundWriteResponse = {
   outbound: ChannelOutbound;
   revision: string;
   warning?: string | undefined;
+};
+type ChannelProgramsSetting = {
+  allowed: boolean;
+  revision: ConfigurationRevision;
+};
+type ProgramCustomRequest = Partial<{
+  display_name: string;
+  program_words: Array<string>;
+  token_variables: Array<string>;
+  network_sites: Array<string>;
+  git: ProgramGit;
+  identity_check: ProgramIdentityCheck;
+  revision: number;
+}>;
+type ProgramGit = {
+  host: string;
+  username?: string | undefined;
+};
+type ProgramIdentityCheck = {
+  program_word: string;
+  args?: Array<string> | undefined;
+  timeout_seconds?: number | undefined;
+  max_output_bytes?: number | undefined;
+};
+type ProgramEntry = {
+  id: string;
+  kind: "preset" | "custom";
+  display_name: string;
+  program_words: Array<string>;
+  token_variables: Array<string>;
+  network_sites: Array<string>;
+  git?: ProgramGit | undefined;
+  identity_check?: ProgramIdentityCheck | undefined;
+  connection: ProgramConnection;
+  enabled_agent_ids: Array<string>;
+  revision: number;
+};
+type ProgramConnection = {
+  state:
+    | "not_connected"
+    | "checking"
+    | "connected"
+    | "saved_not_checked"
+    | "check_failed";
+  generation: number;
+  account_label?: string | undefined;
+  checked_at?: string | undefined;
+  message?: string | undefined;
+};
+type ProgramList = {
+  entries: Array<ProgramEntry>;
+  web_chat_allowed: boolean;
+  revision: ConfigurationRevision;
+};
+type ProgramSettingsUpdate = {
+  web_chat_allowed: boolean;
+  revision: ConfigurationRevision;
 };
 type MailboxListResponse = {
   mailboxes: Array<Mailbox>;
@@ -3666,6 +3726,7 @@ type SecretNameEntry = {
     | "channel_credential"
     | "mailbox_password"
     | "agent_private"
+    | "program"
     | "unbound";
   version: number;
   recipient: {
@@ -3675,8 +3736,10 @@ type SecretNameEntry = {
       | "channel_credential"
       | "mailbox_password"
       | "agent_private"
+      | "program"
       | "unbound";
     lines: Array<string>;
+    program_id?: string | undefined;
   };
   owner?: agent | undefined;
   consumers: Array<string>;
@@ -4847,6 +4910,7 @@ export const ContextWindowSource = z.enum([
 ]);
 export const Agent: z.ZodType<Agent> = z
   .object({
+    programs: z.array(z.string().min(1).max(64)).max(32).optional(),
     revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
     persistence_status: ConfigurationPersistenceStatus.optional(),
     activation_status: ConfigurationActivationStatus.optional(),
@@ -4987,6 +5051,7 @@ export const ExecutorConfigUpdate: z.ZodType<ExecutorConfigUpdate> = z
   })
   .partial();
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
+  programs: z.array(z.string().min(1).max(64)).max(32).optional(),
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
   tool_policy_changes: ToolPolicyChanges.optional(),
@@ -5694,6 +5759,76 @@ export const ChannelOutboundRejection = z.object({
     .max(10)
     .optional(),
   omitted_count: z.number().int().gte(1).optional(),
+});
+export const ChannelProgramsSetting: z.ZodType<ChannelProgramsSetting> =
+  z.object({
+    allowed: z.boolean(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  });
+export const ProgramGit: z.ZodType<ProgramGit> = z.object({
+  host: z.string().min(1).max(253),
+  username: z
+    .string()
+    .regex(/^[A-Za-z0-9._@-]{1,64}$/)
+    .optional(),
+});
+export const ProgramIdentityCheck: z.ZodType<ProgramIdentityCheck> = z.object({
+  program_word: z.string().min(1).max(64),
+  args: z.array(z.string().max(256)).max(16).optional(),
+  timeout_seconds: z.number().int().gte(1).lte(30).optional(),
+  max_output_bytes: z.number().int().optional(),
+});
+export const ProgramConnection: z.ZodType<ProgramConnection> = z.object({
+  state: z.enum([
+    "not_connected",
+    "checking",
+    "connected",
+    "saved_not_checked",
+    "check_failed",
+  ]),
+  generation: z.number().int().gte(0),
+  account_label: z.string().min(1).max(128).optional(),
+  checked_at: z.string().datetime({ offset: true }).optional(),
+  message: z.string().max(500).optional(),
+});
+export const ProgramEntry: z.ZodType<ProgramEntry> = z.object({
+  id: z.string().min(1).max(64),
+  kind: z.enum(["preset", "custom"]),
+  display_name: z.string().min(1).max(64),
+  program_words: z.array(z.string()),
+  token_variables: z.array(z.string()),
+  network_sites: z.array(z.string()),
+  git: ProgramGit.optional(),
+  identity_check: ProgramIdentityCheck.optional(),
+  connection: ProgramConnection,
+  enabled_agent_ids: z.array(z.string()),
+  revision: z.number().int().gte(0),
+});
+export const ProgramList: z.ZodType<ProgramList> = z.object({
+  entries: z.array(ProgramEntry),
+  web_chat_allowed: z.boolean(),
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+});
+export const ProgramCustomRequest: z.ZodType<ProgramCustomRequest> = z
+  .object({
+    display_name: z.string(),
+    program_words: z.array(z.string()),
+    token_variables: z.array(z.string()),
+    network_sites: z.array(z.string()),
+    git: ProgramGit,
+    identity_check: ProgramIdentityCheck,
+    revision: z.number().int().gte(0),
+  })
+  .partial();
+export const ProgramSettingsUpdate: z.ZodType<ProgramSettingsUpdate> = z.object(
+  {
+    web_chat_allowed: z.boolean(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  }
+);
+export const ProgramCredentialRequest = z.object({
+  value: z.string(),
+  expected_generation: z.number().int().gte(0).optional(),
 });
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
@@ -8041,6 +8176,7 @@ export const SecretRequestState = z.object({
   ]),
   reference_names: z.array(z.string().min(1).max(256)).max(8).optional(),
   updated_at: z.string().datetime({ offset: true }),
+  program_generation: z.number().int().gte(1).optional(),
 });
 export const SecretSubmitRequest = z.union([z.unknown(), z.unknown()]);
 export const agent: z.ZodType<agent> = z.object({
@@ -8055,6 +8191,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
     "channel_credential",
     "mailbox_password",
     "agent_private",
+    "program",
     "unbound",
   ]),
   version: z.number().int().gte(1),
@@ -8065,9 +8202,11 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
       "channel_credential",
       "mailbox_password",
       "agent_private",
+      "program",
       "unbound",
     ]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+    program_id: z.string().min(1).max(64).optional(),
   }),
   owner: agent.optional(),
   consumers: z.array(z.string().min(1).max(200)).max(64),
@@ -8446,6 +8585,7 @@ export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
   warning: z.string().optional(),
 });
 export const AgentDetail: z.ZodType<AgentDetail> = z.object({
+  programs: z.array(z.string().min(1).max(64)).max(32).optional(),
   id: z.string(),
   name: z.string().optional(),
   description: z.string().optional(),
@@ -10669,6 +10809,87 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/channels/:id/programs",
+    alias: "getChannelPrograms",
+    description: `Spec cli-credentials FR-009 (S1). Signed-in person&#x27;s browser session only. Absent setting reads &#x60;allowed: false&#x60;.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ChannelProgramsSetting,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/channels/:id/programs",
+    alias: "setChannelPrograms",
+    description: `Spec cli-credentials FR-009 (S1). The only writer of &#x60;programs_allowed&#x60;; set_config and the generic config writer refuse it. Signed-in person&#x27;s browser session only; a stale revision answers 409.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelProgramsSetting,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ChannelProgramsSetting,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/channels/:id/routing",
     alias: "getChannelRouting",
     description: `Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — &#x60;bound: false&#x60; with empty ids (FR-128). Never an invented or legacy destination.
@@ -10894,6 +11115,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `The key is owned by a connected program: &quot;&lt;reference&gt; belongs to the program &lt;name&gt;. Change it in Settings -&gt; Programs.&quot; No store change (spec cli-credentials FR-048).
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 422,
         description: `Key field is required (empty key).`,
         schema: ErrorResponse,
@@ -10930,6 +11157,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Credential key not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The key is owned by a connected program: &quot;&lt;reference&gt; belongs to the program &lt;name&gt;. Change it in Settings -&gt; Programs.&quot; No store change (spec cli-credentials FR-048).
+`,
         schema: ErrorResponse,
       },
       {
@@ -14080,6 +14313,343 @@ Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1
   },
   {
     method: "get",
+    path: "/programs",
+    alias: "listPrograms",
+    description: `Spec cli-credentials FR-002 (S1). Presets and custom entries with their value-free connection state. Signed-in person&#x27;s browser session only.
+`,
+    requestFormat: "json",
+    response: ProgramList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/programs",
+    alias: "createProgram",
+    description: `Spec cli-credentials FR-019 (S1), dataset D-2. At most 32 custom entries. Signed-in person&#x27;s browser session only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProgramCustomRequest,
+      },
+    ],
+    response: ProgramEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/programs/:id",
+    alias: "updateProgram",
+    description: `Spec cli-credentials FR-019, FR-042 (S1). Requires &#x60;revision&#x60;; a stale revision or a git-host conflict for an agent the entry is on for answers 409. Presets answer 422.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProgramCustomRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ProgramEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/programs/:id",
+    alias: "deleteProgram",
+    description: `Spec cli-credentials FR-019 (S1). Refused 409 while the entry is on for an agent (the message names the agent); presets answer 422.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/programs/:id/check",
+    alias: "recheckProgram",
+    description: `Spec cli-credentials FR-023, FR-047 (S1). Supersedes a running check; the generation is unchanged.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ProgramEntry,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/programs/:id/credential",
+    alias: "saveProgramCredential",
+    description: `Spec cli-credentials FR-003, FR-004, FR-006, FR-043 (S1). Answers the entry in &#x60;checking&#x60; with the new generation. A body over 65,536 bytes answers 413; a failed save keeps the previous token (500).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProgramCredentialRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ProgramEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 413,
+        description: `Body larger than 65,536 bytes.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/programs/:id/credential",
+    alias: "disconnectProgram",
+    description: `Spec cli-credentials FR-023 (S1). Increments the generation; agent switches stay on.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ProgramEntry,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/programs/settings",
+    alias: "updateProgramSettings",
+    description: `Spec cli-credentials FR-009 (S1). Independent work follows this setting (founder Q1 &#x3D; A). Signed-in person&#x27;s browser session only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProgramSettingsUpdate,
+      },
+    ],
+    response: ProgramList,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/providers",
     alias: "listProviders",
     description: `Returns all configured LLM providers with connection status and available model list.
@@ -15033,6 +15603,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The stored request&#x27;s recipient kind is &#x60;program&#x60; and the caller is not a signed-in person&#x27;s browser session (&quot;this action requires a signed-in person&quot;). Decided before the body is read (spec cli-credentials FR-028).
+`,
         schema: ErrorResponse,
       },
       {
@@ -19371,8 +19947,9 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "program", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+    program_id: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -19421,6 +19998,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    program_generation: z.number().int().min(1).optional(),
     continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),

@@ -9023,6 +9023,123 @@ func (e ProbeProviderResponseValidationOutcome) Valid() bool {
 	}
 }
 
+// Defines values for ProgramConnectionState.
+const (
+	ProgramConnectionStateCheckFailed     ProgramConnectionState = "check_failed"
+	ProgramConnectionStateChecking        ProgramConnectionState = "checking"
+	ProgramConnectionStateConnected       ProgramConnectionState = "connected"
+	ProgramConnectionStateNotConnected    ProgramConnectionState = "not_connected"
+	ProgramConnectionStateSavedNotChecked ProgramConnectionState = "saved_not_checked"
+)
+
+// Valid indicates whether the value is a known member of the ProgramConnectionState enum.
+func (e ProgramConnectionState) Valid() bool {
+	switch e {
+	case ProgramConnectionStateCheckFailed:
+		return true
+	case ProgramConnectionStateChecking:
+		return true
+	case ProgramConnectionStateConnected:
+		return true
+	case ProgramConnectionStateNotConnected:
+		return true
+	case ProgramConnectionStateSavedNotChecked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProgramEntryConnectionState.
+const (
+	ProgramEntryConnectionStateCheckFailed     ProgramEntryConnectionState = "check_failed"
+	ProgramEntryConnectionStateChecking        ProgramEntryConnectionState = "checking"
+	ProgramEntryConnectionStateConnected       ProgramEntryConnectionState = "connected"
+	ProgramEntryConnectionStateNotConnected    ProgramEntryConnectionState = "not_connected"
+	ProgramEntryConnectionStateSavedNotChecked ProgramEntryConnectionState = "saved_not_checked"
+)
+
+// Valid indicates whether the value is a known member of the ProgramEntryConnectionState enum.
+func (e ProgramEntryConnectionState) Valid() bool {
+	switch e {
+	case ProgramEntryConnectionStateCheckFailed:
+		return true
+	case ProgramEntryConnectionStateChecking:
+		return true
+	case ProgramEntryConnectionStateConnected:
+		return true
+	case ProgramEntryConnectionStateNotConnected:
+		return true
+	case ProgramEntryConnectionStateSavedNotChecked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProgramEntryKind.
+const (
+	ProgramEntryKindCustom ProgramEntryKind = "custom"
+	ProgramEntryKindPreset ProgramEntryKind = "preset"
+)
+
+// Valid indicates whether the value is a known member of the ProgramEntryKind enum.
+func (e ProgramEntryKind) Valid() bool {
+	switch e {
+	case ProgramEntryKindCustom:
+		return true
+	case ProgramEntryKindPreset:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProgramListEntriesConnectionState.
+const (
+	ProgramListEntriesConnectionStateCheckFailed     ProgramListEntriesConnectionState = "check_failed"
+	ProgramListEntriesConnectionStateChecking        ProgramListEntriesConnectionState = "checking"
+	ProgramListEntriesConnectionStateConnected       ProgramListEntriesConnectionState = "connected"
+	ProgramListEntriesConnectionStateNotConnected    ProgramListEntriesConnectionState = "not_connected"
+	ProgramListEntriesConnectionStateSavedNotChecked ProgramListEntriesConnectionState = "saved_not_checked"
+)
+
+// Valid indicates whether the value is a known member of the ProgramListEntriesConnectionState enum.
+func (e ProgramListEntriesConnectionState) Valid() bool {
+	switch e {
+	case ProgramListEntriesConnectionStateCheckFailed:
+		return true
+	case ProgramListEntriesConnectionStateChecking:
+		return true
+	case ProgramListEntriesConnectionStateConnected:
+		return true
+	case ProgramListEntriesConnectionStateNotConnected:
+		return true
+	case ProgramListEntriesConnectionStateSavedNotChecked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProgramListEntriesKind.
+const (
+	ProgramListEntriesKindCustom ProgramListEntriesKind = "custom"
+	ProgramListEntriesKindPreset ProgramListEntriesKind = "preset"
+)
+
+// Valid indicates whether the value is a known member of the ProgramListEntriesKind enum.
+func (e ProgramListEntriesKind) Valid() bool {
+	switch e {
+	case ProgramListEntriesKindCustom:
+		return true
+	case ProgramListEntriesKindPreset:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PromptGuardResponseLevel.
 const (
 	PromptGuardResponseLevelHigh   PromptGuardResponseLevel = "high"
@@ -10604,6 +10721,7 @@ const (
 	SecretNameEntryKindChannelCredential SecretNameEntryKind = "channel_credential"
 	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
 	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
+	SecretNameEntryKindProgram           SecretNameEntryKind = "program"
 	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
 	SecretNameEntryKindUnbound           SecretNameEntryKind = "unbound"
 )
@@ -10618,6 +10736,8 @@ func (e SecretNameEntryKind) Valid() bool {
 	case SecretNameEntryKindMailboxPassword:
 		return true
 	case SecretNameEntryKindMcpEnv:
+		return true
+	case SecretNameEntryKindProgram:
 		return true
 	case SecretNameEntryKindProviderKey:
 		return true
@@ -10634,6 +10754,7 @@ const (
 	SecretNameEntryRecipientKindChannelCredential SecretNameEntryRecipientKind = "channel_credential"
 	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
 	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
+	SecretNameEntryRecipientKindProgram           SecretNameEntryRecipientKind = "program"
 	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
 	SecretNameEntryRecipientKindUnbound           SecretNameEntryRecipientKind = "unbound"
 )
@@ -10648,6 +10769,8 @@ func (e SecretNameEntryRecipientKind) Valid() bool {
 	case SecretNameEntryRecipientKindMailboxPassword:
 		return true
 	case SecretNameEntryRecipientKindMcpEnv:
+		return true
+	case SecretNameEntryRecipientKindProgram:
 		return true
 	case SecretNameEntryRecipientKindProviderKey:
 		return true
@@ -14885,6 +15008,9 @@ type Agent struct {
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus *AgentPersistenceStatus `json:"persistence_status,omitempty"`
 
+	// Programs Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs.
+	Programs *[]string `json:"programs,omitempty"`
+
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
@@ -15413,6 +15539,9 @@ type AgentDetail struct {
 	// ProgramWarning Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start.
 	ProgramWarning *string `json:"program_warning,omitempty"`
 
+	// Programs Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs.
+	Programs *[]string `json:"programs,omitempty"`
+
 	// Provider The stored primary provider key ("" when not pinned).
 	Provider *string `json:"provider,omitempty"`
 
@@ -15937,6 +16066,9 @@ type AgentUpdateRequest struct {
 
 	// Name New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
 	Name *string `json:"name,omitempty"`
+
+	// Programs Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). The full list replaces the stored one. Accepted only from a signed-in person's browser session; any other caller is refused 403 before any change.
+	Programs *[]string `json:"programs,omitempty"`
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
@@ -16829,6 +16961,14 @@ type ChannelOutboundWriteResponse struct {
 
 // ChannelOutboundWriteResponseOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
 type ChannelOutboundWriteResponseOutboundPolicy string
+
+// ChannelProgramsSetting Whether agents may use connected programs for work that came from this channel connection (spec FR-009; default off). Written only by PUT /channels/{id}/programs; rebinding the channel turns it off.
+type ChannelProgramsSetting struct {
+	Allowed bool `json:"allowed"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+}
 
 // ChannelRejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
 type ChannelRejectedSenders struct {
@@ -24442,6 +24582,201 @@ type ProbeProviderResponse struct {
 // ProbeProviderResponseValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProbeProviderResponseValidationOutcome string
 
+// ProgramConnection The connection state of one program entry (spec FR-004, FR-043). Value-free: never carries the token.
+type ProgramConnection struct {
+	// AccountLabel Present only when `state` is `connected` and the check produced a label.
+	AccountLabel *string    `json:"account_label,omitempty"`
+	CheckedAt    *time.Time `json:"checked_at,omitempty"`
+
+	// Generation Increments on every publication and on disconnect.
+	Generation int64 `json:"generation"`
+
+	// Message Value-free reason text for the current state.
+	Message *string                `json:"message,omitempty"`
+	State   ProgramConnectionState `json:"state"`
+}
+
+// ProgramConnectionState defines model for ProgramConnection.State.
+type ProgramConnectionState string
+
+// ProgramCredentialRequest Save a program token (PUT /programs/{id}/credential, spec FR-003, FR-043). The value is 8 to 16,384 bytes after trimming surrounding whitespace; inner line breaks and NUL are refused. A stale `expected_generation` answers 409.
+type ProgramCredentialRequest struct {
+	ExpectedGeneration *int64 `json:"expected_generation,omitempty"`
+	Value              string `json:"value"`
+}
+
+// ProgramCustomRequest Create (POST /programs) or edit (PUT /programs/{id}) of a custom entry (spec FR-019, dataset D-2). A create requires display_name, program_words and token_variables; an edit requires `revision` and changes only the fields it carries.
+type ProgramCustomRequest struct {
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// Git Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+	Git *struct {
+		Host     string  `json:"host"`
+		Username *string `json:"username,omitempty"`
+	} `json:"git,omitempty"`
+
+	// IdentityCheck The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+	IdentityCheck *struct {
+		Args *[]string `json:"args,omitempty"`
+
+		// MaxOutputBytes Fixed at 4096; any other value is refused.
+		MaxOutputBytes *int `json:"max_output_bytes,omitempty"`
+
+		// ProgramWord One of the entry's program words.
+		ProgramWord string `json:"program_word"`
+
+		// TimeoutSeconds Defaults to 20.
+		TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	} `json:"identity_check,omitempty"`
+	NetworkSites   *[]string `json:"network_sites,omitempty"`
+	ProgramWords   *[]string `json:"program_words,omitempty"`
+	Revision       *int64    `json:"revision,omitempty"`
+	TokenVariables *[]string `json:"token_variables,omitempty"`
+}
+
+// ProgramEntry One connected-program entry, preset or custom (spec cli-credentials S1, FR-001, FR-002). Value-free. Presets are read-only.
+type ProgramEntry struct {
+	// Connection The connection state of one program entry (spec FR-004, FR-043). Value-free: never carries the token.
+	Connection struct {
+		// AccountLabel Present only when `state` is `connected` and the check produced a label.
+		AccountLabel *string    `json:"account_label,omitempty"`
+		CheckedAt    *time.Time `json:"checked_at,omitempty"`
+
+		// Generation Increments on every publication and on disconnect.
+		Generation int64 `json:"generation"`
+
+		// Message Value-free reason text for the current state.
+		Message *string                     `json:"message,omitempty"`
+		State   ProgramEntryConnectionState `json:"state"`
+	} `json:"connection"`
+	DisplayName string `json:"display_name"`
+
+	// EnabledAgentIds Ids of the agents this entry is switched on for.
+	EnabledAgentIds []string `json:"enabled_agent_ids"`
+
+	// Git Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+	Git *struct {
+		Host     string  `json:"host"`
+		Username *string `json:"username,omitempty"`
+	} `json:"git,omitempty"`
+	Id string `json:"id"`
+
+	// IdentityCheck The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+	IdentityCheck *struct {
+		Args *[]string `json:"args,omitempty"`
+
+		// MaxOutputBytes Fixed at 4096; any other value is refused.
+		MaxOutputBytes *int `json:"max_output_bytes,omitempty"`
+
+		// ProgramWord One of the entry's program words.
+		ProgramWord string `json:"program_word"`
+
+		// TimeoutSeconds Defaults to 20.
+		TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	} `json:"identity_check,omitempty"`
+	Kind         ProgramEntryKind `json:"kind"`
+	NetworkSites []string         `json:"network_sites"`
+	ProgramWords []string         `json:"program_words"`
+
+	// Revision Entry revision for optimistic concurrency of custom-entry edits.
+	Revision       int64    `json:"revision"`
+	TokenVariables []string `json:"token_variables"`
+}
+
+// ProgramEntryConnectionState defines model for ProgramEntry.Connection.State.
+type ProgramEntryConnectionState string
+
+// ProgramEntryKind defines model for ProgramEntry.Kind.
+type ProgramEntryKind string
+
+// ProgramGit Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+type ProgramGit struct {
+	Host     string  `json:"host"`
+	Username *string `json:"username,omitempty"`
+}
+
+// ProgramIdentityCheck The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+type ProgramIdentityCheck struct {
+	Args *[]string `json:"args,omitempty"`
+
+	// MaxOutputBytes Fixed at 4096; any other value is refused.
+	MaxOutputBytes *int `json:"max_output_bytes,omitempty"`
+
+	// ProgramWord One of the entry's program words.
+	ProgramWord string `json:"program_word"`
+
+	// TimeoutSeconds Defaults to 20.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+}
+
+// ProgramList The program catalog as listed by GET /programs (spec FR-002). Independent work follows `web_chat_allowed` (founder Q1 = A).
+type ProgramList struct {
+	Entries []struct {
+		// Connection The connection state of one program entry (spec FR-004, FR-043). Value-free: never carries the token.
+		Connection struct {
+			// AccountLabel Present only when `state` is `connected` and the check produced a label.
+			AccountLabel *string    `json:"account_label,omitempty"`
+			CheckedAt    *time.Time `json:"checked_at,omitempty"`
+
+			// Generation Increments on every publication and on disconnect.
+			Generation int64 `json:"generation"`
+
+			// Message Value-free reason text for the current state.
+			Message *string                           `json:"message,omitempty"`
+			State   ProgramListEntriesConnectionState `json:"state"`
+		} `json:"connection"`
+		DisplayName string `json:"display_name"`
+
+		// EnabledAgentIds Ids of the agents this entry is switched on for.
+		EnabledAgentIds []string `json:"enabled_agent_ids"`
+
+		// Git Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+		Git *struct {
+			Host     string  `json:"host"`
+			Username *string `json:"username,omitempty"`
+		} `json:"git,omitempty"`
+		Id string `json:"id"`
+
+		// IdentityCheck The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+		IdentityCheck *struct {
+			Args *[]string `json:"args,omitempty"`
+
+			// MaxOutputBytes Fixed at 4096; any other value is refused.
+			MaxOutputBytes *int `json:"max_output_bytes,omitempty"`
+
+			// ProgramWord One of the entry's program words.
+			ProgramWord string `json:"program_word"`
+
+			// TimeoutSeconds Defaults to 20.
+			TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+		} `json:"identity_check,omitempty"`
+		Kind         ProgramListEntriesKind `json:"kind"`
+		NetworkSites []string               `json:"network_sites"`
+		ProgramWords []string               `json:"program_words"`
+
+		// Revision Entry revision for optimistic concurrency of custom-entry edits.
+		Revision       int64    `json:"revision"`
+		TokenVariables []string `json:"token_variables"`
+	} `json:"entries"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision       string `json:"revision"`
+	WebChatAllowed bool   `json:"web_chat_allowed"`
+}
+
+// ProgramListEntriesConnectionState defines model for ProgramList.Entries.Connection.State.
+type ProgramListEntriesConnectionState string
+
+// ProgramListEntriesKind defines model for ProgramList.Entries.Kind.
+type ProgramListEntriesKind string
+
+// ProgramSettingsUpdate The web-chat program setting (spec FR-009; also governs independent work).
+type ProgramSettingsUpdate struct {
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision       string `json:"revision"`
+	WebChatAllowed bool   `json:"web_chat_allowed"`
+}
+
 // PromptGuardResponse Prompt injection guard level returned by GET /api/v1/security/prompt-guard.
 type PromptGuardResponse struct {
 	// Level Current prompt injection detection strictness level.
@@ -26109,6 +26444,9 @@ type SecretNameEntry struct {
 
 		// Lines Display lines, in order. Never null, never empty.
 		Lines []string `json:"lines"`
+
+		// ProgramId Id of the program the card stores a token for. Present when `kind` is `program`, absent otherwise (spec cli-credentials FR-051).
+		ProgramId *string `json:"program_id,omitempty"`
 	} `json:"recipient"`
 
 	// Reference Reference name of this version.
@@ -26134,6 +26472,9 @@ type SecretOptionsUpdateRequest struct {
 
 // SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
 type SecretRequestState struct {
+	// ProgramGeneration Present when the request is `submitted` and its recipient kind is `program`: the program credential generation the submission committed (spec cli-credentials FR-051).
+	ProgramGeneration *int64 `json:"program_generation,omitempty"`
+
 	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
 	ReferenceNames *[]string               `json:"reference_names,omitempty"`
 	RequestId      string                  `json:"request_id"`
@@ -31107,6 +31448,9 @@ type EnableChannelJSONRequestBody = ChannelEnableRequest
 // SetChannelOutboundJSONRequestBody defines body for SetChannelOutbound for application/json ContentType.
 type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
 
+// SetChannelProgramsJSONRequestBody defines body for SetChannelPrograms for application/json ContentType.
+type SetChannelProgramsJSONRequestBody = ChannelProgramsSetting
+
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
@@ -31202,6 +31546,18 @@ type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 
 // UpdatePlanJSONRequestBody defines body for UpdatePlan for application/json ContentType.
 type UpdatePlanJSONRequestBody = PlanUpdateRequest
+
+// CreateProgramJSONRequestBody defines body for CreateProgram for application/json ContentType.
+type CreateProgramJSONRequestBody = ProgramCustomRequest
+
+// UpdateProgramSettingsJSONRequestBody defines body for UpdateProgramSettings for application/json ContentType.
+type UpdateProgramSettingsJSONRequestBody = ProgramSettingsUpdate
+
+// UpdateProgramJSONRequestBody defines body for UpdateProgram for application/json ContentType.
+type UpdateProgramJSONRequestBody = ProgramCustomRequest
+
+// SaveProgramCredentialJSONRequestBody defines body for SaveProgramCredential for application/json ContentType.
+type SaveProgramCredentialJSONRequestBody = ProgramCredentialRequest
 
 // UpdateDefaultModelJSONRequestBody defines body for UpdateDefaultModel for application/json ContentType.
 type UpdateDefaultModelJSONRequestBody = DefaultModelUpdateRequest

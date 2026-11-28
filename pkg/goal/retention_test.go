@@ -38,12 +38,12 @@ func mustCreateTerminal(t *testing.T, s *Store, ownerKind generated.GoalOwnerKin
 	if err := g.Terminate(state, "test fixture", lastActivityAt); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, err := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		gg.State = g.State
 		gg.TerminalReason = g.TerminalReason
 		gg.LastActivityAt = lastActivityAt
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("Update (terminate+backdate): %v", err)
 	}
 	got, err := s.Get(g.GoalID)
@@ -110,10 +110,10 @@ func TestGoalRecordsSweptOnSessionRetention_ActiveGoalNeverAgedOut(t *testing.T)
 	if err := s.Create(g); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, err := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		gg.LastActivityAt = now.Add(-90 * 24 * time.Hour)
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("Update (backdate): %v", err)
 	}
 
@@ -306,10 +306,10 @@ func TestSweep_DefiningGoalNeverAgedOut(t *testing.T) {
 	if err := s.Create(g); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, err := s.Update(g.GoalID, Write{Mutate: func(gg *Goal) error {
 		gg.LastActivityAt = now.Add(-365 * 24 * time.Hour)
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("Update (backdate): %v", err)
 	}
 

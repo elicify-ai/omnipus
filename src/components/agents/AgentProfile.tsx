@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/accordion'
 import { DeleteAgentControl } from './DeleteAgentControl'
 import { classifyMutationFailure } from '@/lib/mutationOutcome'
+import { AgentProgramsSection } from './AgentProgramsSection'
 import { AgentPrivateSecrets } from './AgentPrivateSecrets'
 import { AGENT_PRIVATE_SECRETS_ENABLED } from '@/lib/featureSwitches'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
@@ -1574,6 +1575,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               onMove={(m, direction) => { markDirty(); moveFallback(m, direction) }}
               onSetProvider={(m, p) => { markDirty(); setFallbackProvider(m, p) }}
               onSetEffort={setFallbackEffort}
+            />
+          )}
+
+          {/* Programs — spec cli-credentials FR-007 / US-2: which connected
+              programs this agent's commands may use. Its own person-only
+              write; the autosave above never sends programs. Hidden for
+              subagent_3p: an external runner has no Omnipus commands. */}
+          {!isExternalAgent && agent && (
+            <AgentProgramsSection
+              agent={agent}
+              agentName={agent.name}
+              onSaved={(resp) => {
+                reviewedAgentRef.current = resp
+                queryClient.setQueryData(['agent', agentId], resp)
+                if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
+              }}
             />
           )}
 

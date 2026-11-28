@@ -24,10 +24,18 @@
 // field and announced; a terminal state is announced and focus returns to
 // the composer.
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { QueryClientContext } from '@tanstack/react-query'
+import { QueryClientContext, useQuery } from '@tanstack/react-query'
 import { Key, LockKey } from '@phosphor-icons/react'
 import type { Agent, Workspace } from '@/lib/api'
-import { getSecretRequest, submitSecretRequest, workspacesQueryKeys } from '@/lib/api'
+import { fetchPrograms, getSecretRequest, programsQueryKeys, submitSecretRequest, workspacesQueryKeys } from '@/lib/api'
+import {
+  PROGRAM_CARD_BROWSER_ONLY,
+  PROGRAM_SECRET_PROMISE,
+  anyChecking,
+  connectionBadgeText,
+  normalizeProgramToken,
+  programTokenError,
+} from '@/lib/programs'
 import type { SessionStateSecretRequest } from '@/lib/api/generated/asyncapi-types'
 import { classifyMutationFailure, mutationFailureMessage } from '@/lib/mutationOutcome'
 import { isApiError } from '@/lib/api-error'
@@ -49,6 +57,7 @@ const RECIPIENT_KIND_LABEL: Record<SessionStateSecretRequest['recipient']['kind'
   channel_credential: 'Chat channel credential',
   mailbox_password: 'Mailbox password',
   agent_private: 'Private variable',
+  program: 'Connected program token',
   unbound: 'Stored in Settings',
 }
 
@@ -151,6 +160,7 @@ function useNames(request: SessionStateSecretRequest): { workspace: string; agen
 function CardHeader({ request }: { request: SessionStateSecretRequest }) {
   const owner = useNames(request)
   const isPrivate = request.recipient.kind === 'agent_private'
+  const isProgram = request.recipient.kind === 'program'
   return (
     <div className="space-y-[var(--space-2)]">
       <div className="flex items-center gap-[var(--space-2)]">
@@ -175,7 +185,7 @@ function CardHeader({ request }: { request: SessionStateSecretRequest }) {
         )}
       </div>
       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="secret-request-promise">
-        {isPrivate ? PRIVATE_SECRET_PROMISE : INTEGRATION_SECRET_PROMISE}
+        {isPrivate ? PRIVATE_SECRET_PROMISE : isProgram ? PROGRAM_SECRET_PROMISE : INTEGRATION_SECRET_PROMISE}
       </p>
     </div>
   )
@@ -217,6 +227,10 @@ function usePendingSubmit(entry: SecretRequestEntry, clearValues: () => void) {
         const message = isCsrfRejection(error)
           // Never replayed automatically (secrets.ts): the person sends again.
           ? 'Not sent — send again.'
+          // spec cli-credentials US-8 AS-5: a program card is filled in only
+          // from the person's own browser session.
+          : isApiError(error) && error.status === 403 && entry.request.recipient.kind === 'program'
+            ? PROGRAM_CARD_BROWSER_ONLY
           : isApiError(error) && error.status === 404
             ? 'This request is no longer available.'
             : isApiError(error) && error.status === 413
@@ -225,7 +239,7 @@ function usePendingSubmit(entry: SecretRequestEntry, clearValues: () => void) {
         store.getState().setLocalPhase(requestId, 'rejected', message)
       }
     },
-    [checkState, clearValues, requestId, store],
+    [checkState, clearValues, entry.request.recipient.kind, requestId, store],
   )
 
   return { send, checkState }
@@ -267,8 +281,9 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
   const submit = () => {
     if (malformed) return
     const nextErrors: Record<string, string> = {}
+    const isProgram = request.recipient.kind === 'program'
     for (const field of request.fields) {
-      const error = secretValueError(values[field.key] ?? '')
+      const error = isProgram ? programTokenError(values[field.key] ?? '') : secretValueError(values[field.key] ?? '')
       if (error) nextErrors[field.key] = error
     }
     setErrors(nextErrors)
@@ -277,7 +292,8 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
       inputs.current[firstBad]?.focus()
       return
     }
-    const body = { values: Object.fromEntries(request.fields.map((field) => [field.key, values[field.key] ?? ''])) }
+    const valueOf = (key: string) => (isProgram ? normalizeProgramToken(values[key] ?? '') : (values[key] ?? ''))
+    const body = { values: Object.fromEntries(request.fields.map((field) => [field.key, valueOf(field.key)])) }
     if (byteLength(JSON.stringify(body)) > MAX_BODY_BYTES) {
       setFormError('The values are too long altogether.')
       return
@@ -368,8 +384,12 @@ function TerminalRecord({ entry }: { entry: SecretRequestEntry }) {
   return (
     <div className="mt-[var(--space-2-5)] flex flex-wrap items-center gap-[var(--space-2)]">
       <p role="status" aria-live="polite" className="flex-1 text-[var(--color-secondary)]" data-testid="secret-request-result">
-        <span className={state === 'submitted' ? 'font-medium text-[color:var(--color-success)]' : undefined}>{TERMINAL_TEXT[state]}</span>
-        {state === 'submitted' && request.reference_names && request.reference_names.length > 0 && (
+        {state === 'submitted' && request.recipient.kind === 'program' ? (
+          <ProgramCardResult request={request} />
+        ) : (
+          <span className={state === 'submitted' ? 'font-medium text-[color:var(--color-success)]' : undefined}>{TERMINAL_TEXT[state]}</span>
+        )}
+        {state === 'submitted' && request.recipient.kind !== 'program' && request.reference_names && request.reference_names.length > 0 && (
           <span className="text-[var(--color-muted)]"> · stored as {request.reference_names.join(', ')}</span>
         )}
       </p>
@@ -388,5 +408,51 @@ function TerminalRecord({ entry }: { entry: SecretRequestEntry }) {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * A submitted program card (spec cli-credentials FR-051, S-54, S-140, S-141):
+ * "Stored" plus the account check result of the card's OWN generation, read
+ * from Settings → Programs' list after a reload too. Once the program's token
+ * has been replaced, the card says so and never shows the newer token's
+ * account.
+ */
+function ProgramCardResult({ request }: { request: SessionStateSecretRequest }) {
+  const programId = request.recipient.program_id
+  const generation = request.program_generation
+  const programs = useQuery({
+    queryKey: programsQueryKeys.list,
+    queryFn: fetchPrograms,
+    enabled: programId !== undefined && generation !== undefined,
+    refetchInterval: (current) => (anyChecking(current.state.data?.entries) ? 1_000 : false),
+  })
+  const entry = programs.data?.entries.find((candidate) => candidate.id === programId)
+  let detail: string | null = null
+  let text = 'Stored'
+  if (entry && generation !== undefined) {
+    if (entry.connection.generation !== generation) {
+      text = 'Stored — replaced by a newer token'
+    } else if (entry.connection.state === 'checking') {
+      text = 'Stored — checking the account…'
+    } else if (entry.connection.state !== 'not_connected') {
+      detail = connectionBadgeText(entry.connection)
+      if ((entry.connection.state === 'check_failed' || entry.connection.state === 'saved_not_checked') && entry.connection.message) {
+        detail = entry.connection.message
+      }
+    }
+  }
+  return (
+    <span data-testid="secret-request-program-result">
+      <span className="font-medium text-[color:var(--color-success)]">{text}</span>
+      {/* The check result is its own element (S-54, S-140): the card shows the
+          result text itself, the separator is only decoration. */}
+      {detail && (
+        <span className="text-[var(--color-muted)]">
+          <span aria-hidden="true"> · </span>
+          <span>{detail}</span>
+        </span>
+      )}
+    </span>
   )
 }

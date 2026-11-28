@@ -17,7 +17,7 @@ const goalReminderFailedTurnNotice = "3 reminder turns failed in a row — goal 
 // failed turns never increment the separate completed-no-progress streak.
 func updateFailedGoalReminder(sessionID string, rec *goal.Goal, work *goalReminderWork, progress bool) (*goal.Goal, error) {
 	next := work.failedReminders + 1
-	updated, err := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+	updated, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive || cur.ActiveSessionID != sessionID {
 			return errGoalReminderObsolete
 		}
@@ -31,7 +31,7 @@ func updateFailedGoalReminder(sessionID string, rec *goal.Goal, work *goalRemind
 			cur.LatestReason = goalReminderFailedTurnNotice
 		}
 		return nil
-	})
+	}})
 	if err == nil {
 		work.failedReminders = next
 	}

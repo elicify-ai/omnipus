@@ -249,9 +249,9 @@ func TestGoalForcing_SuccessfulSetGoalReleasesImmediately(t *testing.T) {
 	// directly, exactly as SetGoalTool.Execute would on success. ADR-086: it
 	// lands on the goal's own record (GOAL-FR-003's typed lists), not on the
 	// retired GoalCriteriaJSON session-meta string.
-	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-success-1", func(cur *goal.Goal) error {
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-success-1", goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.SetCriteria(recordedGoalCriteria("t"), time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("write goal record: %v", uerr)
 	}
 

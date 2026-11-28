@@ -1,0 +1,153 @@
+package gateway
+
+// Spec rev8 S143 / I-2 / FR-041 / FR-050: a Telegram turn of Dev creates a task
+// for Ops through the real create_task tool; the real Board start runs it in its
+// own parentless task session; a web message then goes into that session; the
+// in-process gateway runtime is rebuilt from the same home and the session is
+// revived by another web message. No task, lifecycle record, provenance or
+// session record is seeded: each was written by its production producer. Only
+// the paid-model response and the external gh executable are process-edge fakes.
+// The instrument twin below seeds ONE root-classified task record on purpose: it
+// shows the same re-entry path prints 16 for a record the classifier wrongly
+// called root, so a lineage regression would be seen by the scenario.
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// programsTaskReentry sends one web message into the task session sid and
+// returns the counted GH_TOKEN length, the executed command's result and the
+// origins of the two model requests this re-entry made (the command request and
+// the consumption of its real result).
+//
+// maxRefused is how many sends may be refused before one is accepted. The only
+// refusal the production path documents is the millisecond window in which a
+// task is terminal but its run has not yet released the session's admission
+// (steer_execution_admission.go, ErrStaleGeneration); the 2 s observation
+// window below is orders of magnitude longer, so at most ONE send can fall in
+// it. A second refusal is therefore a persistent refusal, not the transient,
+// and fails. A re-entry with no prior run to release (the root twin) passes 0.
+// The test side has no signal for the gate's reservation (it lives in unexported
+// pkg/agent state), so the refusals are counted instead of waited out.
+func programsTaskReentry(t *testing.T, x *programsTaskFixture, sid, call string, maxRefused int) (string, string, []bus.Provenance) {
+	t.Helper()
+	before := len(x.provider.observedOrigins(sid))
+	path := filepath.Join(x.work, call+"-count")
+	command := fmt.Sprintf("printenv GH_TOKEN | wc -c > %q; printf 'PROGRAM_TASK_CHILD_RAN'", path)
+	x.provider.setScript(sid, []providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{ID: call, Type: "function", Name: "bash", Arguments: map[string]any{"command": command}}}},
+		wu5StopGW("task re-entry count completed"),
+	})
+	input := bus.InboundMessage{Channel: "webchat", SessionID: sid, ChatID: sid, Content: "web follow-up into the task session", Provenance: bus.NewProvenance(bus.OriginWeb)}
+	// A task is terminal a moment before its run releases the session's
+	// admission, and a message sent in that window is refused as a stale
+	// generation (steer_execution_admission.go) and dropped: no turn starts.
+	// Send again until the provider sees the turn. An accepted message starts
+	// its turn within milliseconds, so only a refused one reaches the next try.
+	started := false
+	refused := 0
+	for attempt := 0; attempt < 8 && !started; attempt++ {
+		require.LessOrEqual(t, refused, maxRefused, "a refusal beyond the one transient admission-release window is a persistent refusal of the first web message")
+		require.NoError(t, x.bus.PublishInbound(context.Background(), input))
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) && !started {
+			started = len(x.provider.observedOrigins(sid)) > before
+			if !started {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		if !started {
+			refused++
+		}
+	}
+	require.True(t, started, "instrument: a web message into the task session started a turn")
+	require.LessOrEqual(t, refused, maxRefused, "refused sends before the accepted one")
+	t.Logf("S143 re-entry %s: %d send(s) refused before the accepted one", call, refused)
+	x.waitEnds(t, sid)
+	result := x.provider.result(sid, call)
+	require.Contains(t, result, "PROGRAM_TASK_CHILD_RAN", "instrument: the re-entry's real bash ran; a refused or missed turn cannot establish zero")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	origins := x.provider.observedOrigins(sid)
+	require.Equal(t, before+2, len(origins), "exactly one accepted turn: the command request and the consumption of its real result, no duplicate turn from a resent message")
+	return strings.TrimSpace(string(raw)), result, origins[before : before+2]
+}
+
+func TestProgramProvenance_ActualTaskSessionReentry(t *testing.T) {
+	t.Run("S143_telegram_task_session_keeps_restriction_on_web_reentry_and_restart", func(t *testing.T) {
+		x := newProgramsTaskFixture(t)
+		const prompt = "run printenv GH_TOKEN | wc -c"
+		telegram := bus.InboundMessage{Channel: "telegram", InstanceID: "telegram", Content: "create the counted task for Ops", Sender: bus.SenderInfo{CanonicalID: "telegram:s1", DisplayName: "S1 person"}, Provenance: bus.NewProvenance(bus.ConnectorOrigin("telegram"))}
+		id := x.agentCreate(t, "s143-agent-create", telegram, prompt)
+		creator := x.provider.observedOrigins(x.dev)
+		require.NotEmpty(t, creator, "instrument: the actual creator turn reached the registered task tool")
+		require.Equal(t, bus.NewProvenance(bus.ConnectorOrigin("telegram")), creator[0], "Given: T was created by a Telegram turn of Dev")
+
+		// When: T's real Board run executes the command, in its own task session.
+		count, result, sid := x.runBoard(t, id)
+		meta, err := x.al.GetSessionStore().GetMeta(sid)
+		require.NoError(t, err)
+		require.Empty(t, meta.ParentSessionID, "Given: T's run is a parentless task session")
+		require.Equal(t, id, meta.TaskID, "Given: the task identity is the session's task evidence")
+		assertRecord := func(label string) {
+			t.Helper()
+			record, loadErr := x.al.GetSessionLifecycleStore().Load(sid)
+			require.NoError(t, loadErr, "S143 %s: the lifecycle record loads", label)
+			assert.Equal(t, session.ProvenanceModeLineage, record.ProvenanceMode, "S143 %s: a parentless task session is lineage", label)
+			assert.Equal(t, []string{"connector:telegram"}, record.Provenance, "S143 %s: the record keeps the Telegram producer's exact origin set", label)
+		}
+		assertRecord("after the real run")
+		assert.Equal(t, "0", count, "S143: T's own run prints 0")
+		assert.Contains(t, result, programsPeerTelegramNotice, "S143: the Telegram-off notice, not unresolved")
+
+		// Then a web message goes into T's task session: still withheld, and the
+		// turn is {connector:telegram, web}, never web alone.
+		both := []bus.Origin{bus.OriginWeb, bus.ConnectorOrigin("telegram")}
+		count, result, origins := programsTaskReentry(t, x, sid, "s143-web-reentry", 1)
+		assert.Equal(t, "0", count, "S143: the web re-entry turn prints 0")
+		assert.Contains(t, result, programsPeerTelegramNotice, "S143: the web re-entry is withheld for the Telegram origin it inherits")
+		for _, actual := range origins {
+			assert.ElementsMatch(t, both, actual.Origins(), "S143: the web re-entry turn is {connector:telegram, web}")
+		}
+		assertRecord("after the web re-entry")
+
+		// Then the gateway restarts and the session is revived by a web message.
+		programsRestartTaskRuntime(t, x)
+		assertRecord("after the gateway-domain restart")
+		count, result, origins = programsTaskReentry(t, x, sid, "s143-restart-reentry", 1)
+		assert.Equal(t, "0", count, "S143: the revived session's web turn prints 0")
+		assert.Contains(t, result, programsPeerTelegramNotice, "S143: the revived turn is still withheld for Telegram")
+		for _, actual := range origins {
+			assert.ElementsMatch(t, both, actual.Origins(), "S143: the revived web turn is {connector:telegram, web}")
+		}
+		assertRecord("after the revived session ran")
+	})
+
+	t.Run("S143_instrument_root_classified_task_record_prints_16_on_the_same_reentry", func(t *testing.T) {
+		x := newProgramsTaskFixture(t)
+		store := x.al.GetSessionStore()
+		meta, err := store.NewSession(session.SessionTypeTask, "webchat", "ops")
+		require.NoError(t, err)
+		workspaceID, owner, taskID := "sales", wu5Owner, "s143-root-twin"
+		require.NoError(t, store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID, Owner: &owner, TaskID: &taskID}))
+		require.NoError(t, x.al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+			SessionID: meta.ID, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
+			WorkspaceID: "sales", AgentID: "ops", Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: taskID},
+			ProvenanceMode: session.ProvenanceModeRoot,
+		}))
+		count, result, _ := programsTaskReentry(t, x, meta.ID, "s143-root-twin", 0)
+		assert.Equal(t, "16", count, "S143 instrument: a parentless task record the classifier called root lets the web re-entry reach the token, so the scenario above fails on that regression")
+		assert.NotContains(t, result, "Connected programs were not used for this command:")
+	})
+}

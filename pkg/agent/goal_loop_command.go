@@ -179,10 +179,16 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			newCondition := strings.TrimSpace(gl.args)
 			now := time.Now().UTC()
 			var superseded bool
-			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
-				changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
-				superseded = changed
-				return rerr
+			// I-2/S-111: a restate changes the goal's definition, so the
+			// restating message's provenance is joined in the same write.
+			restatedBy := provenanceOrigins(gl.opts.InputOrigin.provenance)
+			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, goal.Write{
+				Provenance: &restatedBy,
+				Mutate: func(cur *goal.Goal) error {
+					changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
+					superseded = changed
+					return rerr
+				},
 			})
 			if err != nil {
 				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
@@ -219,7 +225,8 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		if res.Rejection != nil {
 			return true, true, formatCompileRejection(res.Rejection)
 		}
-		return true, true, gl.al.applyGoalMarkerRestate(gl.sessionID, gl.store, activeGoal, res.Goal)
+		return true, true, gl.al.applyGoalMarkerRestate(gl.sessionID, gl.store, activeGoal, res.Goal,
+			provenanceOrigins(gl.opts.InputOrigin.provenance))
 	}
 
 	// No active goal: a fresh `/goal <intent>` supersedes any AskUserQuestion
@@ -462,9 +469,9 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 	if cerr := gstore.Create(g); cerr != nil {
 		return fmt.Errorf("goal: could not create the durable goal record at activation: %w", cerr)
 	}
-	if _, aerr := gstore.Update(goalID, func(cur *goal.Goal) error {
+	if _, aerr := gstore.Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sessionID, time.Now().UTC())
-	}); aerr != nil {
+	}}); aerr != nil {
 		return fmt.Errorf("goal: could not activate the durable goal record: %w", aerr)
 	}
 	return nil
@@ -474,9 +481,13 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 // ALREADY-ACTIVE goal (ADR-088 D1/US-5 S19): the record updates in place —
 // same GoalID, same rounds/started-at, no confirm ritual. diffGoalAmendment
 // is wired into set_goal's own update path in a later wave; this restate
-// simply lands the new record.
+// simply lands the new record. restatedBy is the restating message's
+// provenance (I-2/S-111): the restate changes the goal's definition, so it is
+// joined in the same write as the prose restate's; an empty set (unresolved
+// message) makes the record unresolved rather than being skipped.
 func (al *AgentLoop) applyGoalMarkerRestate(
 	sessionID string, store *session.UnifiedStore, rec *goal.Goal, compiled *CompiledGoal,
+	restatedBy []string,
 ) string {
 	condition := compiled.Prompt
 	if condition == "" {
@@ -497,14 +508,14 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	if len(dod) == 0 {
 		dod = newFloorDoD()
 	}
-	if _, err := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Provenance: &restatedBy, Mutate: func(cur *goal.Goal) error {
 		cur.Prompt = condition
 		cur.Definition = compiled.Definition
 		if serr := cur.SetCriteria(compiled.Criteria, now); serr != nil {
 			return serr
 		}
 		return cur.SetDoD(dod, now)
-	}); err != nil {
+	}}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist restated goal",
 			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return "Could not update the goal (internal error persisting the goal record)."

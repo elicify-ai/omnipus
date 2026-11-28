@@ -63,8 +63,10 @@ type AgentPlan struct {
 
 // importNotCarriedFields are top-level stored fields the store sets itself on
 // import (Field mapping rows workspace, created_at, updated_at, locked,
-// skill_grants): removed silently.
-var importNotCarriedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants"}
+// skill_grants): removed silently. programs is never carried either: an
+// imported agent arrives with every connected program off (connected
+// programs FR-022), even from a hand-edited package.
+var importNotCarriedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants", "programs"}
 
 // importMapper accumulates the warnings of one record's mapping.
 type importMapper struct {

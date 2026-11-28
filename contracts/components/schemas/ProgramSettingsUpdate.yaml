@@ -1,0 +1,12 @@
+title: ProgramSettingsUpdate
+description: The web-chat program setting (spec FR-009; also governs independent work).
+type: object
+required:
+  - web_chat_allowed
+  - revision
+additionalProperties: false
+properties:
+  web_chat_allowed:
+    type: boolean
+  revision:
+    $ref: './ConfigurationRevision.yaml'

@@ -315,6 +315,9 @@ func (c *BaseChannel) HandleMessage(
 	msg := bus.InboundMessage{
 		Channel:    c.name,
 		InstanceID: instanceID,
+		// The channel adapter is a provenance producer (I-2): every message
+		// it delivers is work that came from this connection.
+		Provenance: bus.NewProvenance(bus.ConnectorOrigin(instanceID)),
 		Sender:     sender,
 		ChatID:     chatID,
 		Content:    content,

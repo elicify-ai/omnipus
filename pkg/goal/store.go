@@ -16,6 +16,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // goalsSubdir is the fixed directory segment under $OMNIPUS_HOME/entities/
@@ -173,6 +174,19 @@ func (s *Store) Create(g *Goal) error {
 	return nil
 }
 
+// Write is one goal update request (I-2, S-111: a durable writer takes
+// provenance as a field of its write request): Mutate changes the record;
+// Provenance, when non-nil, is the writer turn's origins, joined into the
+// record in the same write.
+type Write struct {
+	// Provenance is set by an agent path that changes the goal's definition;
+	// nil for every other write.
+	Provenance *[]string
+	// Mutate is the read-modify-write applied under the goal's lock; it must
+	// not change the record's GoalID. Required.
+	Mutate func(*Goal) error
+}
+
 // Update performs a read-modify-write of the goal identified by id under
 // pkg/entity's striped-mutex + sidecar-flock guard, via the mutate closure.
 // mutate must not change the record's GoalID.
@@ -185,10 +199,27 @@ func (s *Store) Create(g *Goal) error {
 // read back from pkg/goal's store after the call, is unchanged" has one
 // observable: read the record back through Get/List after the call, not a
 // cached in-memory value an implementation might never have persisted.
-func (s *Store) Update(id string, mutate func(*Goal) error) (*Goal, error) {
+//
+// w.Provenance (I-2, S-111) is the write's explicit provenance input: when
+// non-nil it is joined into Goal.Provenance after w.Mutate succeeds, in the
+// same locked write (origins only added; an unresolved writer makes the goal
+// unresolved). Nil joins nothing: a state, counter or timestamp change, or a
+// person's edit.
+func (s *Store) Update(id string, w Write) (*Goal, error) {
 	goalLockAcquireFn(id)
 	defer goalLockReleaseFn(id)
-	updated, err := s.inner.Update(id, mutate)
+	if w.Mutate == nil {
+		return nil, fmt.Errorf("goal: update %q: no mutation given", id)
+	}
+	updated, err := s.inner.Update(id, func(g *Goal) error {
+		if err := w.Mutate(g); err != nil {
+			return err
+		}
+		if w.Provenance != nil {
+			g.Provenance = task.JoinOrigins(g.Provenance, *w.Provenance)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("goal: update %q: %w", id, err)
 	}

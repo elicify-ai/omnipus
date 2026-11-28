@@ -1,0 +1,15 @@
+title: ChannelProgramsSetting
+description: >
+  Whether agents may use connected programs for work that came from this
+  channel connection (spec FR-009; default off). Written only by
+  PUT /channels/{id}/programs; rebinding the channel turns it off.
+type: object
+required:
+  - allowed
+  - revision
+additionalProperties: false
+properties:
+  allowed:
+    type: boolean
+  revision:
+    $ref: './ConfigurationRevision.yaml'

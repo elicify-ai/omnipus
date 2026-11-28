@@ -33,6 +33,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/testseam"
 )
 
 // bashToolName is the tool name ExecTool.Name() returns (pkg/tools/shell.go)
@@ -611,6 +612,7 @@ func (s *ApprovalGrantStore) SessionEgressToken(sessionID, agentID string) strin
 // EgressProxy.GrantRunHosts) treat as "grant nothing" rather than a panic
 // or a predictable fallback value.
 func newEgressToken() string {
+	testseam.EgressTokenMinted(testseam.EgressTokenSession) // no-op outside the s1seams test build
 	buf := make([]byte, 16)
 	if _, err := cryptorand.Read(buf); err != nil {
 		return ""

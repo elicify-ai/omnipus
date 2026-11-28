@@ -43,7 +43,7 @@ func (al *AgentLoop) newRoomMeterForOptions(opts processOptions) *roomCostMeter 
 	if sessionID == "" {
 		sessionID = sessionIDFromScopeKey(opts.SessionKey)
 	}
-	m := al.newTurnRoomMeter(bus.InboundMessage{SessionID: sessionID})
+	m := al.newTurnRoomMeter(bus.InboundMessage{SessionID: sessionID, Provenance: bus.UnresolvedProvenance()})
 	m.scope = opts.SessionKey
 	if opts.UserMessage == "" && len(opts.InitialSteeringMessages) > 0 {
 		m.inputs = 0

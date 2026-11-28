@@ -63,7 +63,7 @@ func b2DraftHarness(t *testing.T, recordless bool) (*grHarness, *tools.ProcessSe
 	t.Helper()
 	h := grNewRecordedBrake(t)
 	if recordless {
-		_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error { g.Criteria = nil; g.Definition = ""; return nil })
+		_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error { g.Criteria = nil; g.Definition = ""; return nil }})
 		require.NoError(t, err)
 	}
 	manager := tools.GetSharedSessionManager()
@@ -458,9 +458,9 @@ func b2CompositionNewGoal(t *testing.T) {
 	grNoPublishedReminder(t, h.al)
 	oldID := h.goalID
 	oldInput := b2DraftTakeDue(t, h, p, first.Add(b2SpecStall))
-	_, err := resolveGoalRecordStore().Update(oldID, func(g *goal.Goal) error {
+	_, err := resolveGoalRecordStore().Update(oldID, goal.Write{Mutate: func(g *goal.Goal) error {
 		return g.Terminate(generated.GoalStateCleared, "fixture replaced goal", time.Now())
-	})
+	}})
 	require.NoError(t, err)
 	h.arm(t)
 	require.NotEqual(t, oldID, h.goalID)

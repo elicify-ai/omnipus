@@ -21,6 +21,17 @@ required:
   - max_tool_iterations_override_ignored
   - needs_model
 properties:
+  programs:
+    type: array
+    maxItems: 32
+    description: >
+      Ids of the connected programs switched on for this agent (spec
+      cli-credentials FR-007). Empty at creation; changed only through the
+      person-session gate (PUT) or set_agent_permissions.programs.
+    items:
+      type: string
+      minLength: 1
+      maxLength: 64
   revision:
     $ref: './ConfigurationRevision.yaml'
   persistence_status:

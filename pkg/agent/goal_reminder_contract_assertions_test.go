@@ -28,10 +28,10 @@ func (h *grHarness) journal(t *testing.T) []byte {
 
 func (h *grHarness) age(t *testing.T) {
 	t.Helper()
-	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+	_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.LastActivityAt = time.Now().UTC().Add(-time.Hour)
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.MemoryEnabled != nil, "memory_enabled")
 	add(req.Voice != nil, "voice")
 	add(req.Executor != nil, "executor")
+	add(req.Programs != nil, "programs")
 	return fields
 }
 
@@ -114,11 +116,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// a client still sending this retired field.
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
+	programsBefore := slices.Clone(uf.cfg.Agents.List[uf.foundIdx].Programs)
 	if uf.preparePersistence() {
 		return
 	}
 	if uf.persistAndReload() {
 		return
+	}
+	if uf.ru.req.Programs != nil {
+		// FR-021: one value-free row when the switch list actually changed.
+		after := normalizeAgentPrograms(*uf.ru.req.Programs)
+		uf.ru.a.auditAgentProgramsChange(uf.ru.id, normalizeAgentPrograms(programsBefore), after)
 	}
 	uf.respond()
 }
@@ -243,6 +251,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	if err := agentstore.ValidateRevision(uf.ru.req.Revision); err != nil {
 		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	if uf.ru.req.Programs != nil && uf.refuseProgramsWrite() {
 		return true
 	}
 	var fieldsOK bool
@@ -1026,6 +1037,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 		return err
 	}
 	rp.updateExecutorAndSkills(agentRec)
+	if rp.ru.req.Programs != nil {
+		agentRec.Programs = normalizeAgentPrograms(*rp.ru.req.Programs)
+		if len(agentRec.Programs) == 0 {
+			agentRec.Programs = nil
+		}
+	}
 
 	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.

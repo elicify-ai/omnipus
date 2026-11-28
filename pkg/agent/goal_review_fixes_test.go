@@ -94,12 +94,12 @@ func seedTaskWithJudgeableGoal(
 func pushGoalActivityIntoThePast(t *testing.T, goalID string, at time.Time) {
 	t.Helper()
 	past := at.UTC()
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, func(cur *goal.Goal) error {
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		started := past
 		cur.StartedAt = &started
 		cur.LastActivityAt = past
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("pushGoalActivityIntoThePast(%q): %v", goalID, err)
 	}
 }
@@ -220,9 +220,9 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 	}
 
 	// The re-run: exactly what activateTaskGoal does when the task runs again.
-	reran, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(rec.GoalID, func(cur *goal.Goal) error {
+	reran, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Reactivate("second-run-session", time.Now().UTC())
-	})
+	}})
 	if uerr != nil {
 		t.Fatalf("Reactivate: %v", uerr)
 	}

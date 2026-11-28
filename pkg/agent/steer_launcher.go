@@ -407,6 +407,12 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
+		// FR-050: mode written once at creation. This launch has no turn
+		// provenance in scope: a task root is stamped from its task record
+		// (S-77); any other lineage root stores none (unresolved, fail
+		// closed); a standing conversation stores none by design.
+		ProvenanceMode: session.ClassifyProvenanceMode(session.ProvenanceModeEvidence{Origin: origin.Kind}),
+		Provenance:     taskLaunchProvenance(req),
 		InitiatedBy:    cloneInitiatedBy(req.Initiator),
 		// Stamped from the target's resolved executor kind, not a
 		// report-only re-check: this record IS the session's identity for
@@ -590,6 +596,11 @@ func (l *SteerLauncher) launchSteered(
 				AgentID:        req.TargetAgentID,
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
+				// I-2: a steered child is lineage, stamped from the launching
+				// turn (unresolved when the launch carries no turn origin); a
+				// task run is stamped from its task record instead (S-77).
+				ProvenanceMode: session.ProvenanceModeLineage,
+				Provenance:     steeredLaunchProvenance(ctx, req),
 				SteeredBy:      steeredBy,
 				Unattended:     unattended,
 				InitiatedBy:    cloneInitiatedBy(req.Initiator),
@@ -715,9 +726,9 @@ func (l *SteerLauncher) createLaunchGoal(
 	if err := store.Create(g); err != nil {
 		return "", fmt.Errorf("steer: launch: %w: create goal: %w", steer.ErrStoreWrite, err)
 	}
-	if _, err := store.Update(g.GoalID, func(current *goal.Goal) error {
+	if _, err := store.Update(g.GoalID, goal.Write{Mutate: func(current *goal.Goal) error {
 		return current.Activate(childID, now)
-	}); err != nil {
+	}}); err != nil {
 		_ = store.Delete(g.GoalID)
 		return "", fmt.Errorf("steer: launch: %w: activate goal: %w", steer.ErrStoreWrite, err)
 	}
@@ -1347,4 +1358,22 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
 	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
 	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
+}
+
+// taskLaunchProvenance is the stored provenance a task-origin launch carries
+// from its task record (FR-041, S-77); nil (unresolved) for any other launch.
+func taskLaunchProvenance(req steer.LaunchRequest) []string {
+	if req.Origin.Kind != steer.OriginKindTask || len(req.Provenance) == 0 {
+		return nil
+	}
+	return append([]string(nil), req.Provenance...)
+}
+
+// steeredLaunchProvenance is a steered child's starting lineage: its task
+// record's provenance for a task run, otherwise the launching turn's.
+func steeredLaunchProvenance(ctx context.Context, req steer.LaunchRequest) []string {
+	if req.Origin.Kind == steer.OriginKindTask {
+		return taskLaunchProvenance(req)
+	}
+	return provenanceOrigins(tools.ToolTurnProvenance(ctx))
 }

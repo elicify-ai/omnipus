@@ -8,6 +8,8 @@ import (
 	"context"
 	"strings"
 	"sync"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // TurnOrigin is the set of inputs a turn has consumed (omnipus-system-agent
@@ -22,6 +24,11 @@ type TurnOrigin struct {
 	channelPerson string
 	connection    string
 	peerAgent     string
+	// provenance is the join of every consumed input's provenance (I-2);
+	// provenanceSeen is false until the first input is recorded, so a turn
+	// that consumed nothing reports unresolved.
+	provenance     bus.Provenance
+	provenanceSeen bool
 }
 
 // NewTurnOrigin returns an empty origin (a web-user turn until inputs are added).
@@ -61,6 +68,41 @@ func (o *TurnOrigin) AddPeer(agentName string) {
 	if o.peerAgent == "" {
 		o.peerAgent = agentName
 	}
+}
+
+// AddProvenance joins one consumed input's provenance into the turn's (I-2).
+// An unresolved input makes the whole turn unresolved (join absorbs).
+func (o *TurnOrigin) AddProvenance(p bus.Provenance) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.provenanceSeen {
+		o.provenance, o.provenanceSeen = p, true
+		return
+	}
+	o.provenance = bus.Join(o.provenance, p)
+}
+
+// Provenance returns the join of every input the turn consumed; unresolved
+// when none was recorded (a turn with no consumed input is never eligible).
+func (o *TurnOrigin) Provenance() bus.Provenance {
+	if o == nil {
+		return bus.UnresolvedProvenance()
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.provenanceSeen {
+		return bus.UnresolvedProvenance()
+	}
+	return o.provenance
+}
+
+// ToolTurnProvenance returns the provenance of the turn in ctx: unresolved
+// when the context carries no turn origin.
+func ToolTurnProvenance(ctx context.Context) bus.Provenance {
+	return ToolTurnOrigin(ctx).Provenance()
 }
 
 // ChannelTriggered reports whether the turn consumed any input from a

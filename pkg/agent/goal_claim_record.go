@@ -34,12 +34,12 @@ func recordGoalClaim(goalID string, status generated.GoalLatestClaimStatus, evid
 	if strings.TrimSpace(goalID) == "" {
 		return fmt.Errorf("goal: record %s claim: no goal id", status)
 	}
-	if _, err := resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		if !cur.IsActive() {
 			return nil
 		}
 		return cur.RecordClaim(status, evidence, time.Now().UTC())
-	}); err != nil {
+	}}); err != nil {
 		return fmt.Errorf("goal: record %s claim on %q: %w", status, goalID, err)
 	}
 	return nil

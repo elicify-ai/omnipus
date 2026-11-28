@@ -1479,7 +1479,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --build-tags=goolm,stdjson
+          args: --build-tags=goolm,stdjson,s1seams
           skip-cache: true
 
   fast-tier:
@@ -2109,7 +2109,7 @@ jobs:
             # step's output exactly as they did for the plain go test call.
             # The race step below reuses the same script with --race
             # at 2 shards.
-            shard_out=$(bash scripts/run-agent-sharded.sh --shards 4 --timeout 10m --tags goolm,stdjson 2>&1)
+            shard_out=$(bash scripts/run-agent-sharded.sh --shards 4 --timeout 10m --tags goolm,stdjson,s1seams 2>&1)
             shard_code=$?
             rest_out=""
             rest_code=0
@@ -2118,7 +2118,7 @@ jobs:
               if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
             done
             if [ ${#other_pkgs[@]} -gt 0 ]; then
-              rest_out=$(go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_out=$(go test -tags goolm,stdjson,s1seams -count=1 -timeout 10m -p 1 "${other_pkgs[@]}" 2>&1)
               rest_code=$?
             fi
             out="${shard_out}"
@@ -2129,7 +2129,7 @@ jobs:
             code=$shard_code
             if [ $code -eq 0 ]; then code=$rest_code; fi
           else
-            out=$(go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
+            out=$(go test -tags goolm,stdjson,s1seams -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
             code=$?
           fi
           echo "$out"
@@ -2208,7 +2208,7 @@ jobs:
             # race step's pattern: success requires BOTH a clean exit AND no
             # DATA RACE marker in the re-run log; failure prints both kinds of
             # evidence. The two flake-filters stay in lockstep.
-            if go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" -p 1 "$p" >/tmp/rr.log 2>&1 \
+            if go test -tags goolm,stdjson,s1seams -count=1 -timeout "$go_timeout" -p 1 "$p" >/tmp/rr.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr.log; then
               echo "FLAKE (passed isolated): $p"
             else
@@ -2291,7 +2291,7 @@ jobs:
           out=$(bash scripts/run-gateway-sharded.sh \
             --shards 4 \
             --timeout 75m \
-            --tags goolm,stdjson 2>&1)
+            --tags goolm,stdjson,s1seams 2>&1)
           code=$?
           echo "$out"
           # Same DATA RACE carve-out as the previous step. A race that vanishes
@@ -2356,7 +2356,7 @@ jobs:
             # carve-out documents that exit code alone cannot detect a race.
             # Success requires BOTH a clean exit AND no DATA RACE marker in
             # the re-run log; failure prints both kinds of evidence.
-            if go test -tags goolm,stdjson -count=1 -timeout 75m -p 1 "$p" >/tmp/rr_gateway.log 2>&1 \
+            if go test -tags goolm,stdjson,s1seams -count=1 -timeout 75m -p 1 "$p" >/tmp/rr_gateway.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr_gateway.log; then
               echo "FLAKE (passed isolated): $p"
             else
@@ -2730,7 +2730,7 @@ jobs:
             # in a bare `FAIL`, which the flake filter cannot extract a
             # package from). The agent steps carry no guard-failure
             # carve-out: pkg/agent's TestMain emits no GUARD FAILURE token.
-            race_shard_out=$(bash scripts/run-agent-sharded.sh --race --shards 2 --timeout 2700s --tags goolm,stdjson 2>&1)
+            race_shard_out=$(bash scripts/run-agent-sharded.sh --race --shards 2 --timeout 2700s --tags goolm,stdjson,s1seams 2>&1)
             race_shard_code=$?
             rest_out=""
             rest_code=0
@@ -2739,7 +2739,7 @@ jobs:
               if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
             done
             if [ ${#other_pkgs[@]} -gt 0 ]; then
-              rest_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_out=$(go test -race -tags goolm,stdjson,s1seams -count=1 -timeout 2700s -p 1 "${other_pkgs[@]}" 2>&1)
               rest_code=$?
             fi
             out="${race_shard_out}"
@@ -2754,7 +2754,7 @@ jobs:
             # 2700s (45m) per binary: comfortably covers every package here
             # without the gateway (the slowest remaining was pkg/tools/browser
             # at 676s on the same run). A finite hang signal is preserved.
-            out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${parallel[@]}" "${race_pkgs[@]}" 2>&1)
+            out=$(go test -race -tags goolm,stdjson,s1seams -count=1 -timeout 2700s "${parallel[@]}" "${race_pkgs[@]}" 2>&1)
             code=$?
           fi
           echo "$out"
@@ -2830,7 +2830,7 @@ jobs:
             # THIS run, so testing only its exit code let a race reported in
             # the SECOND run be stamped "FLAKE (passed isolated)" and excused
             # — precisely what the carve-out forbids.
-            if go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+            if go test -race -tags goolm,stdjson,s1seams -count=1 -timeout 2700s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else
@@ -2887,9 +2887,9 @@ jobs:
         run: |
           set +e
           out=$(bash scripts/run-gateway-sharded.sh \
-          --shards 2 \
+          --shards 4 \
           --timeout 3600s \
-          --tags goolm,stdjson \
+          --tags goolm,stdjson,s1seams \
           --race 2>&1)
           code=$?
           # Restore -race coverage for the gateway SUBPACKAGES. The sharded
@@ -2922,7 +2922,7 @@ jobs:
           sub_out=""
           sub_code=0
           if [ ${#sub_pkgs[@]} -gt 0 ]; then
-            sub_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${sub_pkgs[@]}" 2>&1)
+            sub_out=$(go test -race -tags goolm,stdjson,s1seams -count=1 -timeout 2700s "${sub_pkgs[@]}" 2>&1)
             sub_code=$?
           fi
           if [ ${#sub_pkgs[@]} -gt 0 ]; then
@@ -2988,7 +2988,7 @@ jobs:
           echo "=== FLAKE FILTER (-race pkg/gateway): re-running isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 3600s -p 1 "$p" >/tmp/rr_gw_race.log 2>&1 \
+            if go test -race -tags goolm,stdjson,s1seams -count=1 -timeout 3600s -p 1 "$p" >/tmp/rr_gw_race.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr_gw_race.log; then
               echo "FLAKE (passed isolated): $p"
             else

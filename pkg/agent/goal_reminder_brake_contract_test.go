@@ -60,10 +60,10 @@ func grNewRecordedBrake(t *testing.T) *grHarness {
 
 func grSetStreak(t *testing.T, h *grHarness, streak int) {
 	t.Helper()
-	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+	_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.ZeroOutputPushes = streak
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 	reopened, err := goal.NewStore(config.OmnipusHomeDir()).Get(h.goalID)
 	require.NoError(t, err)

@@ -118,7 +118,7 @@ func c1LiveHarness(t *testing.T, busy, recordless bool) (*grHarness, *PlanEngine
 	t.Helper()
 	h := grNewRecordedBrake(t)
 	if recordless {
-		_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error { g.Criteria = nil; g.Definition = ""; return nil })
+		_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error { g.Criteria = nil; g.Definition = ""; return nil }})
 		require.NoError(t, err)
 	}
 	if busy {
@@ -159,7 +159,7 @@ func c1LiveConfig(t *testing.T, h *grHarness, fields map[string]any) {
 }
 func c1LiveAge(t *testing.T, h *grHarness, at time.Time) {
 	t.Helper()
-	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error { g.LastActivityAt = at; g.StartedAt = &at; return nil })
+	_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error { g.LastActivityAt = at; g.StartedAt = &at; return nil }})
 	require.NoError(t, err)
 	require.Equal(t, at, goalRecordForSession(t, h.id).LastActivityAt)
 }

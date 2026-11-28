@@ -160,9 +160,9 @@ func seedActiveTaskGoalWithDoD(
 	if cerr := gs.Create(g); cerr != nil {
 		t.Fatalf("seedActiveTaskGoalWithDoD: Create: %v", cerr)
 	}
-	activated, uerr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	activated, uerr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sessionID, now)
-	})
+	}})
 	if uerr != nil {
 		t.Fatalf("seedActiveTaskGoalWithDoD: Activate: %v", uerr)
 	}

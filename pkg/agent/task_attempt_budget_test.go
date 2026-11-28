@@ -213,10 +213,10 @@ func TestTaskAttemptCeiling_RunTakesTheTryLimitInForceWhenItStarts(t *testing.T)
 
 	id := createTaskThroughAgentTool(t, al)
 	rec := pairedGoalRecord(t, id)
-	if _, err := resolveGoalRecordStore().Update(rec.GoalID, func(g *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(rec.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.MaxRounds = 20 // written at creation, before the operator lowered the setting
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("arrange: backdate the goal record's limit: %v", err)
 	}
 

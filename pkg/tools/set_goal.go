@@ -236,6 +236,15 @@ type GoalRecordAccess interface {
 	WriteRecord(sessionID, recordJSON string) error
 }
 
+// GoalRecordProvenanceWriter is an optional GoalRecordAccess extension:
+// WriteRecordWithProvenance persists recordJSON like WriteRecord and, in the
+// same store write, records the writing turn's origins on the goal
+// (connected-programs I-2, FR-041, S-109). set_goal uses it when the wired
+// access provides it.
+type GoalRecordProvenanceWriter interface {
+	WriteRecordWithProvenance(sessionID, recordJSON string, origins []string) error
+}
+
 // DiffFn computes a human-readable change summary between the session's
 // PRIOR goal record and the NEW one mode:update is about to write, both as
 // this tool's own marshaled JSON shape (setGoalRecord). Wave 2 injects the
@@ -732,7 +741,15 @@ func (sg *setGoalToolExecute) persistRecord() (*ToolResult, bool) {
 		}
 	}
 
-	if wErr := sg.access.WriteRecord(sg.sessionID, string(newJSON)); wErr != nil {
+	var wErr error
+	if pw, ok := sg.access.(GoalRecordProvenanceWriter); ok {
+		// FR-041 / S-109: this turn writes the goal's instructions, so its
+		// provenance is recorded on the goal in the same write.
+		wErr = pw.WriteRecordWithProvenance(sg.sessionID, string(newJSON), provenanceStrings(ToolTurnProvenance(sg.ctx)))
+	} else {
+		wErr = sg.access.WriteRecord(sg.sessionID, string(newJSON))
+	}
+	if wErr != nil {
 		return ErrorResult(fmt.Sprintf("set_goal: failed to persist the goal record: %v", wErr)).WithError(wErr), true
 	}
 

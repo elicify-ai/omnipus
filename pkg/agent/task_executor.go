@@ -398,6 +398,11 @@ func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Tas
 	}
 	rec := &session.LifecycleRecord{
 		SessionID: sessionID,
+		// FR-050 row 3: a task session is lineage, stamped from its work
+		// record: the task's stored provenance (FR-041, S-77). A task with
+		// none stays unresolved (fail closed, I-2).
+		ProvenanceMode: session.ProvenanceModeLineage,
+		Provenance:     append([]string(nil), t.Provenance...),
 		// Generation starts at 1 (LifecycleRecord.Generation's own doc
 		// comment, and what every other minter writes —
 		// steer_launcher.go's launchDirect and launchSteered both use 1).
@@ -1000,7 +1005,7 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 	// The run loop (task_run_loop.go::runGoalMaxTries) enforces this snapshot, so a later Settings
 	// change never moves the bound of a run already in progress.
 	tryLimit := goalTryLimit(te.agentLoop)
-	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		switch {
 		case cur.IsDefining():
 			if err := cur.Activate(taskSessionID, now); err != nil {
@@ -1034,7 +1039,7 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 				map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
 			return nil
 		}
-	}); uerr != nil {
+	}}); uerr != nil {
 		return te.reportTaskGoalActivationFailure(t, taskSessionID, g.GoalID,
 			fmt.Errorf("task_executor: activate goal record %q for task %q: %w", g.GoalID, t.ID, uerr))
 	}
@@ -1373,6 +1378,7 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 		WorkspaceID: t.WorkspaceID,
 		Owner:       t.Owner,
 		Initiator:   initiatedBy,
+		Provenance:  t.Provenance,
 	})
 	if err != nil {
 		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, "", "launch", err))
@@ -2110,6 +2116,10 @@ func (al *AgentLoop) processTaskDirect(
 		// leaving it unset here (while the external-CLI sibling below sets it)
 		// was the gap.
 		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
+		// FR-041 / S-77: the task's instruction was written by whoever
+		// created or last changed the task; its origin is the run's stored
+		// lineage, never an unresolved input.
+		InputOrigin: al.sessionInstructionOrigin(taskChatID),
 	})
 	// A Stop accepted while the run had no turn in flight is met by the next
 	// turn's admission as a cancelled dispatch. For a run that owns an

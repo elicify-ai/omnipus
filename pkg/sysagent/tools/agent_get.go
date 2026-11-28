@@ -238,6 +238,7 @@ func (t *AgentGetTool) storedDetail(home string, state *agentstore.State, cfg *c
 		"context_window_override": a.ContextWindowOverride, "memory_enabled": a.MemoryEnabledEffective(),
 		"skills": nonNilStrings(a.Skills), "stored_overrides": storedOverrides(a),
 		"connectors": storedMCPBindings(a), "activation_status": activation,
+		"programs":        nonNilStrings(a.Programs),
 		"editable_fields": editableDescriptors(*a), "has_main_chat": a.IsChatTarget(),
 	}
 	if a.MaxToolIterations > 0 {

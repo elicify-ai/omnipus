@@ -96,6 +96,8 @@ tags:
   description: Usage statistics and aggregations.
 - name: system
   description: System-level probes (e.g. host-CLI availability) — read-only diagnostics used by the SPA roster UI.
+- name: Programs
+  description: "Connected command-line programs: presets, custom entries, tokens, account checks and per-channel settings (spec cli-credentials S1). Person-session only."
 - name: Secrets
   description: "Secure secret card requests and stored secret names (Omnipus system agent, landing 1). Values travel only in the authenticated submit."
 - name: Rooms
@@ -1828,6 +1830,24 @@ components:
       $ref: ./components/schemas/ChannelRejectedSenders.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
+    ChannelProgramsSetting:
+      $ref: ./components/schemas/ChannelProgramsSetting.yaml
+    ProgramConnection:
+      $ref: ./components/schemas/ProgramConnection.yaml
+    ProgramCredentialRequest:
+      $ref: ./components/schemas/ProgramCredentialRequest.yaml
+    ProgramCustomRequest:
+      $ref: ./components/schemas/ProgramCustomRequest.yaml
+    ProgramEntry:
+      $ref: ./components/schemas/ProgramEntry.yaml
+    ProgramGit:
+      $ref: ./components/schemas/ProgramGit.yaml
+    ProgramIdentityCheck:
+      $ref: ./components/schemas/ProgramIdentityCheck.yaml
+    ProgramList:
+      $ref: ./components/schemas/ProgramList.yaml
+    ProgramSettingsUpdate:
+      $ref: ./components/schemas/ProgramSettingsUpdate.yaml
     ChannelRoutingUpdateRequest:
       $ref: ./components/schemas/ChannelRoutingUpdateRequest.yaml
     ChannelCreateRequest:
@@ -5988,6 +6008,315 @@ paths:
                 $ref: '#/components/schemas/ChannelOutboundRejection'
         '503':
           $ref: '#/components/responses/503BypassActive'
+  /channels/{id}/programs:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Channel instance id.
+    get:
+      operationId: getChannelPrograms
+      summary: Read the channel's connected-programs setting
+      description: >
+        Spec cli-credentials FR-009 (S1). Signed-in person's browser session
+        only. Absent setting reads `allowed: false`.
+      tags:
+      - Programs
+      responses:
+        '200':
+          description: The setting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelProgramsSetting'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: setChannelPrograms
+      summary: Set the channel's connected-programs setting
+      description: >
+        Spec cli-credentials FR-009 (S1). The only writer of
+        `programs_allowed`; set_config and the generic config writer refuse it.
+        Signed-in person's browser session only; a stale revision answers 409.
+      tags:
+      - Programs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelProgramsSetting'
+      responses:
+        '200':
+          description: The stored setting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelProgramsSetting'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+  /programs:
+    get:
+      operationId: listPrograms
+      summary: List connected-program entries
+      description: >
+        Spec cli-credentials FR-002 (S1). Presets and custom entries with their
+        value-free connection state. Signed-in person's browser session only.
+      tags:
+      - Programs
+      responses:
+        '200':
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramList'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+    post:
+      operationId: createProgram
+      summary: Create a custom program entry
+      description: >
+        Spec cli-credentials FR-019 (S1), dataset D-2. At most 32 custom
+        entries. Signed-in person's browser session only.
+      tags:
+      - Programs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramCustomRequest'
+      responses:
+        '201':
+          description: The created entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+  /programs/settings:
+    put:
+      operationId: updateProgramSettings
+      summary: Set the web-chat connected-programs setting
+      description: >
+        Spec cli-credentials FR-009 (S1). Independent work follows this
+        setting (founder Q1 = A). Signed-in person's browser session only.
+      tags:
+      - Programs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramSettingsUpdate'
+      responses:
+        '200':
+          description: The catalog after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramList'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+  /programs/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Program entry id.
+    put:
+      operationId: updateProgram
+      summary: Edit a custom program entry
+      description: >
+        Spec cli-credentials FR-019, FR-042 (S1). Requires `revision`; a stale
+        revision or a git-host conflict for an agent the entry is on for
+        answers 409. Presets answer 422.
+      tags:
+      - Programs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramCustomRequest'
+      responses:
+        '200':
+          description: The edited entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+    delete:
+      operationId: deleteProgram
+      summary: Delete a custom program entry
+      description: >
+        Spec cli-credentials FR-019 (S1). Refused 409 while the entry is on for
+        an agent (the message names the agent); presets answer 422.
+      tags:
+      - Programs
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+  /programs/{id}/credential:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Program entry id.
+    put:
+      operationId: saveProgramCredential
+      summary: Save a program token and start its account check
+      description: >
+        Spec cli-credentials FR-003, FR-004, FR-006, FR-043 (S1). Answers the
+        entry in `checking` with the new generation. A body over 65,536 bytes
+        answers 413; a failed save keeps the previous token (500).
+      tags:
+      - Programs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgramCredentialRequest'
+      responses:
+        '200':
+          description: Saved; the account check is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '413':
+          description: Body larger than 65,536 bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+    delete:
+      operationId: disconnectProgram
+      summary: Disconnect a program (remove the local token)
+      description: >
+        Spec cli-credentials FR-023 (S1). Increments the generation; agent
+        switches stay on.
+      tags:
+      - Programs
+      responses:
+        '200':
+          description: Disconnected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /programs/{id}/check:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Program entry id.
+    post:
+      operationId: recheckProgram
+      summary: Run the account check again
+      description: >
+        Spec cli-credentials FR-023, FR-047 (S1). Supersedes a running check;
+        the generation is unchanged.
+      tags:
+      - Programs
+      responses:
+        '202':
+          description: The check is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgramEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
   /channels/{id}/test:
     post:
       operationId: testChannel
@@ -6771,6 +7100,15 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            The key is owned by a connected program: "<reference> belongs to
+            the program <name>. Change it in Settings -> Programs." No store
+            change (spec cli-credentials FR-048).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '422':
           description: Key field is required (empty key).
           content:
@@ -6821,6 +7159,15 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Credential key not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            The key is owned by a connected program: "<reference> belongs to
+            the program <name>. Change it in Settings -> Programs." No store
+            change (spec cli-credentials FR-048).
           content:
             application/json:
               schema:
@@ -14432,6 +14779,16 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: >
+            The stored request's recipient kind is `program` and the caller is
+            not a signed-in person's browser session ("this action requires a
+            signed-in person"). Decided before the body is read (spec
+            cli-credentials FR-028).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':

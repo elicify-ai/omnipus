@@ -168,6 +168,8 @@ A tool-call limit outside 1 to 1000, or above the global limit on the new instal
 
 **A secret pasted into the prompt travels.** The prompt is copied with whitespace trimmed from its ends, and non-empty instructions are copied byte for byte. An empty instructions file is not created on the new agent. The export command says so: "SOUL.md and AGENT.md are copied as they are; check them for pasted secrets before sharing." The install's stored credentials, keys and configuration do not travel. Check those two files before you share the package.
 
+**Connected programs arrive off.** The package lists each program switched on for the agent as a secret to set up again (`needs_secrets`, kind `program`, with the program id as its name, for example `github`); `package inspect`, the preview and the result show it. Neither the token nor the switch travels: the new agent starts with every program off, even when a hand-made package carries a `programs` list. On the new install, connect the program under [Settings → Programs](settings.md#programs) and switch it on for the agent (see [Programs](#programs)).
+
 **An agent created through the REST API may arrive without a voice.** Today, creating an agent with `POST /api/v1/agents` accepts a voice and does not store it. Import stores a voice the way the create-agent tool does. So an agent made through that endpoint, then exported, carries an empty voice. This version does not change the REST create behaviour.
 
 **External workers travel without their runtime settings.** An external worker (Claude Code, Codex or OpenCode) can be exported and imported. The package keeps its tool, description, model and provider name, tool-call limit and look, and its instructions (`AGENT.md`) when it has them; it has no prompt (`SOUL.md`), and a package that gives one is refused (`invalid_element`). Three things never go into the file:
@@ -291,6 +293,17 @@ The same rules apply everywhere an agent is created or changed, including when y
 
 A change applies from the agent's next turn; a turn already running keeps the limit it started with.
 
+## Programs
+
+The **Programs** section at the end of an agent's **Basics** tab lists every connected program (see [settings](settings.md#programs)) with a switch named after the program and the agent, for example **GitHub for Dev**. Every program starts off for a new agent. Switched on, the agent's commands get the program's token in its variables. Each change saves on its own.
+
+- A program that is switched on but has no saved token shows **Not connected yet**. Its switch is kept, and the agent's commands get no token until one is saved.
+- Switching a program on is refused when it would clash, and the profile shows the reason, for example "GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off." Two programs that supply the git login for the same site cannot both be on for one agent.
+- Only a person signed in to the web app can change the switch here. Omnipus can change it with `set_agent_permissions` after you approve it; an agent cannot change its own programs, and `update_agent` refuses them.
+- An agent imported from another install arrives with every program off.
+
+External command-line workers have no Programs section: their runner does not run Omnipus commands.
+
 ## Workers and delegation
 
 A worker is just a session that another agent owns and steers. The delegating agent hands the worker a task and keeps working; the worker runs in its own session, with its own tools, its own transcript, and a chat you can open to watch it live.
@@ -403,6 +416,15 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 5. Click **Save heartbeat**. The agent now runs the prompt on that interval.
 
 If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. If you have that chat open, a check-in appears live: the check-in prompt is inserted as it is saved and the answer streams in as it is written when the model provider streams, and otherwise appears whole once the answer is complete (for example with non-streaming or multi-candidate providers), without a reload. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
+
+## Programs
+
+An agent's profile has a **Programs** switch for each entry in [Settings → Programs](settings.md#programs). A new agent starts with every program off. Switching a program on decides which agent may use its stored token; it does not connect a token, so you can switch a program on before or after connecting it.
+
+- **Who can change it.** A person signed in to the web app in a browser, or an agent through `set_agent_permissions` with `programs` (the full list of program ids; `[]` switches all off). That tool asks a person for approval, and an agent can never change its own list. `update_agent` refuses `programs` and names `set_agent_permissions`; `create_agent` does not take it. `get_agent` reports the list, `[]` when none is on. An API token or the command line cannot change it (`403`). System agents cannot have programs.
+- **Conflicts.** A program cannot be switched on when the agent already has a private variable with one of its token variable names, for example "GitHub cannot be switched on for Dev: Dev already has a private variable GH_TOKEN. Remove that variable, or leave GitHub off." The reverse holds too: a private variable named after a token variable of a switched-on program is refused. Two programs that supply the git login for the same site cannot both be on for one agent ("… already supplies the git login for github.com to Dev. Switch one of them off."), and an entry's git site cannot be edited to clash that way.
+- An agent has at most 32 programs switched on.
+- **Export and import.** The switches never travel in an exported package; an imported agent starts with every program off (see [How to move an agent to another install](#how-to-move-an-agent-to-another-install)).
 
 ## Limits and things to watch
 

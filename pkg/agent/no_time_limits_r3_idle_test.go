@@ -87,10 +87,10 @@ func (h *r3IdleHarness) ageGoal(t *testing.T, sid string) string {
 	if g.OwnerKind != generated.GoalOwnerKindSession || g.OwnerID != sid || g.ActiveSessionID != sid {
 		t.Fatalf("SETUP goal must belong to the helper's OWN session: %+v", g)
 	}
-	if _, err := resolveGoalRecordStore().Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = h.base
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("SETUP age goal: %v", err)
 	}
 	return g.GoalID

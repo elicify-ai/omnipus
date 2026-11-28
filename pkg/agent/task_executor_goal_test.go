@@ -167,11 +167,11 @@ func TestActivateTaskGoal_ReRunReactivatesTerminalRecord(t *testing.T) {
 	}
 
 	gs := goal.NewStore(config.OmnipusHomeDir())
-	if _, updErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, updErr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = 3
 		cur.AttemptsUsed = 2
 		return cur.Terminate(generated.GoalStateExhausted, "round bound reached", time.Now().UTC())
-	}); updErr != nil {
+	}}); updErr != nil {
 		t.Fatalf("simulate terminal run: %v", updErr)
 	}
 

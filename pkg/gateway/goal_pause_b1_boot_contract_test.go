@@ -337,10 +337,10 @@ func (f *b1CompFixture) arm(t *testing.T) {
 	require.NoError(t, err)
 	gs := goal.NewStore(f.home)
 	require.NoError(t, gs.Create(g))
-	_, err = gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	_, err = gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.SetRoute("webchat", f.chat)
 		return cur.Activate(f.sid, time.Now().UTC())
-	})
+	}})
 	require.NoError(t, err)
 	f.gid = g.GoalID
 	f.user(t, "text", "") // Genuine input uses the same stored activation routing; no manual authority bits.
@@ -348,7 +348,7 @@ func (f *b1CompFixture) arm(t *testing.T) {
 func (f *b1CompFixture) age(t *testing.T) {
 	t.Helper()
 	past := time.Now().UTC().Add(-time.Hour)
-	_, err := goal.NewStore(f.home).Update(f.gid, func(g *goal.Goal) error { g.LastActivityAt = past; g.StartedAt = &past; return nil })
+	_, err := goal.NewStore(f.home).Update(f.gid, goal.Write{Mutate: func(g *goal.Goal) error { g.LastActivityAt = past; g.StartedAt = &past; return nil }})
 	require.NoError(t, err)
 }
 func (f *b1CompFixture) tickProduced(t *testing.T, mode string) {

@@ -119,6 +119,8 @@ func (te *TaskExecutor) wakeOwnerAttemptsExhausted(t *task.Task, taskSessionID, 
 		TranscriptSessionID: taskSessionID,
 		SourceKind:          "task_goal_loop",
 		Content:             content,
+		// The task record stores no provenance yet: unresolved (I-2).
+		Provenance: bus.UnresolvedProvenance(),
 	}); notifyErr != nil {
 		logger.WarnCF("task_executor", "goal-loop: could not wake owner on attempts-exhausted",
 			map[string]any{"task_id": t.ID, "error": notifyErr.Error()})

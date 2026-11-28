@@ -233,10 +233,10 @@ func (f *r3LifecycleWriteFault) repair(t *testing.T) {
 
 func r3RequireHealthyGoalAndSession(t *testing.T, h *grHarness, id string) {
 	t.Helper()
-	g, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+	g, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.LastActivityAt = time.Now().UTC().Add(-time.Hour)
 		return nil
-	})
+	}})
 	require.NoError(t, err, "SETUP: separate goal store must remain writable")
 	require.Equal(t, h.goalID, g.GoalID)
 	written, err := h.al.GetSessionStore().AppendTranscriptOnce(h.id, session.TranscriptEntry{

@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 
@@ -40,7 +41,7 @@ type ExportSource interface {
 
 // exportRemovedFields are the top-level record fields Field mapping removes at
 // export (home path, timestamps, lock flag, skill grants).
-var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants"}
+var exportRemovedFields = []string{"workspace", "created_at", "updated_at", "locked", "skill_grants", "programs"}
 
 // exportRemovedSubagentFields are the retired/unused subagents fields (ADR A3).
 var exportRemovedSubagentFields = []string{"allow_agents", "model"}
@@ -53,6 +54,12 @@ var executorRuntimeFields = []string{"cli_path", "cli_args", "env_overrides"}
 // NeedsSecretKindExecutorEnv is the needs_secrets kind of an external
 // worker's removed environment override (FR-014).
 const NeedsSecretKindExecutorEnv = "executor_env"
+
+// NeedsSecretKindProgram is the needs_secrets kind of a connected program
+// switched on for the exported agent (connected programs FR-022). Name is
+// the program entry id. Neither the token nor the switch travels: the
+// shared login is entered on the target under Settings -> Programs.
+const NeedsSecretKindProgram = "program"
 
 // Export packs the selected agent into w (manifest first, FR-001/FR-002,
 // Field mapping Export column, FR-018 bounded source reads). Nothing is
@@ -72,11 +79,7 @@ func Export(ctx context.Context, src ExportSource, sel Selection, w io.Writer) e
 	if err != nil {
 		return err
 	}
-	secrets := make([]NeedsSecret, 0, len(agent.envNames))
-	for _, n := range agent.envNames {
-		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
-	}
-	pkg, err := buildPackage(id, agent.name, agent.files, secrets, time.Now().UTC().Truncate(time.Second))
+	pkg, err := buildPackage(id, agent.name, agent.files, agent.needsSecrets(id), time.Now().UTC().Truncate(time.Second))
 	if err != nil {
 		return err
 	}
@@ -100,11 +103,29 @@ type exportedAgent struct {
 	files    []packagedFile
 	name     string
 	envNames []string // removed executor environment-override names (FR-014)
+	programs []string // switched-on connected programs, declared not carried (FR-022)
 	// stored is the record as the store returned it, before cleaning. Only
 	// the export review reads it, to say which removed settings were present
 	// (names only; B1 left_out rules). It never enters the package.
 	stored []byte
 	kind   string // the review's agent kind (main, worker, external_worker)
+}
+
+// needsSecrets lists what the target must supply, in package order: the
+// removed executor environment-override names (FR-014), then the switched-on
+// connected programs (#1960 FR-022). Export and the export review share it, so
+// the review shows exactly the package's needs_secrets.
+func (a *exportedAgent) needsSecrets(id string) []NeedsSecret {
+	// Non-nil even when empty (the package writes needs_secrets as []);
+	// append grows it for the programs.
+	secrets := make([]NeedsSecret, 0, len(a.envNames))
+	for _, n := range a.envNames {
+		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
+	}
+	for _, p := range a.programs {
+		secrets = append(secrets, NeedsSecret{Name: p, UsedBy: id, Kind: NeedsSecretKindProgram})
+	}
+	return secrets
 }
 
 // collectAgentFiles reads and cleans the record and captures SOUL.md and
@@ -165,7 +186,8 @@ func collectAgentFiles(src ExportSource, id string) (*exportedAgent, error) {
 	case ac.IsWorker():
 		kind = PlanKindWorker
 	}
-	return &exportedAgent{files: files, name: v.Name, envNames: envNames, stored: raw, kind: kind}, nil
+	return &exportedAgent{files: files, name: v.Name, envNames: envNames, programs: exportedPrograms(v.Programs),
+		stored: raw, kind: kind}, nil
 }
 
 // sourceErr passes a coded source error through and wraps any other.
@@ -359,4 +381,16 @@ func buildPackage(id, name string, files []packagedFile, secrets []NeedsSecret, 
 		return nil, fmt.Errorf("omnpkg: close zstd: %w", err)
 	}
 	return out.Bytes(), nil
+}
+
+// exportedPrograms returns the agent's switched-on program ids, in stored
+// order without blanks or repeats, for needs_secrets (FR-022).
+func exportedPrograms(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }

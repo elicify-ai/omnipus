@@ -66,7 +66,7 @@ func TestGoalReminderMalformedHistoryRetainsOutcomeUntilRepair(t *testing.T) {
 	t.Cleanup(func() { h.al.SetEventSyncTap(nil) })
 	repair := r2CorruptRunHistory(t, store, tk.ID)
 	r6GateRequireStorageHealth(t, h)
-	healthyGoal, err := resolveGoalRecordStore().Update(h.goalID, func(*goal.Goal) error { return nil })
+	healthyGoal, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(*goal.Goal) error { return nil }})
 	require.NoError(t, err, "SETUP: actual goal writes must remain healthy under the separate run-history fault")
 	require.Equal(t, 2, healthyGoal.ZeroOutputPushes)
 	beforeCalls := h.root.count()

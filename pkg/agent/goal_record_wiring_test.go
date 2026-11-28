@@ -53,9 +53,9 @@ func seedActiveGoalRecord(t *testing.T, sid, prompt string, criteria, dod []task
 	if createErr := gstore.Create(g); createErr != nil {
 		t.Fatalf("seedActiveGoalRecord: Create: %v", createErr)
 	}
-	updated, err := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	updated, err := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())
-	})
+	}})
 	if err != nil {
 		t.Fatalf("seedActiveGoalRecord: Activate: %v", err)
 	}
@@ -175,10 +175,10 @@ func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 	// Seed a nonzero push streak directly on the store record — WriteRecord
 	// must reset it (GOAL-FR-004's relocated FR-014b counter).
 	goalStore := goal.NewStore(config.OmnipusHomeDir())
-	if _, err := goalStore.Update(seeded.GoalID, func(cur *goal.Goal) error {
+	if _, err := goalStore.Update(seeded.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.ZeroOutputPushes = 2
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := goalStore.Get(seeded.GoalID)
@@ -443,7 +443,7 @@ func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *t
 
 	// ADR-086: the registered record is the goal's OWN typed Criteria/DoD
 	// (GOAL-FR-003), not the retired GoalCriteriaJSON session-meta string.
-	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-rehydrate-1", func(cur *goal.Goal) error {
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-rehydrate-1", goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Definition = "Build a tetris clone"
 		if serr := cur.SetCriteria([]task.AcceptanceCriterion{{
 			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
@@ -457,7 +457,7 @@ func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *t
 			Provenance: task.ProvenanceFloor, Text: "no secrets",
 			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "tester"},
 		}}, time.Now().UTC())
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatal(uerr)
 	}
 

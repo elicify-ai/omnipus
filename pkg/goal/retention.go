@@ -109,7 +109,7 @@ func Sweep(store *Store, retentionDays int, sessionExists func(sessionID string)
 
 		if IsActiveState(g.State) && g.ActiveSessionID != "" && !sessionExists(g.ActiveSessionID) {
 			id := g.GoalID
-			if _, uerr := store.Update(id, func(gg *Goal) error {
+			if _, uerr := store.Update(id, Write{Mutate: func(gg *Goal) error {
 				if !IsActiveState(gg.State) {
 					// Raced with another mutation between List() and this
 					// Update (e.g. it was already terminated by the engine
@@ -118,7 +118,7 @@ func Sweep(store *Store, retentionDays int, sessionExists func(sessionID string)
 				}
 				return gg.Terminate(generated.GoalStateExpired,
 					"active session no longer exists (retention sweep, GOAL-FR-044/EC-10)", now)
-			}); uerr != nil {
+			}}); uerr != nil {
 				slog.Warn("goal: sweep: terminal-expire failed",
 					"goal_id", id, "error", uerr)
 			} else {

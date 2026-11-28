@@ -281,10 +281,10 @@ func TestGoalReminder1852WindowUsesGoalStartNotTheWatermark(t *testing.T) {
 	h := grNewRecordedBrake(t)
 	start := gr1852GoalStart(t, h)
 	helperAt, since, goalActiveAt := start.Add(10*time.Minute), start.Add(20*time.Minute), start.Add(30*time.Minute)
-	_, err := resolveGoalRecordStore().Update(h.goalID, func(g *goal.Goal) error {
+	_, err := resolveGoalRecordStore().Update(h.goalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.LastActivityAt = goalActiveAt
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 	persisted, err := goal.NewStore(config.OmnipusHomeDir()).Get(h.goalID)
 	require.NoError(t, err)

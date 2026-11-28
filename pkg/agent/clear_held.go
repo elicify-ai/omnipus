@@ -102,11 +102,11 @@ func (al *AgentLoop) notifyClearReleased(msg bus.InboundMessage) {
 // NotifyClearReleasedForTest drives the receiver the way the worker does, for the
 // gateway's wiring test.
 func (al *AgentLoop) NotifyClearReleasedForTest(sessionID, transcriptEntryID string) {
-	al.notifyClearReleased(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID})
+	al.notifyClearReleased(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID, Provenance: bus.UnresolvedProvenance()})
 }
 
 // NotifyClearHeldForTest drives the receiver the way the worker does, for the
 // gateway's wiring test.
 func (al *AgentLoop) NotifyClearHeldForTest(sessionID, transcriptEntryID string) {
-	al.notifyClearHeld(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID})
+	al.notifyClearHeld(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID, Provenance: bus.UnresolvedProvenance()})
 }

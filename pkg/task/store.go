@@ -921,7 +921,12 @@ type Patch struct {
 	Title       *string
 	Description *string
 	Prompt      *string
-	Status      *Status
+	// JoinProvenance, when non-nil, joins these origins into
+	// Task.Provenance in the same write (FR-041: an agent change to the
+	// task's instructions adds its turn's origins). An empty list, or a task
+	// whose provenance is already unresolved, leaves it unresolved.
+	JoinProvenance *[]string
+	Status         *Status
 	// CancelReason is the write path for Task.CancelReason (ADR-052 FR-028).
 	// nil = unchanged; pointing at "" clears it; pointing at a valid
 	// CancelReason value sets it (mirrors plan.Patch.FailedReason,
@@ -1200,6 +1205,9 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 			return nil, true, verr("prompt must be 10000 characters or fewer")
 		}
 		su.t.Prompt = *su.patch.Prompt
+	}
+	if su.patch.JoinProvenance != nil {
+		su.t.Provenance = JoinOrigins(su.t.Provenance, *su.patch.JoinProvenance)
 	}
 	if su.patch.Status != nil {
 		if !IsValidStatus(*su.patch.Status) {
@@ -1999,4 +2007,29 @@ func containsString(slice []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// JoinOrigins is the provenance join over stored origin lists (I-2): the
+// sorted union of both, or nil (unresolved) when either side is unresolved.
+// Joining only ever adds origins.
+func JoinOrigins(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, o := range list {
+			if o == "" {
+				return nil
+			}
+			if _, dup := seen[o]; dup {
+				continue
+			}
+			seen[o] = struct{}{}
+			out = append(out, o)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

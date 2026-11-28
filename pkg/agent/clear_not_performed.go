@@ -61,5 +61,5 @@ func (al *AgentLoop) notifyClearNotPerformed(msg bus.InboundMessage) {
 // NotifyClearNotPerformedForTest drives the receiver the way the worker does,
 // for the gateway's wiring test.
 func (al *AgentLoop) NotifyClearNotPerformedForTest(sessionID, transcriptEntryID string) {
-	al.notifyClearNotPerformed(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID})
+	al.notifyClearNotPerformed(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID, Provenance: bus.UnresolvedProvenance()})
 }

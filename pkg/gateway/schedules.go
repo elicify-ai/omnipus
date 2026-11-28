@@ -170,6 +170,9 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// EmitToolPolicyAskDenied) does NOT carry the schedule identity fields —
 	// EmitToolPolicyAskDenied has a fixed field set without them.
 	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
+	// I-2 / S-111 / S-124: the run's input is the schedule's stored
+	// provenance (scheduledJobProvenance).
+	ctx2 = agent.WithScheduledInputProvenance(ctx2, scheduledJobProvenance(job))
 
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
 	// M6: ProcessScheduled runs the turn with SendResponse:false,
@@ -201,6 +204,27 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		return sessionID, runErr
 	}
 	return sessionID, nil
+}
+
+// scheduledJobProvenance is the input provenance of one fire of job (I-2,
+// S-111, S-124): the schedule's stored provenance, so a schedule an agent
+// created from a channel turn keeps that channel's origin. A job written
+// before the field existed has none: a heartbeat, or a schedule a person
+// created (CreatedBy is the creating user, set only by the REST create), is
+// independent (FR-050's rule for older records); any other is unresolved
+// (fail closed).
+func scheduledJobProvenance(job *cron.CronJob) bus.Provenance {
+	if len(job.Provenance) > 0 {
+		origins := make([]bus.Origin, len(job.Provenance))
+		for i, o := range job.Provenance {
+			origins[i] = bus.Origin(o)
+		}
+		return bus.NewProvenance(origins...)
+	}
+	if job.Payload.Kind == heartbeatJobKind || job.CreatedBy != "" {
+		return bus.NewProvenance(bus.OriginIndependent)
+	}
+	return bus.UnresolvedProvenance()
 }
 
 // setProcessCleanup wires the best-effort per-run child-process cleanup hook
@@ -1066,6 +1090,9 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		RunIsolated: runIsolated,
 		CreatedBy:   user.Username,
 		Enabled:     req.Enabled,
+		// I-2/S-111: a schedule a person creates is work with no starting
+		// message: independent (spec producer table). Never on the wire.
+		Provenance: []string{string(bus.OriginIndependent)},
 	})
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create schedule")
@@ -1161,6 +1188,9 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 		job.SessionMode = mode
 	}
 
+	// I-2/S-111: a person's edit joins no provenance; UpdateJob keeps the
+	// stored provenance unchanged.
+	job.Provenance = nil
 	if err := a.cronSvc().UpdateJob(&job); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to update schedule")
 		return

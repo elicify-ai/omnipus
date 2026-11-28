@@ -102,6 +102,7 @@ var gitMutatingVerbs = map[string]struct{}{
 	"tag":           {}, // `-d`/`-f` mutate refs
 	"branch":        {}, // `-D`/`-f` mutate refs
 	"push":          {}, // can push --force to rewrite a remote mirror of the evidence
+	"send-pack":     {}, // push's plumbing form (H55)
 	"fetch":         {},
 	"pull":          {},
 	"init":          {}, // re-init would clobber the engine's repo
@@ -471,33 +472,26 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 		case strings.HasPrefix(a, "--git-dir="):
 			gitDirOverride = a[len("--git-dir="):]
 			i++
-		case a == "--work-tree" || a == "-c" || a == "--namespace" ||
-			a == "--exec-path" || a == "--config-env":
+		case gitGlobalTakesNext(a):
 			// Option that consumes the next token; skip both.
 			i += 2
-		case strings.HasPrefix(a, "--work-tree=") ||
-			strings.HasPrefix(a, "--namespace=") ||
-			strings.HasPrefix(a, "--exec-path=") ||
-			strings.HasPrefix(a, "--config-env="):
-			i++
-		case strings.HasPrefix(a, "-c") && strings.Contains(a, "="):
-			// git's -c accepts the glued short form too: "-c<name>=<value>"
-			// (one token, no space) is a single-token config override per
-			// git(1), as is "-c=<name>=<value>". The bare "-c" (no "=")
-			// consumes the NEXT token and is handled by the case above.
-			i++
-		case a == "-p" || a == "--paginate" || a == "--no-pager" ||
-			a == "--bare" || a == "--no-replace-objects" ||
-			a == "--literal-pathspecs" || a == "--glob-pathspecs" ||
-			a == "--noglob-pathspecs" || a == "--icase-pathspecs" ||
-			a == "--no-optional-locks" || a == "--html-path" ||
-			a == "--version" || a == "--help":
-			i++
 		case strings.HasPrefix(a, "-"):
-			// Unknown global option; skip it (conservative — do not treat as verb).
+			// A one-token global option, skipped: the glued forms
+			// --work-tree=, --namespace=, --exec-path=, --config-env=,
+			// "-c<name>=<value>" and "-c=<name>=<value>" (git(1)'s glued short
+			// form of -c), the flags -p, --paginate, --no-pager, --bare,
+			// --no-replace-objects, the *-pathspecs flags, --no-optional-locks,
+			// --html-path, --version, --help, and any unknown option
+			// (conservative: never treated as the verb).
 			i++
 		default:
 			verb = a
+			// H55 Rules A and B read the global options (the -c values) and
+			// the push remote, which decideGit never looks at. This only adds
+			// refusals.
+			if d, denied := g.inspectGitArgsPush(args[:i], verb, args[i+1:], effCwd); denied {
+				return d
+			}
 			// Remaining args after the verb (args[i+1:]) are the subcommand's
 			// own arguments; we look at them below for `commit --amend` detail.
 			return g.decideGit(verb, args[i+1:], effCwd, gitDirOverride, cwd)
@@ -505,6 +499,16 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 	}
 	// No verb found (e.g. `git --version`) → nothing to gate.
 	return allowExec()
+}
+
+// gitGlobalTakesNext reports a git global option whose value is the next
+// token: --work-tree, the bare -c, --namespace, --exec-path, --config-env.
+func gitGlobalTakesNext(a string) bool {
+	switch a {
+	case "--work-tree", "-c", "--namespace", "--exec-path", "--config-env":
+		return true
+	}
+	return false
 }
 
 // decideGit applies D17 given a resolved verb, its args, the effective cwd, and
@@ -618,12 +622,43 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	// `git commit -m evidence` was denied 182 times in a protected evidence
 	// repo, then `git -c user.name=Jim -c user.email=… commit -m …` went
 	// straight through. Collapse "git <options…> verb" to "git verb" first.
-	lower := stripGitGlobalOptions(strings.ToLower(script))
+	// Runs of spaces or tabs collapse to one space first, so "git  commit" or
+	// "git<TAB>commit" cannot hide the verb from the "git <verb>" patterns
+	// (#1960 S1 security round 2, F1-a). This only adds refusals.
+	collapsed := collapseBlanks(strings.ToLower(script))
+	// H55 Rules A and B run on the text BEFORE the global options are stripped:
+	// Rule A reads the -c values the stripping removes (#1960 S1, rulings H55
+	// and H55 v2). This only adds refusals.
+	if d, denied := g.inspectShellPush(script, cwd); denied {
+		return d
+	}
+	lower := stripGitGlobalOptions(collapsed)
 
 	resolvedCwd := resolvePathBestEffort(cwd, "")
 	_, cwdProtected := g.enclosingProtectedWorkdir(resolvedCwd)
+	// A bash cwd may also be a write mount outside the work dir (ADR-063
+	// addendum 2026-11-24). From there a script can still point git or cd at
+	// the protected work dir ("git -C <work> commit", "cd <work> && git reset
+	// --hard"), and the -C value is stripped above, so check (a) also runs when
+	// any script token names a path inside a protected work dir. This only adds
+	// refusals.
+	if !cwdProtected {
+		cwdProtected = g.scriptNamesProtectedWorkdir(script, cwd)
+	}
+	// The token check above sees literal paths judged against the starting cwd
+	// only. A path operand that cannot be resolved statically (a variable,
+	// command substitution, glob, "~" or backslash in the operand of cd,
+	// pushd, -C, --git-dir or --work-tree, or a bare or relative cd) may still
+	// land in the protected work dir, so while any work dir is registered such
+	// a script gets check (a) as well. Expansions in commit messages, branch
+	// names and refspecs do not trigger it (#1960 S1 security round 2, F1-a,
+	// narrowed by H54). This only adds refusals.
+	if !cwdProtected && len(g.resolvedWorkdirs()) > 0 && scriptHasUnresolvablePathOperand(script) {
+		cwdProtected = true
+	}
 
-	// (a) mutating git verbs anywhere in the script, when cwd is a protected repo.
+	// (a) mutating git verbs anywhere in the script, when cwd is a protected
+	//     repo or the script names a path inside one.
 	if cwdProtected {
 		for _, pat := range gitMutatingScriptPatterns() {
 			if strings.Contains(lower, pat) {
@@ -671,7 +706,65 @@ var gitGlobalOptionRun = regexp.MustCompile(
 // gitShellWord is one shell word: runs of unquoted non-space characters and
 // balanced double/single-quoted segments (which may contain spaces), in any
 // order — so user.name="Jim Bot" is ONE token, as the shell would read it.
-const gitShellWord = `(?:[^\s"']+|"[^"]*"|'[^']*')+`
+// Backtick and unnested $(...) command substitutions count as part of the word
+// too, so "git -C `dirname $PWD`/work commit" still collapses to "git commit"
+// (#1960 S1 security round 2, F1-a).
+const gitShellWord = "(?:[^\\s\"'`$]+|\\$\\([^)]*\\)|\\$|\"[^\"]*\"|'[^']*'|`[^`]*`)+"
+
+// blankRun matches a run of spaces and tabs.
+var blankRun = regexp.MustCompile(`[ \t]+`)
+
+// collapseBlanks turns every run of spaces and tabs into one space.
+func collapseBlanks(s string) string { return blankRun.ReplaceAllString(s, " ") }
+
+// pathWord is one shell word in an operand position: like gitShellWord, but an
+// unquoted run also stops at the command separators ; & | ( ).
+const pathWord = "(?:[^\\s\"'`$;&|()]+|\\$\\([^)]*\\)|\\$|\"[^\"]*\"|'[^']*'|`[^`]*`)+"
+
+// dirChangeOperand matches a "cd" or "pushd" command and, when present, its
+// operand (group 2).
+var dirChangeOperand = regexp.MustCompile(`(?:^|[\s;&|(])(cd|pushd)(?:[ \t]+(` + pathWord + `))?`)
+
+// pathOptionOperand matches the operand (group 1) of a path-taking option:
+// -C <dir> or -C<dir> (git, env, and any other command), --git-dir and
+// --work-tree, with "=" or blanks.
+var pathOptionOperand = regexp.MustCompile(`(?:^|[\s;&|(])(?:-C|--git-dir|--work-tree)(?:=|[ \t]*)(` + pathWord + `)`)
+
+// unresolvablePathWord reports whether a path operand holds a form whose
+// target a static check cannot know: "$" (variables, command substitution),
+// a backtick, a glob "*" or "?", "~" or a backslash.
+func unresolvablePathWord(w string) bool { return strings.ContainsAny(w, "$`*?~\\") }
+
+// scriptHasUnresolvablePathOperand reports whether script has a path operand
+// the literal-token check cannot resolve (H54 narrowing of F1-a): an operand
+// of cd, pushd, -C, --git-dir or --work-tree that holds an expansion, glob,
+// "~" or backslash, or a bare or relative cd/pushd (after which the starting
+// cwd no longer says where later relative paths point). Expansions anywhere
+// else (commit messages, branch and remote names, refspecs) do not count.
+// Not a shell parser (LIM-02).
+func scriptHasUnresolvablePathOperand(script string) bool {
+	for _, m := range dirChangeOperand.FindAllStringSubmatchIndex(script, -1) {
+		if m[4] < 0 { // no operand: a bare cd/pushd, unless "cd" starts a longer word
+			if end := m[3]; end < len(script) && !strings.ContainsRune(" \t\n\r;&|)", rune(script[end])) {
+				continue
+			}
+			return true
+		}
+		w := script[m[4]:m[5]]
+		if unresolvablePathWord(w) {
+			return true
+		}
+		if !strings.HasPrefix(strings.NewReplacer(`"`, "", `'`, "").Replace(w), "/") {
+			return true
+		}
+	}
+	for _, m := range pathOptionOperand.FindAllStringSubmatch(script, -1) {
+		if unresolvablePathWord(m[1]) {
+			return true
+		}
+	}
+	return false
+}
 
 // stripGitGlobalOptions rewrites every "git <global options…> <verb>" in an
 // already-lowercased script to "git <verb>" so the substring patterns see
@@ -687,7 +780,7 @@ func gitMutatingScriptPatterns() []string {
 		"git commit", "git rebase", "git rm", "git reset", "git checkout",
 		"git merge", "git cherry-pick", "git revert", "git apply", "git am",
 		"git clean", "git gc", "git prune", "git reflog", "git update-ref",
-		"git filter-branch", "git replace", "git push", "git init", "git config",
+		"git filter-branch", "git replace", "git push", "git send-pack", "git init", "git config",
 		"git update-index", "git symbolic-ref", "git worktree", "git stash",
 		"git branch -d", "git branch -f", "git tag -d", "git tag -f",
 		"--amend",
@@ -701,6 +794,8 @@ func shellMutatingTokens() []string {
 		"rm ", "rm -", "rmdir", "mv ", "cp ", "tee ", "dd ", "truncate",
 		"shred", "> ", ">>", "chmod", "chown", "ln ", "install ",
 		"git commit", "git rebase", "git rm", "git reset", "--amend",
+		// In-place editors (H55 re-review F5): they rewrite the file they name.
+		"sed -i", "sed --in-place", "perl -i", "perl -pi", "perl -ni",
 	}
 }
 
@@ -728,6 +823,54 @@ func (g *GitGuard) scriptNamesProtectedGit(script, cwd string) bool {
 		// but guard against relative ".git" when cwd is the protected repo).
 		if f == ".git" || strings.HasSuffix(f, "/.git") {
 			if _, ok := g.enclosingProtectedWorkdir(resolvePathBestEffort(cwd, "")); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scriptNamesProtectedWorkdir reports whether any token of script, resolved
+// against cwd, lies inside a protected work dir. Tokens are split the same way
+// as scriptNamesProtectedGit; a glued git "-C<dir>" token is also read as its
+// directory. Like every check in this file it is not a shell parser (LIM-02):
+// it judges each token against the starting cwd only.
+func (g *GitGuard) scriptNamesProtectedWorkdir(script, cwd string) bool {
+	if len(g.resolvedWorkdirs()) == 0 {
+		return false
+	}
+	fields := strings.FieldsFunc(script, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '"', '\'', '=':
+			return true
+		}
+		return false
+	})
+	// Quote splicing (/ws/wo""rk) reads as one word to the shell, so the script
+	// is also split on separators other than quotes, with the quote characters
+	// removed from each word.
+	unquoted := strings.FieldsFunc(script, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '=':
+			return true
+		}
+		return false
+	})
+	for _, w := range unquoted {
+		if strings.ContainsAny(w, `"'`) {
+			fields = append(fields, strings.NewReplacer(`"`, "", `'`, "").Replace(w))
+		}
+	}
+	for _, f := range fields {
+		candidates := []string{f}
+		if strings.HasPrefix(f, "-C") && len(f) > 2 {
+			candidates = append(candidates, f[2:])
+		}
+		for _, c := range candidates {
+			if c == "" || strings.HasPrefix(c, "-") {
+				continue
+			}
+			if _, ok := g.enclosingProtectedWorkdir(resolvePathBestEffort(c, cwd)); ok {
 				return true
 			}
 		}

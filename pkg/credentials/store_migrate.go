@@ -218,7 +218,7 @@ func (s *Store) migrateLegacyLocked(oldKey, newKey, newSalt []byte) (bool, error
 			return fmt.Errorf("%w: %d", ErrUnsupportedStoreVersion, sf.Version)
 		}
 
-		if _, statErr := os.Stat(s.migrationRecordPath()); statErr == nil {
+		if _, statErr := os.Stat(s.migrationRecordPath()); statErr == nil { // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or a fixed name beside it, never request or agent input; the store exists to read and write exactly this file.
 			emitMigrationAudit(false, "legacy file after completed migration", len(sf.Credentials), 0)
 			return fmt.Errorf(
 				"%w: if you deliberately restored a pre-upgrade backup of credentials.json, delete %s and restart; otherwise treat the store as tampered with",

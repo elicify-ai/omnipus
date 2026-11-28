@@ -129,10 +129,7 @@ func BuildExportPlan(src ExportSource, sel Selection, now time.Time) (*ExportPla
 	if err != nil {
 		return nil, err
 	}
-	secrets := make([]NeedsSecret, 0, len(agent.envNames))
-	for _, n := range agent.envNames {
-		secrets = append(secrets, NeedsSecret{Name: n, UsedBy: id, Kind: NeedsSecretKindExecutorEnv})
-	}
+	secrets := agent.needsSecrets(id)
 	created := now.UTC()
 	bundle, err := buildPackage(id, agent.name, agent.files, secrets, created.Truncate(time.Second))
 	if err != nil {

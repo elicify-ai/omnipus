@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -39,6 +40,9 @@ type PeerRequest struct {
 	Sender               SendOrigin
 	// SenderSessionID is the sending turn's transcript session.
 	SenderSessionID string
+	// Provenance is the sending turn's provenance (I-2), recorded on the
+	// request ledger and joined into the receiving turn.
+	Provenance bus.Provenance
 }
 
 // PeerReceipt reports what the router actually admitted.
@@ -251,6 +255,7 @@ func (t *MessageTool) executePeerForm(ctx context.Context, content, wsArg string
 		Content:              content,
 		Sender:               sender,
 		SenderSessionID:      ToolTranscriptSessionID(ctx),
+		Provenance:           ToolTurnProvenance(ctx),
 	})
 	if err != nil {
 		return &ToolResult{ForLLM: fmt.Sprintf("peer send refused, nothing was admitted: %v", err), IsError: true, Err: err}

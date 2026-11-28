@@ -118,6 +118,22 @@ Each drop is written to the log as an error and to the audit log, and the connec
 
 Changing a connector from workspace A to B does not move its existing A conversation. Subsequent input uses a separate B-scoped conversation, without carrying A's conversation history or recalled shared notes into it. Existing A archives remain readable in A. Directly trying to reuse an A chat or helper in B is refused with a visible error; open B's conversation instead.
 
+## Programs on a connection
+
+Each bound connection has a **Programs** switch: whether work started by a message on this connection may use the program tokens of [Settings → Programs](settings.md#programs). It is off by default. Only a person signed in to the web app in a browser can change it (an API token, the command line and agents are refused; `set_config` refuses `channels.*.programs_allowed`, and the general configuration endpoint `PUT /api/v1/config` refuses with status 403 any change that would switch it on, including by replacing the whole connection). A save needs the revision you loaded; a change made in the meantime is refused with `409`. The switch has no effect on a connection that is not bound, and changing the connection's workspace or main agent turns it off, so you decide again for the new binding. The matching switch for the web chat is on the Programs tab of Settings.
+
+## Programs on a channel
+
+Each connector's panel (**Configure** on the Connectors page) has a **Programs** section with one switch: may the agent this channel is bound to use connected programs (see [settings](settings.md#programs)) for messages from this channel? The section shows the binding it applies to, for example **Bound to Home · Dev**, and the switch reads **Let Dev use connected programs for messages from this channel**. It is off until you switch it on.
+
+- The restriction follows the work. Work started by a channel message — a helper it delegates to, another agent it asks, a task it creates or edits, a background command that continues the turn — gets a program token only while that channel's switch is on. It still applies after a restart.
+- A connector that is not bound yet says **This channel is not bound to a workspace and agent, so no agent receives its messages. This switch takes effect once it is bound.** The switch itself appears once the connector is bound, and it starts off.
+- Binding the connector to another workspace or agent turns its switch off, so the switch never carries over to an agent you did not choose.
+- If saving the switch fails, it returns to its previous position with **Not confirmed** and **Retry**.
+- A command that ran without its programs because of this switch adds a short notice naming the channel.
+
+Programs themselves are connected in Settings → Programs. Only a person signed in to the web app can change this switch; `set_config` cannot.
+
 ## Starting messages
 
 By default an agent only answers messages that arrive on a connector. Each connector's **Configure** panel has a **Starting messages** section with two choices:

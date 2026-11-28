@@ -99,10 +99,10 @@ func TestKeeperStopPause_StopSuppressesIdleKeeperUntilANewTurnRuns(t *testing.T)
 	// Re-age the record first — the user's turn in (d) legitimately re-armed
 	// the quiet window, and this step is about the keeper RESUMING, not about
 	// the window math.
-	if _, err := resolveGoalRecordStore().Update(gid, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = time.Now().Add(-5 * DefaultGoalReminderQuietWindow)
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("re-age goal record: %v", err)
 	}
 	al.goalQuietWindowSettle(time.Now())
@@ -156,10 +156,10 @@ func TestKeeperStopPause_TheStoppedTurnFinishingDoesNotLiftIt(t *testing.T) {
 	if !al.goalKeeperPausedByStop(sid) {
 		t.Fatal("the stopped turn's own graceful completion lifted the Stop-pause — the Stop was undone the instant it landed")
 	}
-	if _, err := resolveGoalRecordStore().Update(gid, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = time.Now().Add(-5 * DefaultGoalReminderQuietWindow)
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("re-age goal record: %v", err)
 	}
 	al.goalQuietWindowSettle(time.Now())

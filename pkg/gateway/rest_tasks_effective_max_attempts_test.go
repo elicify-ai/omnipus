@@ -80,11 +80,11 @@ func TestTaskWire_GoalTriesComeFromTheGoalRecord(t *testing.T) {
 	// Distinct values for every limit so no assertion can pass by reading the
 	// wrong one: 4 tries used, a 7-try limit on the record, and the task
 	// attempt limit's default of 3.
-	_, err = gs.Update(rec.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(rec.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		g.Round = 4
 		g.MaxRounds = 7
 		return nil
-	})
+	}})
 	require.NoError(t, err)
 
 	w := patchTaskJSON(t, api, created.Id, `{"title":"invoice report (renamed)"}`)

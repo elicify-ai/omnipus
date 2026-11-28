@@ -1508,6 +1508,8 @@ func (al *AgentLoop) ProcessDirectWithChannelAs(
 		Content:    content,
 		SessionKey: sessionKey,
 		Metadata:   map[string]string{"agent_id": agentID},
+		// The scheduler/heartbeat is a producer: independent work (I-2).
+		Provenance: bus.NewProvenance(bus.OriginIndependent),
 	}
 	resp, _, err := al.processMessage(ctx, msg)
 	return resp, err
@@ -1532,6 +1534,8 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 		ChatID:     chatID,
 		Content:    content,
 		SessionKey: sessionKey,
+		// The scheduler/heartbeat is a producer: independent work (I-2).
+		Provenance: bus.NewProvenance(bus.OriginIndependent),
 	}
 
 	resp, _, err := al.processMessage(ctx, msg)
@@ -1675,6 +1679,9 @@ func (al *AgentLoop) ProcessScheduled(
 		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 		WebchatLiveStream:   true, // #1442: answer streams live to the session's viewers
+		// I-2 / S-124: the schedule's message origin, when the fire path
+		// knows it (a heartbeat is independent); otherwise unresolved.
+		InputOrigin: scheduledInputOrigin(ctx),
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
 		// A deadline-forced hard abort (pkg/gateway/schedules.go's

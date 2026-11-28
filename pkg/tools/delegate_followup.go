@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -314,6 +315,10 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 			return &followupRefusalError{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)}
 		}
+		// FR-041 / S-110: this steer changes the session's instructions, so
+		// the steering turn's provenance joins its stored lineage in this
+		// same write, before the instruction is queued.
+		joinSteeringProvenance(ctx, cur)
 		rec = cur
 		return nil
 	}); merr != nil {
@@ -655,4 +660,32 @@ func resumeInstructionArg(args map[string]any) (string, error) {
 		return "", fmt.Errorf("text must be a string")
 	}
 	return strings.TrimSpace(s), nil
+}
+
+// joinSteeringProvenance joins the calling agent turn's provenance into a
+// lineage record's stored provenance (FR-041, I-2): origins are only added,
+// and an unresolved caller leaves the record unresolved (fail closed). A root
+// stores none; a call outside an agent turn joins nothing.
+func joinSteeringProvenance(ctx context.Context, rec *session.LifecycleRecord) {
+	if rec == nil || rec.ProvenanceMode != session.ProvenanceModeLineage || ToolTurnOrigin(ctx) == nil {
+		return
+	}
+	stored := bus.UnresolvedProvenance()
+	if len(rec.Provenance) > 0 {
+		origins := make([]bus.Origin, len(rec.Provenance))
+		for i, o := range rec.Provenance {
+			origins[i] = bus.Origin(o)
+		}
+		stored = bus.NewProvenance(origins...)
+	}
+	joined := bus.Join(stored, ToolTurnProvenance(ctx)).Origins()
+	if len(joined) == 0 {
+		rec.Provenance = nil
+		return
+	}
+	out := make([]string, len(joined))
+	for i, o := range joined {
+		out[i] = string(o)
+	}
+	rec.Provenance = out
 }

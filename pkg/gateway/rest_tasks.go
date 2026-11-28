@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -221,7 +222,7 @@ func (a *restAPI) syncTaskGoalRecord(
 		}
 		return gs.Create(g)
 	}
-	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+	_, err = gs.Update(existing.GoalID, goal.Write{Mutate: func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
 				return sErr
@@ -233,7 +234,7 @@ func (a *restAPI) syncTaskGoalRecord(
 			}
 		}
 		return nil
-	})
+	}})
 	return err
 }
 
@@ -921,6 +922,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// FR-041 / S-77: a task a person creates on the Board is work with no
+	// starting message: its origin is independent.
+	t.Provenance = []string{string(bus.OriginIndependent)}
 	if err := a.taskStore.Create(t); err != nil {
 		if isTaskValidationErr(err) {
 			jsonTaskValidationErr(w, err)
@@ -1444,7 +1448,9 @@ func (tp *taskPatch) applyUpdate() bool {
 	// holds the task's coordination lock across the task write and the paired
 	// goal's synchronisation (criteria/dod here, then the prompt), so REST and
 	// update_task writers of one task are strictly ordered.
-	req := tools.TaskWriteRequest{Patch: tp.patch, Prior: true}
+	// A person's UI write leaves the task's stored provenance unchanged
+	// (R3-C1): it carries none.
+	req := tools.TaskWriteRequest{Patch: tp.patch, Prior: true, Provenance: bus.UnresolvedProvenance()}
 	if tp.detachResetsStatus {
 		// The detach above optimistically added `status: inbox`. A terminal or
 		// `blocked` member legitimately refuses that (done is frozen; blocked

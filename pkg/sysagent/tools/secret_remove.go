@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -87,6 +89,13 @@ func (t *RemoveSecretTool) Execute(ctx context.Context, args map[string]any) (re
 	switch {
 	case errors.As(err, &notFound):
 		return tools.ErrorResult(errorJSON("NOT_FOUND", "no stored reference "+ref+"; nothing was removed", "Read list_secrets for the stored names"))
+	case errors.Is(err, credentials.ErrProgramOwned):
+		var cfg *config.Config
+		if t.deps.GetCfg != nil {
+			cfg = t.deps.GetCfg()
+		}
+		return tools.ErrorResult(errorJSON("PROGRAM_OWNED", programs.ProgramOwnedMessage(cfg, ref)+" Nothing was removed.",
+			"A person changes program tokens in Settings → Programs"))
 	case err != nil:
 		return tools.ErrorResult(errorJSON("REMOVE_FAILED", "the reference could not be removed; nothing was removed", "Check that the credential store is unlocked and writable, then try again"))
 	}

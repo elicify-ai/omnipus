@@ -471,7 +471,7 @@ func TestDeleteAgent_EndsTheDeletedAgentsActiveGoals(t *testing.T) {
 		}}, 20, now)
 	require.NoError(t, err)
 	require.NoError(t, gs.Create(g))
-	_, err = gs.Update(g.GoalID, func(cur *goal.Goal) error { return cur.Activate(meta.ID, now) })
+	_, err = gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error { return cur.Activate(meta.ID, now) }})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()

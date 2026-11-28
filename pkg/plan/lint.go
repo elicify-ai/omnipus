@@ -37,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -317,7 +318,7 @@ func LintCorrection(p *Plan, members []task.Task, req CorrectionRequest) *LintEr
 	// adjustment the projection applies to done members (so a violation means
 	// the same thing on both sides), but nothing this correction does — no
 	// tail members, no tail edges, and the superseded member still present.
-	carried := violationFingerprints(lintViolations(projectCorrectedMembers(members, CorrectionRequest{})))
+	carried := violationFingerprints(lintViolations(projectCorrectedMembers(members, CorrectionRequest{Provenance: bus.UnresolvedProvenance()})))
 
 	introduced := make([]LintViolation, 0, len(after))
 	preExisting := make([]LintViolation, 0, len(after))

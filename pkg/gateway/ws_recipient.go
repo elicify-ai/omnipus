@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -112,6 +113,8 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		AskApproved: hcm.recipientAskApproved,
 		// The sender's own message id: a held request's delivery moves this row on.
 		SenderMessageID: hcm.clientMessageID,
+		// A person typing in the web chat is a provenance producer (I-2).
+		Provenance: bus.NewProvenance(bus.OriginWeb),
 		// U8 r4 F12: every receiver authorization decision (including a late
 		// Ask and its approval wait) is finished before this runs; only then is
 		// the user's message saved and echoed, then the receiver's side written.

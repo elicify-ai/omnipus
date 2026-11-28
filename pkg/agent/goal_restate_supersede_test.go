@@ -46,10 +46,10 @@ func activateRegisteredAlphaGoal(t *testing.T, al *AgentLoop, agentInst *AgentIn
 	activatePendingGoal(t, al, agentInst, &opts)
 	g := seedCriteriaOntoActiveGoal(t, sid, e1AlphaIntent,
 		[]task.AcceptanceCriterion{terminalTestCriterion(e1AlphaCriterion)})
-	registered, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+	registered, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Definition = "Produce l4e1-alpha.txt whose content is the word ALPHA."
 		return nil
-	})
+	}})
 	if err != nil {
 		t.Fatalf("fixture: set definition: %v", err)
 	}
@@ -124,10 +124,10 @@ func TestGoalAdjudication_DiscardsAVerdictForARestatedGoal(t *testing.T) {
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(n int) (*providers.LLMResponse, error) {
 		if n == 1 {
 			// The restate lands while the Judge is mid-call.
-			if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+			if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 				_, rerr := cur.Restate(e1BetaIntent, newFloorDoD(), time.Now().UTC())
 				return rerr
-			}); err != nil {
+			}}); err != nil {
 				t.Errorf("fixture: restate during judging: %v", err)
 			}
 		}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -78,6 +79,16 @@ func GenericAllowedKey(key string) bool {
 	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TZ", "LANG", "TMPDIR", "TERM",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy":
 		return true
+	}
+	if runtime.GOOS == "windows" {
+		// FR-239 (WU-19 ruling 2026-11-24): on Windows the allowlist also admits
+		// these system variables, matched case-insensitively. Spelled out here
+		// as an independent oracle, not read from the production list.
+		for _, name := range []string{"SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "TEMP", "TMP", "USERPROFILE"} {
+			if strings.EqualFold(key, name) {
+				return true
+			}
+		}
 	}
 	return strings.HasPrefix(key, "LC_") || strings.HasPrefix(key, "XDG_") || strings.HasPrefix(key, "OMNIPUS_CHILD_")
 }

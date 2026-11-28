@@ -102,6 +102,8 @@ func (al *AgentLoop) refuseMainConnectorDefaultSend(ctx context.Context, channel
 		// chat but never continues a stopped one (security review
 		// OPSITE-connector_egress). Never UserInitiated, never OperatorPrompt.
 		Metadata: map[string]string{"agent_id": agentID, "reply_refusal_note": "1", ownerWakeMetadataKey: "1"},
+		// A server note has no origin of its own (I-2): unresolved.
+		Provenance: bus.UnresolvedProvenance(),
 	}); err != nil {
 		logger.WarnCF("agent", "could not prompt the agent to address its senders",
 			map[string]any{"session_id": sessionID, "error": err.Error()})

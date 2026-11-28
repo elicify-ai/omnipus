@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 )
@@ -593,6 +594,12 @@ func bootCredentials(
 	// ride along in `bundle` above.
 	values = append(values, mcpEnabledEnvSensitiveValues(cfg, credStore)...)
 	cfg.RegisterSensitiveValues(values)
+	// Connected-programs FR-020: the always-on program-token pass (B1–B6)
+	// masks every current token from the start, not only after a command
+	// first used it, whatever the general filter switch says.
+	if err := programs.RememberStoredTokens(cfg, credStore); err != nil {
+		slog.Warn("gateway: connected program tokens could not all be read for masking", "error", err)
+	}
 
 	// Wire the shared credential store for CreateProviderFromConfig's
 	// openai-chatgpt (device-code) dispatch — see
@@ -740,6 +747,9 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 			var nf *credentials.NotFoundError
 			if errors.As(err, &nf) {
 				continue // already gone — absence is success (FR-010 step 3 posture)
+			}
+			if errors.Is(err, credentials.ErrProgramOwned) {
+				continue // a connected program token is never an orphan (FR-048)
 			}
 			slog.Warn("gateway: credential sweep: could not delete orphaned credential",
 				"credential_ref", name, "error", err)

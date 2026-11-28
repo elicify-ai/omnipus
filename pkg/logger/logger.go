@@ -429,6 +429,10 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 
 	// A registered credential never reaches the console or gateway.log (see
 	// sensitiveValueReplacer): scrubbed once, here, before both sinks below.
+	if p := programValueReplacer.Load(); p != nil {
+		message = p.Replace(message)
+		fields = scrubFields(p, fields)
+	}
 	if r := sensitiveValueReplacer.Load(); r != nil {
 		message = r.Replace(message)
 		fields = scrubFields(r, fields)

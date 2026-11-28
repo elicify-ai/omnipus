@@ -97,9 +97,9 @@ func setActiveGoalRecordless(t *testing.T, _ *session.UnifiedStore, sid, goalID,
 	if cerr := gstore.Create(g); cerr != nil {
 		t.Fatalf("setActiveGoalRecordless: Create: %v", cerr)
 	}
-	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, aerr := gstore.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())
-	}); aerr != nil {
+	}}); aerr != nil {
 		t.Fatalf("setActiveGoalRecordless: Activate: %v", aerr)
 	}
 }
@@ -265,10 +265,10 @@ func TestGoalTurn_NarrowingPredicateAndSurface(t *testing.T) {
 		setActiveGoalRecordless(t, store7, sid7, "goal-7", "a spent-budget goal")
 		// ADR-086 GOAL-FR-004: the question-round budget lives on the goal
 		// record, not on session meta.
-		if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-7", func(cur *goal.Goal) error {
+		if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-7", goal.Write{Mutate: func(cur *goal.Goal) error {
 			cur.QuestionRoundsUsed = 1
 			return nil
-		}); uerr != nil {
+		}}); uerr != nil {
 			t.Fatal(uerr)
 		}
 		ts := &turnState{agent: agentInst, channel: "webchat", opts: processOptions{

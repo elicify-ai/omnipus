@@ -215,6 +215,8 @@ A workspace carries a list of mounts: `{name, hostPath}`. Each renders as:
 consequence of D2, not an independent choice: if D2 is ever reversed, this must
 be revisited.
 
+**Addendum 2026-11-24 (founder ruling, #1960 S-20) — exec cwd: work dir or a write mount.** bash's `cwd` may also name a folder inside a write mount of the turn's workspace (absolute, or through `work/<name>`); it is admitted only when the write decision admits it through a mount (`pkg/tools/shell.go::resolveMountCWD`). Unapproved paths and absolute paths into the work dir stay refused, and the evidence push guard is unchanged.
+
 **The symlink is the user-visible mechanism, not the enforcement.** Enforcement
 is by realpath: every decision resolves symlinks first and then asks whether the
 result is under the work dir or a mount. This is why **writes stop at the mount

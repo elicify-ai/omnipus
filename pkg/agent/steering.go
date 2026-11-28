@@ -815,6 +815,14 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// mislabelled (gate SFH#6).
 	al.clearRevivalFailure(sessionID)
 	al.resetUnifiedMetaStatusActive(sessionID)
+	// FR-041 / S-110: an agent turn that gives this session a new
+	// instruction joins its provenance into the session's record before the
+	// revived turn can run.
+	if strings.TrimSpace(instruction) != "" {
+		if jerr := al.joinInstructionProvenance(ctx, sessionID); jerr != nil {
+			return false, fmt.Errorf("steer: revive %q: %w", sessionID, jerr)
+		}
+	}
 	// NEW-5/NEW-6: the hold now names the turn that will consume it, so only that
 	// turn (reaching the holder, or ending) retires it; a failed dispatch below
 	// still cancels this revival's own hold through the deferred owner-clear.
@@ -966,7 +974,9 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 	if err != nil {
 		return "", EnqueueStatusNormal, err
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID, steerControlID: grant.ControlID}
+	// FR-041 / S-110: the delegate steer's writer already joined its turn's
+	// provenance into the record; the queued instruction carries it.
+	item := steeringQueueItem{message: msg, correlationID: correlationID, steerControlID: grant.ControlID, origin: launchInputOrigin(rec)}
 	status, pushErr := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
 		return EnqueueStatusPostFinish
 	})

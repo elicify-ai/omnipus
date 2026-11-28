@@ -249,9 +249,13 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	if rc.rx.rr.rq.ri.rf.rt.ts.origin == nil {
 		rc.rx.rr.rq.ri.rf.rt.ts.origin = tools.NewTurnOrigin()
 	}
-	rc.rx.rr.rq.ri.rf.rt.ts.opts.InputOrigin.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
-	for _, consumed := range rc.rx.rr.rq.ri.rf.rt.ts.opts.ConsumedInputOrigins {
-		consumed.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	rc.rx.rr.rq.ri.rf.rt.al.recordTurnInputs(&rc.rx.rr.rq.ri.rf.rt.ts.opts, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	// I-2: a lineage session's stored provenance is joined into every turn
+	// (wake, restart, a person's message into a task session); a root
+	// stores none, so only the inputs this turn consumed count.
+	if stored, lineage := rc.rx.rr.rq.ri.rf.rt.al.sessionLineageProvenance(
+		attendanceSessionID(&rc.rx.rr.rq.ri.rf.rt.ts.opts), rc.rx.rr.rq.ri.rf.rt.ts.opts.OriginKind); lineage {
+		rc.rx.rr.rq.ri.rf.rt.ts.origin.AddProvenance(stored)
 	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnOrigin(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.origin)
 	// Inject the session key so tools can address the session.
@@ -483,7 +487,7 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 	// request sees the compressed, annotated history. handleModelSwitch is a
 	// no-op when no switch is requested.
 	requested := strings.TrimSpace(
-		inboundMetadata(bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata}, "model_name"),
+		inboundMetadata(bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata, Provenance: bus.UnresolvedProvenance()}, "model_name"),
 	)
 	// S-15: a frame naming only the provider asks for the loaded model on
 	// that provider.
@@ -501,7 +505,7 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey,
 				requested,
-				bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata},
+				bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata, Provenance: bus.UnresolvedProvenance()},
 			)
 			if switchErr != nil && pairProvider != "" {
 				// D5 row 8: an explicit pair that does not resolve is refused

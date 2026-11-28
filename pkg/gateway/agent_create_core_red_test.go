@@ -654,6 +654,7 @@ func TestImportFieldCoverage_ResolvesEveryEditableName(t *testing.T) {
 		"workspace_id":         "not taken from the package: the destination comes from the apply request or the default workspace",
 		"env_overrides_remove": "not transported: there is nothing to remove on a new agent",
 		"id":                   "selector only: the new agent gets a new UUID (row id, ADR D5)",
+		"programs":             "not transported: export lists switched-on programs under needs_secrets (kind program); an imported agent's programs start empty (connected programs FR-022, S-49)",
 	}
 	alias := map[string][]string{
 		"soul":                {"SOUL.md"},

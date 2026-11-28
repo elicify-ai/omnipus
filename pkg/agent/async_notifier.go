@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
@@ -83,6 +84,10 @@ type AsyncNotifyEvent struct {
 	// field to goalLoopFollowUpSenderID on the goal-loop's own dispatches
 	// (pkg/agent/goal_triggers.go's dispatchGoalAsyncFollowUp) is the fix.
 	SenderCanonicalID string
+	// Provenance is the provenance of the turn that started the background
+	// work (I-2); Notify copies it onto the reconstructed inbound message so
+	// the continuation turn joins it. Zero value = unresolved.
+	Provenance bus.Provenance
 	// Content is the text to relay back into the conversation as a new turn.
 	// May be empty (e.g. a silent kill with nothing to report) — Notify does
 	// not treat empty Content as an error, only empty Channel/ChatID are
@@ -263,7 +268,9 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	}
 
 	// FR-N8: bound content to the shared 1MB cap before it goes anywhere.
-	content := truncateAsyncNotifyContent(event.Content)
+	// B4 (FR-020): the always-on program-token pass precedes truncation, so a
+	// cut can never leave part of a token behind.
+	content := truncateAsyncNotifyContent(programs.MaskTokens(event.Content))
 
 	// Sensitive-data filtering, matching the original asyncCallback's
 	// behavior exactly (FR-N1) — the LLM must never see its own credentials
@@ -304,7 +311,8 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 		Channel: "system", Sender: bus.SenderInfo{CanonicalID: senderID},
 		ChatID: fmt.Sprintf("%s:%s", event.Channel, event.ChatID), Content: event.Content,
 		AsyncOriginAgentID: event.AgentID, AsyncTranscriptSessionID: event.TranscriptSessionID,
-		Metadata: asyncNotifyMetadata(event),
+		Metadata:   asyncNotifyMetadata(event),
+		Provenance: event.Provenance,
 	}
 	if n.loop == nil || n.loop.bus == nil {
 		return errors.New("async notifier: no message bus available")
@@ -533,6 +541,9 @@ func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event t
 	}
 
 	return n.Notify(ctx, AsyncNotifyEvent{
+		// A child-to-parent wake carries no provenance of its own yet:
+		// unresolved, so the woken turn never gains program access (I-2).
+		Provenance:          bus.UnresolvedProvenance(),
 		Channel:             event.Channel,
 		ChatID:              event.ChatID,
 		AgentID:             event.AgentID,
@@ -560,6 +571,9 @@ func (n *asyncNotifierImpl) WakeParentAlways(ctx context.Context, kind string, e
 			event.Channel, event.ChatID)
 	}
 	return n.Notify(ctx, AsyncNotifyEvent{
+		// A child-to-parent wake carries no provenance of its own yet:
+		// unresolved, so the woken turn never gains program access (I-2).
+		Provenance:          bus.UnresolvedProvenance(),
 		Channel:             event.Channel,
 		ChatID:              event.ChatID,
 		AgentID:             event.AgentID,

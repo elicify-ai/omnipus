@@ -49,6 +49,10 @@ var knownFields = map[string]struct{}{
 	// AGENT.md beside SOUL.md (#1064), written by the update_agent tool; it
 	// follows soul's protection rules.
 	"agent_md": {},
+	// programs: the connected programs switched on for the agent
+	// (connected-programs FR-007, AG-07): a person's browser session through
+	// the REST update or set_agent_permissions, never update_agent.
+	"programs": {},
 }
 
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
@@ -56,6 +60,7 @@ var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figu
 var hiddenProtected = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
 	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
+	"programs": {},
 }
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
@@ -245,6 +250,7 @@ var agentFieldRules = []FieldRule{
 	{Row: "AG-04", Property: "soul", Rule: "not accepted for subagent_3p on any surface"},
 	{Row: "AG-05", Property: "agent_md", Rule: "update_agent only", Reason: "a file beside the record; no screen edits it"},
 	{Row: "AG-07", Property: "tools_cfg, tool_policy_changes, mcp_servers", Rule: "creation inputs; on existing agents only through set_agent_permissions"},
+	{Row: "AG-07", Property: "programs", Rule: "never on create; on existing agents only through set_agent_permissions or a signed-in person in the browser"},
 	{Row: "AG-08", Property: "executor.cli", Rule: "fixed list; refused on any update"},
 	{Row: "AG-12", Property: "executor.env_overrides (+ _remove)", Rule: "create: map; update: merge + remove list; masked read"},
 	{Row: "AG-13", Property: "executor.cli_args", Rule: "create, update"},
@@ -301,7 +307,9 @@ func MappingRows() []FieldMapping {
 		FieldMapping{RESTPath: "executor.env_overrides{}", Tool: "create_agent", ToolPath: "env_overrides{}", Ops: OpCreate},
 		FieldMapping{RESTPath: "executor.cli_args", Tool: "update_agent", ToolPath: "cli_args", Ops: OpUpdate},
 		FieldMapping{RESTPath: "executor.env_overrides{}", Tool: "update_agent", ToolPath: "env_overrides{}", Ops: OpUpdate},
-		FieldMapping{RESTPath: "executor.env_overrides_remove[]", Tool: "update_agent", ToolPath: "env_overrides_remove[]", Ops: OpUpdate})
+		FieldMapping{RESTPath: "executor.env_overrides_remove[]", Tool: "update_agent", ToolPath: "env_overrides_remove[]", Ops: OpUpdate},
+		// Connected programs (FR-007): the agent switch is a permission.
+		FieldMapping{RESTPath: "programs", Tool: "set_agent_permissions", ToolPath: "programs", Ops: OpUpdate})
 	return rows
 }
 
@@ -323,5 +331,10 @@ func ExcludedRows() []FieldExclusion {
 	for _, leaf := range []string{"mcp_servers[].id", "mcp_servers[].tools[]", "tool_policy_changes.remove[]", "tool_policy_changes.set{}"} {
 		rows = append(rows, FieldExclusion{Side: "REST", Path: leaf, Ops: OpUpdate, Reason: agentPermissionsReason})
 	}
+	// Connected programs (FR-007): the canonical REST leaf is programs[]
+	// (r17 §7.1 rule 1). REST create carries no programs leaf at all, so no
+	// create row exists: every new agent starts with programs off.
+	rows = append(rows,
+		FieldExclusion{Side: "REST", Path: "programs[]", Ops: OpUpdate, Reason: agentPermissionsReason})
 	return rows
 }

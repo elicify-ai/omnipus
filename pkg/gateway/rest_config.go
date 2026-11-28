@@ -645,7 +645,7 @@ func (a *restAPI) writeRefusableConfigJSONLocked(refuse func(*config.Config) err
 	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
 		return nil, fmt.Errorf("parse config: %w", unmarshalErr)
 	}
-	if mutateErr := guardedConfigMutate(mutate, a.outboundDedicatedWrite)(m); mutateErr != nil {
+	if mutateErr := guardedProgramsMutate(guardedConfigMutate(mutate, a.outboundDedicatedWrite), a.programsDedicatedWrite)(m); mutateErr != nil {
 		return nil, mutateErr
 	}
 	// Ensure "version" is always stamped before writing back, mirroring
@@ -1071,6 +1071,9 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if writeOutboundProtected(w, err) {
+			return
+		}
+		if writeProgramsProtected(w, err) {
 			return
 		}
 		slog.Error("rest: save config", "error", err)

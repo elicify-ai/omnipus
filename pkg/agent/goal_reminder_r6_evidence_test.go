@@ -25,7 +25,7 @@ func grBrakeEvidenceProgress(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			h := newTaskKeeperHarness(t, taskGoalCondition, recordedGoalCriteria(taskGoalCondition))
-			_, err := goal.NewStore(config.OmnipusHomeDir()).Update(h.gid, func(g *goal.Goal) error { g.ZeroOutputPushes = 3; return nil })
+			_, err := goal.NewStore(config.OmnipusHomeDir()).Update(h.gid, goal.Write{Mutate: func(g *goal.Goal) error { g.ZeroOutputPushes = 3; return nil }})
 			require.NoError(t, err)
 			id := h.taskID
 			if !related {

@@ -1405,6 +1405,8 @@ type SecretRecipientDisplay struct {
 	Kind string `json:"kind"`
 	// Display lines, in order. Never null, never empty.
 	Lines []string `json:"lines"`
+	// Id of the program the card stores a token for. Present when `kind` is `program`, absent otherwise (spec cli-credentials FR-051).
+	ProgramId *string `json:"program_id,omitempty"`
 }
 
 // SecretRequestField — One field of a secret card (spec omnipus-system-agent K1; FR-061). The card holds 1–8 fields; the user types one value per field, sent only in the authenticated REST submit (SecretSubmitRequest.values, keyed by `key`). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRequestField) — keep both copies in sync by hand.
@@ -1692,8 +1694,10 @@ type SessionStateSecretRequest struct {
 		AgentId     string `json:"agent_id"`
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"owner,omitempty"`
-	Purpose   string                 `json:"purpose"`
-	Recipient SecretRecipientDisplay `json:"recipient"`
+	// Present when the request is `submitted` and its recipient kind is `program`: the program credential generation the submission committed (spec cli-credentials FR-051).
+	ProgramGeneration *int64                 `json:"program_generation,omitempty"`
+	Purpose           string                 `json:"purpose"`
+	Recipient         SecretRecipientDisplay `json:"recipient"`
 	// Reference names the submitted values were stored under. Present only when state is `submitted`.
 	ReferenceNames []string `json:"reference_names,omitempty"`
 	RequestId      string   `json:"request_id"`

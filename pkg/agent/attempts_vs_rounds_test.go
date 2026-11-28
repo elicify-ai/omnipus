@@ -231,16 +231,16 @@ func t3ArmGoalRecord(
 	if cerr := gs.Create(g); cerr != nil {
 		t.Fatalf("t3ArmGoalRecord: Create(%s): %v", ownerKind, cerr)
 	}
-	if _, uerr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		return cur.Activate(sid, now)
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("t3ArmGoalRecord: Activate(%s): %v", ownerKind, uerr)
 	}
-	armed, uerr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	armed, uerr := gs.Update(g.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = round
 		cur.MaxRounds = t3ArmedGoalMaxRounds
 		return nil
-	})
+	}})
 	if uerr != nil {
 		t.Fatalf("t3ArmGoalRecord: arm round counter(%s): %v", ownerKind, uerr)
 	}
@@ -459,9 +459,9 @@ func TestActiveGoalCounter_NonActiveGoalsCountZero_GOALFR049(t *testing.T) {
 				t.Helper()
 				for i := 0; i < total; i++ {
 					g := mustCreateCapTestGoal(t, s, generated.GoalOwnerKindSession, "t3-term-"+taskOwnerID(i), true)
-					if _, err := s.Update(g.GoalID, func(gg *goal.Goal) error {
+					if _, err := s.Update(g.GoalID, goal.Write{Mutate: func(gg *goal.Goal) error {
 						return gg.Terminate(generated.GoalStateMet, "done", time.Now())
-					}); err != nil {
+					}}); err != nil {
 						t.Fatalf("terminate goal %d: %v", i, err)
 					}
 				}

@@ -522,6 +522,7 @@ func roomWakeMessage(c addressing.Capture) bus.InboundMessage {
 		Media:             append([]string(nil), c.Media...),
 		SessionID:         c.ReceiverSessionID,
 		TranscriptEntryID: c.RequestID,
+		Provenance:        storedProvenance(c.Provenance),
 		Metadata: map[string]string{
 			"agent_id": c.Receiver.AgentID, "workspace_id": c.Receiver.WorkspaceID,
 			ownerWakeMetadataKey: "1", roomIDMetadataKey: c.Source.RoomID,

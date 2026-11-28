@@ -24,6 +24,10 @@ type inputOrigin struct {
 	// approval retains the ranked room-aware approval provenance alongside
 	// the channel provenance used by secret policy. Private, never wire data.
 	approval approvalOrigin
+	// provenance is the input message's provenance (I-2), joined into the
+	// turn's. Zero = unresolved: an input recorded without one makes the
+	// turn ineligible for connected programs.
+	provenance bus.Provenance
 }
 
 // inboundInputOrigin derives an input's origin from the inbound message. A
@@ -31,7 +35,7 @@ type inputOrigin struct {
 // .InstanceID, set only by the adapters' single publication point); a peer
 // request's owner wake carries the sending agent.
 func inboundInputOrigin(msg bus.InboundMessage) inputOrigin {
-	var o inputOrigin
+	o := inputOrigin{provenance: msg.Provenance}
 	if conn := strings.TrimSpace(msg.InstanceID); conn != "" {
 		o.connection = conn
 		o.channelPerson = firstNonBlank(msg.Sender.DisplayName, msg.Sender.Username, msg.Sender.CanonicalID, msg.Peer.ID)
@@ -56,6 +60,7 @@ func firstNonBlank(values ...string) string {
 
 // recordInto adds this input to a turn's origin.
 func (o inputOrigin) recordInto(al *AgentLoop, origin *tools.TurnOrigin) {
+	origin.AddProvenance(o.provenance)
 	if o.channelPerson != "" {
 		origin.AddChannelPerson(o.channelPerson, o.connection)
 	}
@@ -65,6 +70,27 @@ func (o inputOrigin) recordInto(al *AgentLoop, origin *tools.TurnOrigin) {
 			name = o.peerAgentID
 		}
 		origin.AddPeer(name)
+	}
+}
+
+// recordTurnInputs starts a turn's origin from its inputs (§6.18 / FR-240,
+// I-2: a turn's provenance is the join of the inputs it consumes): the
+// triggering input, then the queued inputs a continuation turn was started to
+// consume. A continuation that only consumes queued inputs has no triggering
+// input of its own (no message, a zero InputOrigin); recording that zero
+// value would join an input that never existed, as unresolved, and so make
+// a person's queued web message unresolved whenever it arrived just as the
+// previous turn was retiring. Every consumed input is still recorded, so one
+// without provenance keeps the turn unresolved (fail closed).
+func (al *AgentLoop) recordTurnInputs(opts *processOptions, origin *tools.TurnOrigin) {
+	own := opts.InputOrigin
+	continuationOnly := opts.UserMessage == "" && len(opts.ConsumedInputOrigins) > 0 &&
+		own.provenance.IsUnresolved() && own.channelPerson == "" && own.peerAgentID == ""
+	if !continuationOnly {
+		own.recordInto(al, origin)
+	}
+	for _, consumed := range opts.ConsumedInputOrigins {
+		consumed.recordInto(al, origin)
 	}
 }
 

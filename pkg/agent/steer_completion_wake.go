@@ -160,6 +160,10 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 		AsyncOriginAgentID:       rec.AgentID,
 		AsyncTranscriptSessionID: sessionID,
 		Content:                  content,
+		// A delivery summary adds no origin (I-2): it carries the steered
+		// session's own stored lineage, so the wake neither widens nor
+		// voids it (a root has none and stays unresolved).
+		Provenance: al.wakeProvenance(sessionID),
 		Metadata: map[string]string{
 			"steer_message_id": messageID,
 			"steer_generation": strconv.Itoa(rec.Generation),

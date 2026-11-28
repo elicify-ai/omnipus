@@ -183,10 +183,10 @@ func bumpGoalRecordActivity(goalID string, now time.Time) {
 	if goalID == "" {
 		return
 	}
-	if _, err := resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+	if _, err := resolveGoalRecordStore().Update(goalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.LastActivityAt = now
 		return nil
-	}); err != nil {
+	}}); err != nil {
 		logger.WarnCF("agent", "goal: could not bump the goal record's activity clock",
 			map[string]any{"component": "goal", "goal_id": goalID, "error": err.Error()})
 	}
@@ -614,6 +614,19 @@ func setGoalCriteriaArgs(items []task.AcceptanceCriterion, withProvenance bool) 
 // record as it stood immediately BEFORE this write (the OLD behaviour read
 // this from session meta; it now reads it from the store).
 func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) error {
+	return a.writeRecord(sessionID, recordJSON, nil, false)
+}
+
+// WriteRecordWithProvenance is WriteRecord that also records the writing
+// turn's origins on the goal in the same store write (FR-041, S-109): the
+// first registration of a goal that has no recorded origin stores them; any
+// later write joins them (origins only added; an unresolved writer makes the
+// goal's recorded origin unresolved, fail closed).
+func (a agentLoopGoalRecordAccess) WriteRecordWithProvenance(sessionID, recordJSON string, origins []string) error {
+	return a.writeRecord(sessionID, recordJSON, origins, true)
+}
+
+func (a agentLoopGoalRecordAccess) writeRecord(sessionID, recordJSON string, origins []string, withProvenance bool) error {
 	if a.al.ResolveSessionStore(sessionID) == nil {
 		return fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
 	}
@@ -635,7 +648,20 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 	}
 
 	now := time.Now().UTC()
-	if _, uerr := store.Update(existing.GoalID, func(cur *goal.Goal) error {
+	// I-2/S-111: the writing turn's origins are the write's explicit
+	// provenance input; the store joins them after the mutation, in the same
+	// write.
+	var joinProvenance *[]string
+	if withProvenance {
+		joinProvenance = &origins
+	}
+	if _, uerr := store.Update(existing.GoalID, goal.Write{Provenance: joinProvenance, Mutate: func(cur *goal.Goal) error {
+		// The first registration of a goal with no recorded origin stores
+		// the writer's origins (the store's join then leaves them as they
+		// are); a later write is only the store's join.
+		if withProvenance && len(cur.Criteria) == 0 && len(cur.Provenance) == 0 {
+			cur.Provenance = append([]string(nil), origins...)
+		}
 		cur.Definition = rec.Definition
 		if err := cur.SetCriteria(rec.Criteria, now); err != nil {
 			return err
@@ -656,7 +682,7 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 			cur.ZeroOutputPushes = 0
 		}
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		return fmt.Errorf("goal record access: writing goal record: %w", uerr)
 	}
 

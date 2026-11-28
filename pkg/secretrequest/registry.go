@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/childenv"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/google/uuid"
 )
@@ -36,6 +37,9 @@ type Record struct {
 	ChatID        string                        `json:"chat_id"`
 	ReasonCode    string                        `json:"reason_code,omitempty"`
 	ResumeStopped bool                          `json:"resume_stopped,omitempty"`
+	// ProgramName is the display name of a program card's program when the
+	// card was raised, for its continuation text (FR-051).
+	ProgramName string `json:"program_name,omitempty"`
 }
 
 // Options supplies live dependencies; reload never leaves a stale config or
@@ -50,6 +54,11 @@ type Options struct {
 	Stopped             func(string) (bool, error)
 	Resume              func(Record) error
 	Audit               func(Record, string)
+	// PublishProgram stores a program card's token through the Programs
+	// service, which commits it with the card receipt and starts the account
+	// check (FR-051). It returns the generation the commit created. When it
+	// is nil the token is committed to the store directly, with no check.
+	PublishProgram func(programID, value string, receipt *credentials.CardReceipt) (int64, error)
 }
 
 // Registry serializes admission, Stop, submit and recovery. Session metadata
@@ -82,6 +91,14 @@ func NewRegistry(opts Options) *Registry {
 func (r *Registry) SetSink(sink func(Record)) {
 	r.mu.Lock()
 	r.sink = sink
+	r.mu.Unlock()
+}
+
+// SetProgramPublisher binds the Programs service that stores a program card's
+// token and starts its account check (FR-051).
+func (r *Registry) SetProgramPublisher(publish func(programID, value string, receipt *credentials.CardReceipt) (int64, error)) {
+	r.mu.Lock()
+	r.opts.PublishProgram = publish
 	r.mu.Unlock()
 }
 
@@ -190,6 +207,11 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 		RequestId: uuid.NewString(), SessionId: sessionID, ActingAgentId: agentID, ActingAgentName: name,
 		Purpose: in.Purpose, Fields: fields, Recipient: display, State: "pending", UpdatedAt: now,
 	}}
+	if in.Program != "" {
+		if entry, found, lerr := programs.Lookup(cfg, in.Program); lerr == nil && found {
+			rec.ProgramName = entry.DisplayName
+		}
+	}
 	if ancestry.RootSessionID != sessionID {
 		rec.Card.RootSessionId = &ancestry.RootSessionID
 	}
@@ -276,6 +298,9 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 		r.auditRefusalLocked(rec, "invalid_payload")
 		return rec, failure(http.StatusBadRequest, "submit exactly the requested fields, or cancel")
 	}
+	if programID, ok := ProgramID(rec); ok {
+		return r.submitProgramLocked(rec, programID, (*input.Values)[rec.Card.Fields[0].Key])
+	}
 	values := make([]credentials.CardValue, 0, len(rec.Card.Fields))
 	for i, field := range rec.Card.Fields {
 		value, ok := (*input.Values)[field.Key]
@@ -301,10 +326,72 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 		logStorageFault("credential_commit", id, rec.Card.SessionId, err, repairCredentialStore)
 		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
 	}
+	return r.completeSubmitLocked(rec, receipt)
+}
+
+// submitProgramLocked stores a program card's token under the program token
+// rules (FR-051, S-99): the value is checked like a pasted token, then
+// committed with the card receipt, which records the program generation.
+func (r *Registry) submitProgramLocked(rec Record, programID, raw string) (Record, error) {
+	id := rec.Card.RequestId
+	value, err := programs.ValidateTokenValue(raw)
+	if err != nil {
+		r.auditRefusalLocked(rec, "invalid_value_shape")
+		return rec, failure(http.StatusBadRequest, err.Error())
+	}
+	receipt := &credentials.CardReceipt{RequestID: id, SessionID: rec.Card.SessionId,
+		References: []string{programs.TokenReference(programID)}, SubmittedAt: time.Now().UTC()}
+	var store *credentials.Store
+	if r.opts.Credentials != nil {
+		store, err = r.opts.Credentials()
+		if err == nil && store == nil {
+			err = errors.New("secret store is unavailable")
+		}
+	} else {
+		err = errors.New("secret store is unavailable")
+	}
+	if err != nil {
+		logStorageFault("store_open", id, rec.Card.SessionId, err, repairCredentialStore)
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
+	}
+	if r.opts.PublishProgram != nil {
+		_, err = r.opts.PublishProgram(programID, value, receipt)
+	} else {
+		_, err = programs.CommitCardToken(store, programID, value, receipt)
+	}
+	switch {
+	case err == nil, errors.Is(err, credentials.ErrCardAlreadySubmitted):
+	case errors.Is(err, credentials.ErrStoreBusy), errors.Is(err, programs.ErrStoreBusy):
+		return rec, failure(http.StatusServiceUnavailable, programs.MsgStoreBusy)
+	default:
+		logStorageFault("credential_commit", id, rec.Card.SessionId, err, repairCredentialStore)
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
+	}
+	// The committed receipt is the fact, also when an earlier attempt already
+	// committed this request.
+	stored, exists, rerr := store.CardReceipt(id)
+	if rerr != nil || !exists || stored.ProgramGeneration < 1 {
+		if rerr == nil {
+			rerr = errors.New("program card receipt is missing after commit")
+		}
+		logStorageFault("credential_commit", id, rec.Card.SessionId, rerr, repairCredentialStore)
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
+	}
+	return r.completeSubmitLocked(rec, stored)
+}
+
+// completeSubmitLocked publishes a committed submission and admits its
+// continuation.
+func (r *Registry) completeSubmitLocked(rec Record, receipt credentials.CardReceipt) (Record, error) {
+	id := rec.Card.RequestId
 	// Nothing beyond this point may claim the request is pending. A failed
 	// metadata write is repairable from the receipt, not a failed submit.
 	rec.Card.State, rec.Card.ReferenceNames = "submitted", receipt.References
 	rec.Card.UpdatedAt = receipt.SubmittedAt.Format(time.RFC3339Nano)
+	if receipt.ProgramGeneration > 0 {
+		generation := receipt.ProgramGeneration
+		rec.Card.ProgramGeneration = &generation
+	}
 	r.entries[id] = rec
 	persistErr := r.persistLocked(rec.Card.SessionId)
 	if persistErr != nil {
@@ -434,6 +521,14 @@ func cloneRecord(rec Record) Record {
 	if rec.Card.OriginLabel != nil {
 		label := *rec.Card.OriginLabel
 		cloned.Card.OriginLabel = &label
+	}
+	if rec.Card.ProgramGeneration != nil {
+		generation := *rec.Card.ProgramGeneration
+		cloned.Card.ProgramGeneration = &generation
+	}
+	if rec.Card.Recipient.ProgramId != nil {
+		programID := *rec.Card.Recipient.ProgramId
+		cloned.Card.Recipient.ProgramId = &programID
 	}
 	return cloned
 }

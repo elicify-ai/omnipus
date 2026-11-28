@@ -242,6 +242,50 @@ narrow the list; the next ordinary request uses the session's loaded list again.
 
 Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
 
+## Connected programs
+
+A connected program (for example GitHub's `gh` or Fly's `fly`, set up under [Settings → Programs](settings.md#programs) and switched on per agent on the agent's page) gives the agent's own shell commands a saved login. Nothing changes in how the agent writes the command: it runs `gh pr list` or `git push` as usual, and the login is already there.
+
+**What the command receives.** For a turn that may use programs (see below), every program switched on for that agent that has a saved token adds its token variables (for GitHub `GH_TOKEN` and `GITHUB_TOKEN`, for Fly `FLY_API_TOKEN`) to:
+
+- every `bash` command, in the foreground and in the background, and in God Mode too;
+- every `environment_setup` run.
+
+The token goes to that one command's program only. It is never written into a file, a command line or the gateway's own environment. Other tools (file tools, web tools, connected servers) do not receive it.
+
+**Git logins.** For a program with a git site (GitHub: `github.com`), the command also gets git settings through environment variables only (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n`). They first clear any other credential helper for that site, then add one that only answers git's request for a login. It reads the token from the program's variable and ignores git's requests to save or erase a login, so your own git logins and credential stores are never changed. The `GIT_CONFIG_*` names are reserved for this: when the connected git login is added, any `GIT_CONFIG_*` value the command would otherwise have inherited is removed, and the result says so.
+
+- Git 2.31 or later is required, because older versions do not read git settings from environment variables. Omnipus checks the git the command will actually run: the one named by its full path in the command, otherwise the first `git` on the command's search path. It runs `git --version` once as part of the same command and sandbox, and remembers the answer until that file changes. With an older git, the command still runs and gets the token variables but no git login, and the result says: "Connected git logins were not used: git &lt;version&gt; is too old. Update git to 2.31 or later." If no git is found, the git settings are added anyway; they do nothing until git exists.
+- **Limit:** a script that calls a different git by its full path (for example a build script running `/opt/tools/bin/git push`) is not checked; only the program words visible in the command itself are. That git still sees the same environment settings, so it works if it is 2.31 or later, and an older one does not use the connected login.
+
+**Network sites per mode.** Each program lists the sites it needs (GitHub: `github.com`, `api.github.com`, `uploads.github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com`). A part of the command (one step of a chain such as `gh pr list && curl …`) whose program is a switched-on program of that agent counts as a known need for those sites:
+
+| Shell mode | What happens |
+|---|---|
+| Auto | The program's sites are allowed for this one run without asking. The rest of the command is checked for network access as before, so `curl` to another site still asks. Command rules that deny run first and still apply. |
+| Ask | When you approve the command, the program's sites are allowed for that run without a second question. |
+| God Mode | No site permission is added (there is no network check to pass). The token variables and git logins are still added. |
+
+The site permission lasts for that one run; it never widens what the conversation's earlier approvals allow. The match uses the exact program name (the last part of the word, case-sensitive), after leading settings and common wrappers such as `env` or `timeout`; `/usr/local/bin/gh` matches `gh`, `GH` does not. A command the shell check cannot read word by word (for example one using `$(…)` or backticks, one with unbalanced quotes, or one continued onto the next line with a backslash at the end of a line) gets no automatic site permission, and its network access is checked as before.
+
+**Scripts.** A script the command runs (`./deploy.sh`, `python3 sync.py`) inherits the same variables and git settings, so programs it starts can sign in. Only the command's own visible words decide the automatic site permission, though: a `gh` started from inside `deploy.sh` does not make the command a known need for GitHub's sites.
+
+**When a program is not used.** The command still runs; only the program's login is left out, and the result carries one plain line saying why:
+
+- The work came from a connection whose programs are off, from the web chat while programs are off for it, or from somewhere Omnipus could not confirm (see [connectors](connectors.md) and [Settings → Programs](settings.md#programs)).
+- The credential store could not be opened: "Connected programs were not loaded for this command: the credential store is unavailable."
+- Two sources set the same variable (two programs, or a program and one of the agent's private variables): neither value is set, and the result says "&lt;VAR&gt; was not set for this command: two sources set it. A person can fix this in Settings → Programs."
+- Two programs supply a login for the same git site: no git login is added for that site, and the result names it.
+
+**Commands the git check refuses.** Omnipus keeps its own protected git history of each workspace's files. To stop a command from pushing into that history or changing how it accepts a push, the shell check refuses some command lines that are harmless. It reads the whole command line as text, not word by word like the shell does, so it cannot tell which part belongs to which command:
+
+- When the command line contains `push` or `send-pack`, any word starting with `--ex` is refused, even in another command. Example: `git push origin main; grep --exclude=x .` is refused because of `--exclude`.
+- When the command line mentions git, any receive-side override is refused: `receive-pack`, a `--rece…` option, a `receive.*` setting given with `-c` or `--config-env`, or the names `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` or `GIT_CONFIG_KEY_…`. Example: `git log --grep=receive-pack` is refused.
+
+The refusal names the word that caused it. Workaround: run the two commands as separate commands, for example `git push origin main` first and `grep --exclude=x .` next.
+
+**Output.** The program's own messages and exit code reach the agent unchanged, except that program tokens are hidden in its output (see [security](security.md#how-program-tokens-are-hidden)). If a token is wrong or expired, the agent sees the program's own error, such as `HTTP 401: Bad credentials`.
+
 ## Background results
 
 When background work finishes, its notification asks the agent in the originating conversation to continue. Omnipus retries that handoff, **not the tool or command itself**: up to three actual attempts while the caller's existing time window remains open. Each attempt has at most five seconds, with cancellable waits of one and then two seconds between attempts. A shorter caller deadline can end this earlier.

@@ -47,6 +47,7 @@
 package credentials
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -170,6 +171,10 @@ type storeFile struct {
 	// PrivateOptions holds per-variable options (FR-241), keyed like
 	// PrivateSelected.
 	PrivateOptions map[string]PrivateOptions `json:"private_options,omitempty"`
+	// ProgramEntries holds the metadata of program-owned references
+	// (invariant I-3, FR-043). Only CommitProgramCredential and
+	// RemoveProgramCredential change it.
+	ProgramEntries map[string]programMeta `json:"program_entries,omitempty"`
 }
 
 type encEntry struct {
@@ -380,18 +385,17 @@ func (s *Store) Set(name, value string) error {
 		return ErrStoreLocked
 	}
 
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return err
-	}
-
-	entry, err := encrypt(s.key, name, []byte(value))
-	if err != nil {
-		return fmt.Errorf("credentials: encrypt %q: %w", name, err)
-	}
-	sf.Credentials[name] = entry
-
-	return s.saveFileNoLock(sf)
+	return s.transact(func(sf *storeFile) error {
+		if programReservedLocked(sf, name) {
+			return &ProgramOwnedError{Reference: name}
+		}
+		entry, err := encrypt(s.key, name, []byte(value))
+		if err != nil {
+			return fmt.Errorf("credentials: encrypt %q: %w", name, err)
+		}
+		sf.Credentials[name] = entry
+		return s.saveFileNoLock(sf)
+	})
 }
 
 // Get decrypts and returns the credential named name.
@@ -536,29 +540,29 @@ func (s *Store) Delete(name string) error {
 		return ErrStoreLocked
 	}
 
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return err
-	}
-
-	if _, ok := sf.Credentials[name]; !ok {
-		return &NotFoundError{Name: name}
-	}
-	delete(sf.Credentials, name)
-	// A card-stored version also carries a recipient metadata row (and, for
-	// a private variable, possibly its selection). Remove them in the same
-	// publication so no valueless "ghost" stays listed (architect WU-6 ruling).
-	if secret, card := sf.CardSecrets[name]; card {
-		delete(sf.CardSecrets, name)
-		if secret.Recipient.Kind == KindAgentPrivate {
-			key := privateKey(secret.Recipient)
-			if sf.PrivateSelected[key] == name {
-				delete(sf.PrivateSelected, key)
+	return s.transact(func(sf *storeFile) error {
+		if programOwnedLocked(sf, name) {
+			return &ProgramOwnedError{Reference: name}
+		}
+		if _, ok := sf.Credentials[name]; !ok {
+			return &NotFoundError{Name: name}
+		}
+		delete(sf.Credentials, name)
+		// A card-stored version also carries a recipient metadata row (and,
+		// for a private variable, possibly its selection). Remove them in the
+		// same publication so no valueless "ghost" stays listed (architect
+		// WU-6 ruling).
+		if secret, card := sf.CardSecrets[name]; card {
+			delete(sf.CardSecrets, name)
+			if secret.Recipient.Kind == KindAgentPrivate {
+				key := privateKey(secret.Recipient)
+				if sf.PrivateSelected[key] == name {
+					delete(sf.PrivateSelected, key)
+				}
 			}
 		}
-	}
-
-	return s.saveFileNoLock(sf)
+		return s.saveFileNoLock(sf)
+	})
 }
 
 // Rotate re-encrypts all credentials with newKey.
@@ -612,31 +616,29 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 	// wipeable, after s.key has been repointed at the new one.
 	oldKey := s.key
 
-	sf, err := s.loadFileInternal()
-	if err != nil {
-		return err
-	}
-
-	// Decrypt all with old key, re-encrypt with new key.
-	newCredentials := make(map[string]encEntry, len(sf.Credentials))
-	for name, entry := range sf.Credentials {
-		plain, err := decrypt(oldKey, name, entry)
-		if err != nil {
-			// The name is already in the error decrypt returns.
-			return fmt.Errorf("credentials: rotate: %w", err)
+	err := s.transact(func(sf *storeFile) error {
+		// Decrypt all with old key, re-encrypt with new key. Values and every
+		// metadata map (program generations included) are kept as they are.
+		newCredentials := make(map[string]encEntry, len(sf.Credentials))
+		for name, entry := range sf.Credentials {
+			plain, err := decrypt(oldKey, name, entry)
+			if err != nil {
+				// The name is already in the error decrypt returns.
+				return fmt.Errorf("credentials: rotate: %w", err)
+			}
+			newEntry, err := encrypt(newKey, name, []byte(plain))
+			if err != nil {
+				return fmt.Errorf("credentials: rotate encrypt %q: %w", name, err)
+			}
+			newCredentials[name] = newEntry
 		}
-		newEntry, err := encrypt(newKey, name, []byte(plain))
-		if err != nil {
-			return fmt.Errorf("credentials: rotate encrypt %q: %w", name, err)
-		}
-		newCredentials[name] = newEntry
-	}
-
-	sf.Salt = base64.StdEncoding.EncodeToString(newSalt)
-	sf.Credentials = newCredentials
+		sf.Salt = base64.StdEncoding.EncodeToString(newSalt)
+		sf.Credentials = newCredentials
+		return s.saveFileNoLock(sf)
+	})
 	// A failed save leaves the rotation without effect, so the old key stays
 	// live and is deliberately NOT wiped on this path.
-	if err := s.saveFileNoLock(sf); err != nil {
+	if err != nil {
 		return err
 	}
 
@@ -658,7 +660,7 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 // ErrLegacyStoreFormat — only unlock migrates it, so no read path ever opens a
 // nil-AAD entry and no write path stamps a legacy file with the new version.
 func (s *Store) loadFileInternal() (*storeFile, error) {
-	data, err := os.ReadFile(s.path)
+	data, err := os.ReadFile(s.path) // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or a fixed name beside it, never request or agent input; the store exists to read and write exactly this file.
 	if errors.Is(err, os.ErrNotExist) {
 		// Create empty store with fresh salt on first use.
 		salt := make([]byte, saltLen)
@@ -695,27 +697,38 @@ func (s *Store) loadFileInternal() (*storeFile, error) {
 	return &sf, nil
 }
 
-// saveFileNoLock writes sf atomically with an advisory OS-level flock;
-// caller holds s.mu write lock (single-writer goroutine serialization).
-// The flock is defense-in-depth for multi-process scenarios.
+// saveFileNoLock writes sf atomically and reads the file back before it
+// returns. It is called ONLY inside a s.transact callback, which already
+// holds the process-wide path gate and the cross-process sidecar lock
+// (FR-049); it takes no lock of its own.
 func (s *Store) saveFileNoLock(sf *storeFile) error {
 	sf.Version = storeVersion
 	data, err := json.MarshalIndent(sf, "", "  ")
 	if err != nil {
 		return fmt.Errorf("credentials: marshal store: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("credentials: create store dir: %w", err)
+	if mkErr := os.MkdirAll(filepath.Dir(s.path), 0o700); mkErr != nil { // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or a fixed name beside it, never request or agent input; the store exists to read and write exactly this file.
+		return fmt.Errorf("credentials: create store dir: %w", mkErr)
 	}
-	// Lock the sidecar credentials.json.lock, never credentials.json itself:
-	// locking the store file created it EMPTY on the first write, which
-	// loadFileInternal then reports as corrupted (see fileutil.SidecarLockPath).
-	// The sidecar is created 0600 like the store, and the sandbox already
-	// withholds it from agents — fspolicy's secret set covers every
-	// credentials.json.<suffix> name.
-	return fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
-		return writeFileAtomicFn(s.path, data, 0o600)
-	})
+	// The transaction's lock is on the sidecar credentials.json.lock, never
+	// credentials.json itself: locking the store file created it EMPTY on the
+	// first write, which loadFileInternal then reports as corrupted (see
+	// fileutil.SidecarLockPath). The sidecar is created 0600 like the store,
+	// and the sandbox already withholds it from agents — fspolicy's secret
+	// set covers every credentials.json.<suffix> name.
+	if writeErr := writeFileAtomicFn(s.path, data, 0o600); writeErr != nil {
+		return writeErr
+	}
+	// Read-back: the write is the commit point only if the file now holds
+	// exactly what was written (FR-049).
+	got, err := os.ReadFile(s.path) // #nosec G703 -- the path is the Store's own credentials.json location (set by NewStore from the data directory at boot) or its fixed ".lock" sidecar, never request or agent input; the store exists to read and write exactly this file.
+	if err != nil {
+		return fmt.Errorf("credentials: read back store file: %w", err)
+	}
+	if !bytes.Equal(got, data) {
+		return errors.New("credentials: store file read back differs from the write")
+	}
+	return nil
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so

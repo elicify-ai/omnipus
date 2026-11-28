@@ -1147,6 +1147,8 @@ func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
 func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 	hcm.msg = bus.InboundMessage{
 		Channel: "webchat",
+		// The web-chat handler is a provenance producer (I-2): a person typing.
+		Provenance: bus.NewProvenance(bus.OriginWeb),
 		Sender: bus.SenderInfo{
 			CanonicalID: "webchat_user",
 		},

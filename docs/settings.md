@@ -110,6 +110,7 @@ Each tab and neighbor screen has one job.
 | Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Third-party agents | The program and standard parameters Omnipus uses for each external command-line tool (Claude Code, Codex, opencode) |
+| Settings, Programs | Connected command-line programs such as `gh` and `fly`: their saved token, its account check, custom programs, and whether agents may use them for web-chat work |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
@@ -175,6 +176,51 @@ Every change is recorded in the audit log: a changed path or changed parameters,
 
 Each worker's **Runtime** tab shows the saved program and parameters read-only, with a link back to this tab. See [agents](agents.md) for what the worker keeps per agent.
 
+
+## Programs
+
+**Settings → Programs** stores the login token of a command-line program your agents use, such as GitHub's `gh` and `git` or Fly's `fly`, so you connect the program once instead of putting the token in an agent's private variables. Only a person signed in to the web app in a browser can use this tab: an API token, the `omnipus` command line and agents are refused before anything is read (`403`).
+
+**Presets and your own entries.** GitHub and Fly come as presets: fixed entries you can connect but not change or delete ("GitHub is a preset and cannot be changed or deleted."). **Add program** creates your own entry: a display name, the program words (the commands, for example `glab`), one to four token variables (the environment variable names the program reads, for example `GLAB_TOKEN`), the network sites it talks to, optionally a git host and username, and optionally an account check (a command that prints the account name). Shells and wrappers such as `bash`, `env` or `sudo` are not accepted as program words. The tab holds at most 32 entries, presets included. Editing an entry needs the revision you loaded; if someone changed it in the meantime, the save is refused with "This program changed since this page was loaded. Check the current state before saving again." An entry that is switched on for an agent cannot be deleted until it is switched off ("… cannot be deleted: it is switched on for Dev. Switch it off first.").
+
+**Connect, replace, check, disconnect.**
+
+- **Paste a token** and save. The token must be 8 to 16,384 characters on one line ("The token is too short. A token has at least 8 characters."). Each save creates a new version of the token.
+- **The account check** then runs the program's own check command (for GitHub: `gh api user --jq .login`) with the new token, in a clean environment: only the program's token variables, the path and a temporary home folder. The row shows **Checking**, then **Connected as** the account name, or why it failed, for example "The account check failed. GitHub said: "Bad credentials"." or "The account check did not finish in 20 s.". If the program is not installed on the computer that runs Omnipus, the token is kept and the row says "Saved, not checked: gh was not found on this computer.". The check never runs a program that lies in a folder agents can write to (the Omnipus data folder, an agent's folder, a workspace or an extra allowed path), because an agent could have put it there: the token is kept and the row says "Saved, not checked: gh is installed in a folder agents can write to, so it was not run. Install it in a system folder.". Changing an entry's account check or token variables while a token is saved starts a new check at once; changing its name, commands, sites or git login leaves a running check alone. An entry without a check says "Saved, not checked: this program has no account check.".
+- **Check again** reruns the check for the stored token without changing it. **Replace** saves a new token; a check still running for the old one is stopped and never shown. **Disconnect** removes the token; agents that have the program switched on keep the switch, the row shows **Not connected**.
+- If the credential store is busy for more than 5 seconds the save is refused with "The credential store is busy. Try again." and nothing changes. If the save fails, the previous token stays in use.
+
+**From a chat card.** An agent can ask for a program's token with a secure card (`request_secret` with `program`, for example `github`). The card names the program and its commands, for example **Program: GitHub (gh, git)**. It must be filled in from the browser; it uses the same token rules and starts the same account check. The agent continues at once and is told that the token is stored and that the check is running, never a result it does not have yet.
+
+**Program tokens belong to Programs.** The general **Credentials** page and agent tools such as `remove_secret` cannot change or remove a program's token; they refuse with "… belongs to the program GitHub. Change it in Settings → Programs.".
+
+**Who may use the token.** A program's token is offered only to agents that have the program switched on (see [agents](agents.md#programs)), and only for work that a person started in the web chat or through a connection where programs are allowed (see [connectors](connectors.md#programs-on-a-connection)). The web-chat setting on this tab is that switch for work started in the web chat (`web_chat_allowed`). The custom entries and this setting can only be changed here, by a signed-in person: the general configuration endpoint `PUT /api/v1/config` refuses any change to the `programs` section with status 403, and nothing in that body is saved.
+
+**Audit log.** Each of these actions writes one entry to the audit log, and no entry ever holds a token: connecting, replacing, checking again and disconnecting a program; a check that a newer save or check replaced before it finished (recorded as `superseded`); switching programs on or off for an agent; changing a connection's or the web chat's program setting; creating, editing or deleting your own entry; and a program card refused because it was not submitted from a signed-in browser session.
+
+**Settings → Programs** connects command-line programs such as `gh` (GitHub) and `fly` (Fly.io) once, so the agents you switch them on for can run them with your login. GitHub and Fly are listed from the start; you can add your own. Each row shows the program's name, the program words it is run by, its state and, once checked, the account.
+
+| State | Meaning |
+|---|---|
+| **Not connected** | No token is saved. |
+| **Checking the account…** | A token was just saved and Omnipus is running the program's account check. The row always moves on from this state. |
+| **Connected as octocat** | The check succeeded and printed this account name. |
+| **Saved, not checked** | The token is saved and in use, but could not be checked. The reason is shown under the badge, for example "Saved, not checked: gh was not found on this computer." |
+| **Check failed** | The token is saved, but the program refused it. The program's own message is shown under the badge. |
+
+**Connect a program.** Choose **Paste a token** on its row, paste the token into **Token for GitHub** and press **Save** or Enter. A token has 8 to 16,384 bytes on one line; spaces around it are removed. The token never appears on screen again: the list shows only its state and account. If the save is refused, the dialog says why, for example "The token is too short. A token has at least 8 characters." If the save fails, the previous token stays in use and the dialog says so. If the answer to a save is lost, the dialog says **The result of saving is unknown. The list shows the current state.** and nothing is sent again.
+
+**Replace, check again, disconnect.** On a saved row, **Replace token** saves a new token; it is used from the next command, and its account appears after its check. **Check again** runs the account check for the current token. **Disconnect** removes the token from Omnipus after you confirm; the dialog reminds you that the token stays valid at the program's site (for example GitHub) until you revoke it there. Agents keep their switch for the program, but their commands get no token until a new one is saved. If disconnecting fails, the dialog says **Could not disconnect. Try again.**
+
+**Custom programs.** **Add a custom program** opens a form: **Display name**, **Program words** (the names the program is run by, comma-separated), **Token variables** (the environment variables the token is put in), **Network sites** (host names its commands may reach; `*.example.com` covers subdomains), an optional **Git site** (git then uses this token for that site) and an optional **Account check** (one of the program words plus its arguments, one per line; the first line it prints is the account name). Without an account check, a saved token shows **Saved, not checked**. Omnipus refuses names it protects and a display name already in use, and shows its reason in the form. **Edit** and **Delete** appear on custom rows only; GitHub and Fly cannot be changed. A program that is switched on for an agent cannot be deleted: the refusal names the agents.
+
+**Web chat.** **Agents may use connected programs for work that comes from the web chat** is on by default. Turned off, commands started from the web chat get no program token. Work with no starting message, such as a heartbeat, follows the same switch. If saving the switch fails, it returns to its previous position with **Not confirmed** and **Retry**. Each chat channel has its own switch on the Connectors page; see [connectors](connectors.md#programs-on-a-channel).
+
+**While the list loads** it shows placeholder rows. If it cannot load, the tab says **Programs could not be loaded.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+
+**From a chat.** An agent in the web chat can ask for a program's token on the secure card. The card names the program and says the token is shared by every agent you switch the program on for. After you save it, the card shows **Stored — checking the account…** and then the check result; if a newer token replaces it first, the card says **Stored — replaced by a newer token**. A program card can be filled in only from Omnipus in your browser: a script using your API token is refused, and the card says **Open Omnipus in your browser to enter this token.**
+
+Only a person signed in to the web app can use this tab. Agents, the command line and API tokens cannot read or change it. Switching a program on for an agent is done in the agent's profile; see [agents](agents.md#programs).
 
 ## Goal timers
 

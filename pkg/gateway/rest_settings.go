@@ -22,6 +22,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/programs"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -190,6 +191,10 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := store.Set(req.Key, req.Value); err != nil {
+		if errors.Is(err, credentials.ErrProgramOwned) {
+			jsonErr(w, http.StatusConflict, programs.ProgramOwnedMessage(a.agentLoop.GetConfig(), req.Key))
+			return
+		}
 		slog.Error("rest: set credential", "key", req.Key, "error", err)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save credential", err)
 		return
@@ -264,6 +269,10 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 		var notFound *credentials.NotFoundError
 		if errors.As(err, &notFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("credential %q not found", key))
+			return
+		}
+		if errors.Is(err, credentials.ErrProgramOwned) {
+			jsonErr(w, http.StatusConflict, programs.ProgramOwnedMessage(a.agentLoop.GetConfig(), key))
 			return
 		}
 		slog.Error("rest: delete credential", "key", key, "error", err)

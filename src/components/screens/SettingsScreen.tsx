@@ -13,6 +13,7 @@ import { MemorySection } from '@/components/settings/MemorySection'
 import { ContextSection } from '@/components/settings/ContextSection'
 import { SystemAgentsSection } from '@/components/settings/SystemAgentsSection'
 import { ThirdPartyAgentsSection } from '@/components/settings/ThirdPartyAgentsSection'
+import { ProgramsSection } from '@/components/settings/ProgramsSection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
@@ -24,6 +25,7 @@ export type SettingsTab =
   | 'models'
   | 'system-agents'
   | 'third-party-agents'
+  | 'programs'
   | 'integrations'
   | 'security'
   | 'gateway'
@@ -94,6 +96,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
             <TabsTrigger data-testid="settings-tab-models" value="models">Models</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-system-agents" value="system-agents">System agents</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-third-party-agents" value="third-party-agents">Third-party agents</TabsTrigger>
+            <TabsTrigger data-testid="settings-tab-programs" value="programs">Programs</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
@@ -125,6 +128,11 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
               Runtime tab links here. */}
           <TabsContent value="third-party-agents">
             <ThirdPartyAgentsSection />
+          </TabsContent>
+
+          {/* Connected command-line programs (spec cli-credentials S1, FR-002). */}
+          <TabsContent value="programs">
+            <ProgramsSection />
           </TabsContent>
 
           <TabsContent value="integrations">

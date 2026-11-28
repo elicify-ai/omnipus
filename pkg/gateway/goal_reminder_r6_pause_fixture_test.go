@@ -177,7 +177,7 @@ func r6NewPublicFixture(t *testing.T) *r6PublicFixture {
 }
 func (f *r6PublicFixture) age(t *testing.T) {
 	t.Helper()
-	_, err := goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, func(g *goal.Goal) error { g.LastActivityAt = time.Now().UTC().Add(-time.Hour); return nil })
+	_, err := goal.NewStore(config.OmnipusHomeDir()).Update(f.goalID, goal.Write{Mutate: func(g *goal.Goal) error { g.LastActivityAt = time.Now().UTC().Add(-time.Hour); return nil }})
 	require.NoError(t, err)
 }
 func (f *r6PublicFixture) count() int { f.mu.Lock(); defer f.mu.Unlock(); return f.dispatches }

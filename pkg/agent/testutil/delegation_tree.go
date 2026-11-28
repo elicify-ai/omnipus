@@ -141,6 +141,8 @@ func (tree *Tree) persistRoot(root TreeNode) {
 	rec := &session.LifecycleRecord{
 		SessionID: root.SessionID, Generation: root.Generation, State: session.LifecycleRunning,
 		Origin:         &session.Origin{Kind: session.OriginKindChat},
+		ProvenanceMode: session.ProvenanceModeRoot,
+		Provenance:     nil, // a root stores no provenance (I-2)
 		OwnerScopeKind: session.OwnerScopeHuman,
 		WorkspaceID:    root.WorkspaceID, AgentID: root.AgentID,
 	}
@@ -194,7 +196,9 @@ func (tree *Tree) createChildDirect(parent TreeNode, name, agentID, label string
 	}
 	rec := &session.LifecycleRecord{
 		SessionID: node.SessionID, Generation: 1, State: session.LifecycleRunning,
-		Origin: &origin,
+		Origin:         &origin,
+		ProvenanceMode: session.ProvenanceModeLineage,
+		Provenance:     nil, // fixture child: unresolved lineage (fail closed)
 		SteeredBy: &session.SteeredBy{
 			SteeringSessionID: parent.SessionID,
 			RootSessionID:     tree.Root.SessionID,

@@ -195,22 +195,30 @@ func attendanceSessionID(opts *processOptions) string {
 // without a lifecycle record (#1765). It reads the plan store and is reached
 // only when a turn's own lifecycle record is already missing.
 func (al *AgentLoop) planEngineOwnsSession(sessionID string) bool {
+	_, owned := al.planOwningSession(sessionID)
+	return owned
+}
+
+// planOwningSession returns the persisted plan whose owner or supervision
+// session is sessionID (see planEngineOwnsSession), read fresh from the plan
+// store; false when no plan owns it or the store cannot be read.
+func (al *AgentLoop) planOwningSession(sessionID string) (*plan.Plan, bool) {
 	if sessionID == "" {
-		return false
+		return nil, false
 	}
 	pe := GetPlanEngine(al)
 	if pe == nil || pe.planStore == nil {
-		return false
+		return nil, false
 	}
 	plans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
-		return false
+		return nil, false
 	}
 	for i := range plans {
 		p := &plans[i]
 		if p.OwnerSessionID == sessionID || (p.Supervision != nil && p.Supervision.SessionID == sessionID) {
-			return true
+			return p, true
 		}
 	}
-	return false
+	return nil, false
 }

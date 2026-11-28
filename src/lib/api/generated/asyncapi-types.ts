@@ -137,8 +137,9 @@ export interface WorkflowStart {
 }
 
 export interface SecretRecipientDisplay {
-  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "program" | "unbound";
   lines: Array<string>;
+  program_id?: string;
 }
 
 export interface SecretRequestField {
@@ -177,6 +178,7 @@ export interface SessionStateSecretRequest {
   session_id: string;
   root_session_id?: string;
   state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  program_generation?: number;
   continuation_unconfirmed?: boolean;
   acting_agent_id: string;
   acting_agent_name: string;

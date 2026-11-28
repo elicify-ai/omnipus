@@ -1293,6 +1293,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/{id}/programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the channel's connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). Signed-in person's browser session only. Absent setting reads `allowed: false`.
+         */
+        get: operations["getChannelPrograms"];
+        /**
+         * Set the channel's connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). The only writer of `programs_allowed`; set_config and the generic config writer refuse it. Signed-in person's browser session only; a stale revision answers 409.
+         */
+        put: operations["setChannelPrograms"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List connected-program entries
+         * @description Spec cli-credentials FR-002 (S1). Presets and custom entries with their value-free connection state. Signed-in person's browser session only.
+         */
+        get: operations["listPrograms"];
+        put?: never;
+        /**
+         * Create a custom program entry
+         * @description Spec cli-credentials FR-019 (S1), dataset D-2. At most 32 custom entries. Signed-in person's browser session only.
+         */
+        post: operations["createProgram"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the web-chat connected-programs setting
+         * @description Spec cli-credentials FR-009 (S1). Independent work follows this setting (founder Q1 = A). Signed-in person's browser session only.
+         */
+        put: operations["updateProgramSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit a custom program entry
+         * @description Spec cli-credentials FR-019, FR-042 (S1). Requires `revision`; a stale revision or a git-host conflict for an agent the entry is on for answers 409. Presets answer 422.
+         */
+        put: operations["updateProgram"];
+        post?: never;
+        /**
+         * Delete a custom program entry
+         * @description Spec cli-credentials FR-019 (S1). Refused 409 while the entry is on for an agent (the message names the agent); presets answer 422.
+         */
+        delete: operations["deleteProgram"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save a program token and start its account check
+         * @description Spec cli-credentials FR-003, FR-004, FR-006, FR-043 (S1). Answers the entry in `checking` with the new generation. A body over 65,536 bytes answers 413; a failed save keeps the previous token (500).
+         */
+        put: operations["saveProgramCredential"];
+        post?: never;
+        /**
+         * Disconnect a program (remove the local token)
+         * @description Spec cli-credentials FR-023 (S1). Increments the generation; agent switches stay on.
+         */
+        delete: operations["disconnectProgram"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/programs/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run the account check again
+         * @description Spec cli-credentials FR-023, FR-047 (S1). Supersedes a running check; the generation is unchanged.
+         */
+        post: operations["recheckProgram"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels/{id}/test": {
         parameters: {
             query?: never;
@@ -8904,6 +9052,8 @@ export interface components {
         AgentColor: "#6E8BA8" | "#7A8C9E" | "#4F8A80" | "#5E6973" | "#7B7290" | "#B76E79" | "#A97142" | "#9C8A5B" | "#CDBA96" | "#8E9196";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs. */
+            programs?: string[];
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -9396,6 +9546,8 @@ export interface components {
         };
         /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). The full list replaces the stored one. Accepted only from a signed-in person's browser session; any other caller is refused 403 before any change. */
+            programs?: string[];
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
@@ -9619,6 +9771,8 @@ export interface components {
          * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
          */
         AgentDetail: {
+            /** @description Ids of the connected programs switched on for this agent (spec cli-credentials FR-007). Empty at creation; changed only through the person-session gate (PUT) or set_agent_permissions.programs. */
+            programs?: string[];
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
             id: string;
             /** @example Researcher */
@@ -13408,6 +13562,117 @@ export interface components {
              * @example true
              */
             bound: boolean;
+        };
+        /**
+         * ChannelProgramsSetting
+         * @description Whether agents may use connected programs for work that came from this channel connection (spec FR-009; default off). Written only by PUT /channels/{id}/programs; rebinding the channel turns it off.
+         */
+        ChannelProgramsSetting: {
+            allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
+         * ProgramConnection
+         * @description The connection state of one program entry (spec FR-004, FR-043). Value-free: never carries the token.
+         */
+        ProgramConnection: {
+            /** @enum {string} */
+            state: "not_connected" | "checking" | "connected" | "saved_not_checked" | "check_failed";
+            /**
+             * Format: int64
+             * @description Increments on every publication and on disconnect.
+             */
+            generation: number;
+            /** @description Present only when `state` is `connected` and the check produced a label. */
+            account_label?: string;
+            /** Format: date-time */
+            checked_at?: string;
+            /** @description Value-free reason text for the current state. */
+            message?: string;
+        };
+        /**
+         * ProgramCredentialRequest
+         * @description Save a program token (PUT /programs/{id}/credential, spec FR-003, FR-043). The value is 8 to 16,384 bytes after trimming surrounding whitespace; inner line breaks and NUL are refused. A stale `expected_generation` answers 409.
+         */
+        ProgramCredentialRequest: {
+            value: string;
+            /** Format: int64 */
+            expected_generation?: number;
+        };
+        /**
+         * ProgramCustomRequest
+         * @description Create (POST /programs) or edit (PUT /programs/{id}) of a custom entry (spec FR-019, dataset D-2). A create requires display_name, program_words and token_variables; an edit requires `revision` and changes only the fields it carries.
+         */
+        ProgramCustomRequest: {
+            display_name?: string;
+            program_words?: string[];
+            token_variables?: string[];
+            network_sites?: string[];
+            git?: components["schemas"]["ProgramGit"];
+            identity_check?: components["schemas"]["ProgramIdentityCheck"];
+            /** Format: int64 */
+            revision?: number;
+        };
+        /**
+         * ProgramEntry
+         * @description One connected-program entry, preset or custom (spec cli-credentials S1, FR-001, FR-002). Value-free. Presets are read-only.
+         */
+        ProgramEntry: {
+            id: string;
+            /** @enum {string} */
+            kind: "preset" | "custom";
+            display_name: string;
+            program_words: string[];
+            token_variables: string[];
+            network_sites: string[];
+            git?: components["schemas"]["ProgramGit"];
+            identity_check?: components["schemas"]["ProgramIdentityCheck"];
+            connection: components["schemas"]["ProgramConnection"];
+            /** @description Ids of the agents this entry is switched on for. */
+            enabled_agent_ids: string[];
+            /**
+             * Format: int64
+             * @description Entry revision for optimistic concurrency of custom-entry edits.
+             */
+            revision: number;
+        };
+        /**
+         * ProgramGit
+         * @description Git site of a connected program (spec cli-credentials S1, contract table). `host` is stored canonical: lower-case, no trailing dot, no port and no scheme (a request may send `GitHub.com.`; it is stored as `github.com`). `username` defaults to `x-access-token` when omitted.
+         */
+        ProgramGit: {
+            host: string;
+            username?: string;
+        };
+        /**
+         * ProgramIdentityCheck
+         * @description The account check of a program (spec FR-005, FR-046): a gateway-owned run of one of the entry's program words with literal arguments (never shell-parsed). The account label is the masked first non-empty stdout line.
+         */
+        ProgramIdentityCheck: {
+            /** @description One of the entry's program words. */
+            program_word: string;
+            args?: string[];
+            /** @description Defaults to 20. */
+            timeout_seconds?: number;
+            /** @description Fixed at 4096; any other value is refused. */
+            max_output_bytes?: number;
+        };
+        /**
+         * ProgramList
+         * @description The program catalog as listed by GET /programs (spec FR-002). Independent work follows `web_chat_allowed` (founder Q1 = A).
+         */
+        ProgramList: {
+            entries: components["schemas"]["ProgramEntry"][];
+            web_chat_allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
+        };
+        /**
+         * ProgramSettingsUpdate
+         * @description The web-chat program setting (spec FR-009; also governs independent work).
+         */
+        ProgramSettingsUpdate: {
+            web_chat_allowed: boolean;
+            revision: components["schemas"]["ConfigurationRevision"];
         };
         /**
          * ChannelRoutingUpdateRequest
@@ -19316,6 +19581,11 @@ export interface components {
             reference_names?: string[];
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: int64
+             * @description Present when the request is `submitted` and its recipient kind is `program`: the program credential generation the submission committed (spec cli-credentials FR-051).
+             */
+            program_generation?: number;
         };
         /**
          * SecretNameEntry
@@ -19328,7 +19598,7 @@ export interface components {
              * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "program" | "unbound";
             /** Format: int64 */
             version: number;
             recipient: components["schemas"]["SecretRecipientDisplay"];
@@ -20000,9 +20270,11 @@ export interface components {
              * @description Recipient kind.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "program" | "unbound";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
+            /** @description Id of the program the card stores a token for. Present when `kind` is `program`, absent otherwise (spec cli-credentials FR-051). */
+            program_id?: string;
         };
         /**
          * RoomEntryAuthor
@@ -23251,6 +23523,299 @@ export interface operations {
             503: components["responses"]["503BypassActive"];
         };
     };
+    getChannelPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelProgramsSetting"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    setChannelPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel instance id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelProgramsSetting"];
+            };
+        };
+        responses: {
+            /** @description The stored setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelProgramsSetting"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    listPrograms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    createProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCustomRequest"];
+            };
+        };
+        responses: {
+            /** @description The created entry. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    updateProgramSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The catalog after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramList"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
+    updateProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCustomRequest"];
+            };
+        };
+        responses: {
+            /** @description The edited entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    deleteProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    saveProgramCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProgramCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved; the account check is running. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            /** @description Body larger than 65,536 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    disconnectProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    recheckProgram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Program entry id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The check is running. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProgramEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
     testChannel: {
         parameters: {
             query?: never;
@@ -23986,6 +24551,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            /** @description The key is owned by a connected program: "<reference> belongs to the program <name>. Change it in Settings -> Programs." No store change (spec cli-credentials FR-048). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Key field is required (empty key). */
             422: {
                 headers: {
@@ -24041,6 +24615,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             /** @description Credential key not found. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The key is owned by a connected program: "<reference> belongs to the program <name>. Change it in Settings -> Programs." No store change (spec cli-credentials FR-048). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29763,6 +30346,15 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The stored request's recipient kind is `program` and the caller is not a signed-in person's browser session ("this action requires a signed-in person"). Decided before the body is read (spec cli-credentials FR-028). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
             /** @description The request is not pending (including a duplicate submit); body is its current state. */
             409: {
@@ -30393,6 +30985,15 @@ export type ChannelConfigureError = components["schemas"]["ChannelConfigureError
 export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
 export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelProgramsSetting = components["schemas"]["ChannelProgramsSetting"];
+export type ProgramConnection = components["schemas"]["ProgramConnection"];
+export type ProgramCredentialRequest = components["schemas"]["ProgramCredentialRequest"];
+export type ProgramCustomRequest = components["schemas"]["ProgramCustomRequest"];
+export type ProgramEntry = components["schemas"]["ProgramEntry"];
+export type ProgramGit = components["schemas"]["ProgramGit"];
+export type ProgramIdentityCheck = components["schemas"]["ProgramIdentityCheck"];
+export type ProgramList = components["schemas"]["ProgramList"];
+export type ProgramSettingsUpdate = components["schemas"]["ProgramSettingsUpdate"];
 export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];

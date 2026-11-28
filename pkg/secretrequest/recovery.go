@@ -207,6 +207,16 @@ func (r *Registry) Stop(sessionID string) error {
 // ResumeMessage is intentionally reference-only. It is the sole resume
 // payload producer used for initial dispatch, boot retry and consumption.
 func ResumeMessage(rec Record) string {
+	if _, ok := ProgramID(rec); ok {
+		// FR-051: say what is true at admission — the token is stored and
+		// its account check is running — never a result not yet known.
+		name := rec.ProgramName
+		if name == "" {
+			name = strings.Join(rec.Card.ReferenceNames, ", ")
+		}
+		return fmt.Sprintf("Secret request %s was submitted. The token was stored for %s and its account check is running; the result shows in Settings → Programs. Stored reference names: %s. Do not ask for or repeat secret values.",
+			rec.Card.RequestId, name, strings.Join(rec.Card.ReferenceNames, ", "))
+	}
 	return fmt.Sprintf("Secret request %s was submitted. Stored reference names: %s. Use these references only for the recipient shown on the card; do not ask for or repeat secret values.", rec.Card.RequestId, strings.Join(rec.Card.ReferenceNames, ", "))
 }
 

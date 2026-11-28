@@ -154,7 +154,7 @@ func mintTaskRunGoal(
 
 	// Arm the counters: quiet for longer than the window, with the round
 	// budget the test asked for.
-	if _, uerr := gs.Update(rec.GoalID, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(rec.GoalID, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = roundsUsed
 		if serr := cur.SetCriteria(criteria, past); serr != nil {
 			return serr
@@ -163,7 +163,7 @@ func mintTaskRunGoal(
 		cur.StartedAt = &started
 		cur.LastActivityAt = past
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("mintTaskRunGoal: arm: %v", uerr)
 	}
 	return store, sid, rec.GoalID
@@ -200,14 +200,14 @@ func armTaskGoalRecord(
 	gid := g.GoalID
 
 	if sid != "" {
-		if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+		if _, uerr := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 			return cur.Activate(sid, time.Now().UTC())
-		}); uerr != nil {
+		}}); uerr != nil {
 			t.Fatalf("armTaskGoalRecord: Activate: %v", uerr)
 		}
 	}
 
-	if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+	if _, uerr := gs.Update(gid, goal.Write{Mutate: func(cur *goal.Goal) error {
 		cur.Round = roundsUsed
 		if serr := cur.SetCriteria(criteria, past); serr != nil {
 			return serr
@@ -216,7 +216,7 @@ func armTaskGoalRecord(
 		cur.StartedAt = &started
 		cur.LastActivityAt = past
 		return nil
-	}); uerr != nil {
+	}}); uerr != nil {
 		t.Fatalf("armTaskGoalRecord: arm: %v", uerr)
 	}
 	return gid
