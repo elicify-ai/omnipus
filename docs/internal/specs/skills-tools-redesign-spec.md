@@ -10,7 +10,7 @@ ADR: none — no open design decision was routed to an ADR. The founder settled 
 **Round 2**: corrected after grill round 2 (BLOCK, 2 CRITICAL, 8 MAJOR; report `docs/internal/specs/skills-tools-redesign-spec-review-round2.md`, untracked); see "Round-2 fix log". The two founder questions of round 2 are answered (2026-11-22, Discord #team-b, 03:34–03:55Z, relayed by team-lead): **R2-Q1** — no card offers "Always Allow" or "Allow everywhere" any more, for tools and skills alike; cards offer Approve Once, Allow for 1 hour / 3 hours / 1 day, and Deny; a timed allowance belongs to the agent, lives in memory only and ends at its time or at a restart (C-26, the founder page's Q3 B). **R2-Q2 A** — a new, already-checked skill at Ask is settled by Auto-approve like any Ask; the trust check still asks for unchecked skills (C-12). There was no third grill round.
 **Code baseline**: release `4e34afa416`. Every `file::symbol` and line below was read at that commit, except C-22, which reads the Settings landing branch `landing/settings-1519` at `8e5848c951` (Settings lands first; this package is rebased on top of it). GitNexus MCP tools were not available in this session; discovery used `grep`/`Read` (impact rows are therefore Inferred).
 **Epic**: work package #1963 (Skills & Tools page F) under epic #1519, as the current commission and issue #1963 state (grill round 2 read the issue with `gh issue view 1963`: open, "lands after Settings"). Its Stage and Horizon values were not checked in this round: **Unknown**.
-**Riders** (proposed by the architect; the chief confirms before the design is final): IN — #1920, #1297, #1298, #1411, #99, #1570, #1576. FOR THE CHIEF TO DECIDE — #817 item 1, #1063, #708, #1031, #1380. Details: "Riders" near the end.
+**Riders** (confirmed by the Chief Architect, ruling `omnipus-coordination/decisions/2026-11-28-ca-1963-riders.md`, 2026-11-28; the Project Manager agreed at 16:52Z): IN — #1920, #1297, #1298, #1411, #1570, #1576, and #817 item 1 as a test only (no new rule). OUT — #99 (closed as not planned by the founder on 2026-11-26), #1063 (decided by this package's own check), #708, #1031, #1380. Details: "Riders" near the end.
 **Agent tool field table**: see "Agent tool parity" under Contract Changes (C-10). Objects changed: the agent (per-agent skill permission) and the skill (global permission, what the model sees, category). Global settings (skill trust, tool and skill permission ceilings, levels) stay operator-only, refused to `set_config` for the reason already recorded in `pkg/sysagent/tools/config.go::blockedConfigKeys` ("sandbox").
 
 ---
@@ -395,7 +395,7 @@ New service (after upgrade, screen or `add_mcp_server`): `mcp_<S>_*` = ask is wr
 
 - A project skill and an installed skill with the same slug have different keys; `ResolveSkillName`'s existing precedence decides which skill runs, and that skill's key applies.
 - Project skills have no grant list; authority is the workspace mount, as today. Their starting permission is Ask, like every newly added skill (ST-Q3 B); a project skill already present at the upgrade gets the converted value (step B of the upgrade below). Their starting level is Name and short description.
-- Project skills are not listed on the Skills tab (#1380 not a rider), so their keys are edited only through `PATCH /security/permissions` and the agent writers (C-21), all validated by C-23. Their folders are gated for file tools and helpers by C-25. They count as unverified (anyone with write access to the workspace can change them), so trust applies and each new version asks once, even in God Mode (ST-Q8 A); this is a named behaviour change in DOC-004.
+- Project skills are not listed on the Skills tab (#1380 is out, chief ruling 2026-11-28), so their keys are edited only through `PATCH /security/permissions` and the agent writers (C-21), all validated by C-23. Their folders are gated for file tools and helpers by C-25. They count as unverified (anyone with write access to the workspace can change them), so trust applies and each new version asks once, even in God Mode (ST-Q8 A); this is a named behaviour change in DOC-004.
 - **Upgrade: each file converts itself, and nothing marks the upgrade (founder rule 2026-11-28; replaces the round-2 write-ahead design of R2-CRIT-001; revised after the on-demand review of 106f63ef9, NM-01 to NM-06).** The founder's rule: after an upgrade the data folder looks like a fresh install that carries the old settings and skills; nothing on disk names or marks the upgrade; nothing checks whether it is done. The old values live in two kinds of file, `config.json` and one record per agent under `$OMNIPUS_HOME/entities/agents/` (`pkg/agentstore/store.go::RecordsDir`; ADR-054 — Entity / config separation), each written atomically (`fileutil.WriteFileAtomic`: a `.tmp-*` file in the same folder, then a rename). **Neither kind needs a value from the other:** every old global value (the old global `Skill` value, the trust word, the three tool-loading switches, the MCP map) is in `config.json`, and the translation of an agent needs only that agent's own old `Skill` value, its grants and its mounts' project skills (`pkg/config/skill_permissions.go::PlanAgentSkillOverrides` takes no global value). Each file does need the **skill inventory** (the installed skills and the project skills on the mounts) to translate an old `Skill` value of `ask` or `deny`; the inventory rule below covers that (NM-02). Each file is converted in **one atomic write of that same file** that adds the new values and removes the old ones.
 
 | Old-shape value (the only trigger) | File | Never in a new-shape file because |
@@ -735,6 +735,7 @@ Refusals on `POST /tool-approvals/{approval_id}`: `action: allow` (a screen from
 | `GET/PUT /security/skill-trust` | retired (C-22 row 6) |
 | `GET /tools` | C-6 fields |
 | `GET /skills` | C-5 `category`, redefined `verified`; C-14 `full_tokens` |
+| `GET /skills`, "Cannot load" row (rider #1570, FR-063, S-80) | a wire change: today one skill whose files cannot be read makes the whole call answer 500 (`pkg/gateway/rest_skills_test.go::TestListSkillsRevisionReadFailureReturnsVisibleErrorWithoutPlaceholder` pins it and changes with this rider). Now that skill is returned in the list with `status: "error"` and `load_error` (plain-words reason, `contracts/components/schemas/Skill.yaml`), its `revision` a placeholder that matches no stored state so a write naming it is refused as stale; every other skill is unaffected. The Skills tab shows the row as "Cannot load" with that reason |
 | `GET /agents`, `GET /agents/{id}` | C-14 `full_skills_tokens` (read-only; compared with the existing `context_window_effective`) |
 | `POST /skills/install` | C-5 `category`, C-13 `review_id`; trust Deny refuses an unverified install (C-3); trust Ask needs a review (C-12) |
 | `GET/PUT /agents/{id}/tools` | C-4 `skills` |
@@ -2017,15 +2018,6 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **When** the editor is reopened without a page reload
 - **Then** `send_message` shows Allow
 
-#### Scenario: S-79 Doctor warns when unverified skills are allowed (#99)
-
-**Traces to**: User Story 12, Acceptance Scenario — rider #99
-**Category**: Edge Case
-
-- **Given** trust Allow
-- **When** `omnipus doctor` runs
-- **Then** it prints a warning that unverified skills are allowed without a check, and how to choose Ask in Skills & Tools
-
 #### Scenario: S-80 One unreadable skill does not empty the list (#1570)
 
 **Traces to**: User Story 12, Acceptance Scenario — rider #1570
@@ -2043,6 +2035,17 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **Given** built-in `plan`
 - **When** the person makes a copy named `plan-mine`
 - **Then** the new row is labelled `plan-mine`, not "Plan"
+
+#### Scenario: S-134 A skill change through set_agent_permissions asks a person, also with Auto-approve on (#817 item 1)
+
+**Traces to**: User Story 11, Acceptance Scenario 1; FR-054 (existing rule, unchanged: `set_agent_permissions` asks a person and Auto-approve never settles it, `pkg/tools/auto_approve.go` class `AutoAsks`; the shipped global default is Ask, `pkg/config/defaults.go`)
+**Category**: Edge Case
+
+- **Given** global `plan` at Ask, Mia with no override, and the session's Auto-approve on
+- **When** Omnipus calls `set_agent_permissions` for Mia with `skill_policy_changes: {set: {plan: allow}}`
+- **Then** an approval card for a person is raised before anything is stored
+- **And** until the person approves, Mia's record has no `plan` override
+- **And** the same holds with Auto-approve off (control)
 
 ### Feature: Round-1 additions (saving, authority, consent, migration, parity)
 
@@ -2683,7 +2686,7 @@ Mandatory on the cut commit: this package touches `pkg/agent` and the tool-polic
 | 29 | NewSkillMenu.test | Unit TS | S-52, S-54 | |
 | 30 | SkillsToolsPage.states.test | Unit TS | S-66, S-67, S-132 | S-132 rows read-only with Retry; the S-131 callout cases are retired with S-131 (founder rule 2026-11-28) |
 | 31 | skills-tools.spec.ts | E2E | S-03, S-15, S-20, S-57, S-58, S-60 to S-65, S-68, S-69 | targeted spec file |
-| 32 | Rider tests (one each) | mixed | S-75 to S-81 | per rider |
+| 32 | Rider tests (one each) | mixed | S-75 to S-78, S-80, S-81, S-134 | per rider; #817 item 1 is a test only |
 | 33 | TestSkillAuthority_FoldersFollowOutcome | Integration Go | S-85, S-86, S-87 | E6/E7 app-level and kernel grant lists |
 | 34 | TestSkillConsent_Table | Unit Go | S-10, S-11, S-30, S-31, S-93 | Dataset D10 |
 | 35 | TestInstallReview_StageBindsRevision | Integration Go | S-94, S-95 | C-13 |
@@ -3208,7 +3211,6 @@ Fixed token estimator in the Go test; every expected number is literal, never co
 - **FR-059**: (#1297) Effective values shown in the agent's Tools tab and returned by `get_agent` MUST include God Mode.
 - **FR-060**: (#1298) An agent's Tools tab MUST list the tools of services assigned to it.
 - **FR-061**: (#1411) Reopening an agent's editor MUST show the saved tool values without a page reload.
-- **FR-062**: (#99) `omnipus doctor` MUST warn when trust is Allow.
 - **FR-063**: (#1570) One unreadable skill MUST NOT fail the whole skill list; it shows "Cannot load" with its reason.
 - **FR-064**: (#1576) A copy MUST show its own name, not the source's display name.
 
@@ -3355,7 +3357,7 @@ Fixed token estimator in the Go test; every expected number is literal, never co
 | FR-051 | US-10 | S-68 | skills-tools.spec.ts | none — layout only, no behaviour to document |
 | FR-052 | US-10, US-6 | S-69, S-100 | skills-tools.spec.ts; SkillsToolsPage.focus.test | none — keyboard follows product-wide conventions |
 | FR-053 | US-10 | S-52, S-75 | NewSkillMenu.test | none — wording rule, no user page |
-| FR-054 | US-11 | S-70 | TestSetAgentPermissions_SkillPolicyChangesParity | DOC-007 |
+| FR-054 | US-11 | S-70, S-134 | TestSetAgentPermissions_SkillPolicyChangesParity; rider test #817 item 1 (`TestSetAgentPermissions_SkillChangeAsksAPerson`, failing first) | DOC-007 |
 | FR-055 | US-11 | S-74 | TestGetAgent_SkillPermissions | DOC-007 |
 | FR-056 | US-11 | S-71, S-72 | TestInstallSkillCategoryParity | DOC-007 |
 | FR-057 | US-11 | S-73 | TestSetConfig_RefusesSandboxSkillKeys | DOC-007 |
@@ -3363,7 +3365,6 @@ Fixed token estimator in the Go test; every expected number is literal, never co
 | FR-059 | US-12 | S-76 | rider test #1297 | DOC-006 |
 | FR-060 | US-12 | S-77 | rider test #1298 | DOC-006 |
 | FR-061 | US-12 | S-78 | rider test #1411 | none — bug fix restoring documented behaviour |
-| FR-062 | US-12 | S-79 | rider test #99 | DOC-004 |
 | FR-063 | US-12 | S-80 | rider test #1570 | none — error state already described |
 | FR-064 | US-12 | S-81 | rider test #1576 | none — bug fix |
 | FR-065 | — | S-64, S-26, S-01, S-101 | cut checklist; TestLegacySecurityEndpoints_Retired | DOC-009 |
@@ -3406,22 +3407,22 @@ Fixed token estimator in the Go test; every expected number is literal, never co
 
 ## Riders
 
-Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:title" --state open` (exit 0, 74 issues), plus the design notes' #1920. The chief confirms before the design is final; not confirmed as of round 1. The owning epic is also to be reconciled (header).
+Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:title" --state open` (exit 0, 74 issues), plus the design notes' #1920. Confirmed by the Chief Architect on 2026-11-28 (ruling `omnipus-coordination/decisions/2026-11-28-ca-1963-riders.md`); the Project Manager agreed at 16:52Z. The owning epic is also to be reconciled (header).
 
-| Issue | Why it rides | Proposed |
+| Issue | Why it rides | Decision (chief ruling 2026-11-28) |
 |---|---|---|
 | #1920 orchestrate skill names Ava/Admin | design-notes gap 5; this package touches built-in skill text (categories) | IN (FR-058) |
 | #1297 readouts ignore God Mode | this package rebuilds the readouts of the agent tab and `get_agent` | IN (FR-059) |
 | #1298 agent tools view lists no service tools | same agent tab and handler | IN (FR-060) |
 | #1411 stale tool policy on reopen | same agent tab | IN (FR-061) |
-| #99 doctor warns on trust allow | trust values change here | IN (FR-062) |
+| #99 doctor warns on trust allow | trust values change here | OUT: closed as not planned by the founder on 2026-11-26 (security triage); FR-062 and S-79 removed |
 | #1570 one unreadable skill fails GET /skills | the Skills tab's list | IN (FR-063) |
 | #1576 copies show source name | Skills tab rows, Make a copy | IN (FR-064) |
-| #817 item 1 agents loosen other agents' permissions | `set_agent_permissions` gains skill changes and widens the same gap | CHIEF — needs a founder design decision; recommend at least the same rule for skills as for tools |
-| #1063 MCP tools denied despite allow | External tools tab values | CHIEF — verify it still reproduces first |
-| #708 save after stopping a plan shows a network error | agent tab save | CHIEF |
-| #1031 skill/tool discovery ranking | Hidden skills rely on `Skill` search | CHIEF — larger, separate |
-| #1380 show project-folder skills | Skills tab list | CHIEF — would let mount skills be edited on screen |
+| #817 item 1 agents loosen other agents' permissions | `set_agent_permissions` gains skill changes | IN as a test only, no new rule: skill changes go through the same tool, which asks a person and is never settled by Auto-approve (S-134, FR-054); close #817 item 1 with that test |
+| #1063 MCP tools denied despite allow | External tools tab values | OUT as a rider: observed 2026-09-29 before the tool-registry redesign, never reproduced; this package's own check of an external tool at Allow decides it (close #1063 if it passes; fix it here if it fails) |
+| #708 save after stopping a plan shows a network error | agent tab save | OUT: the cause is in the plan engine's reload drain, outside this package's files |
+| #1031 skill/tool discovery ranking | Hidden skills rely on `Skill` search | OUT: a separate ranking design; FR-073 does not need it |
+| #1380 show project-folder skills | Skills tab list | OUT: a product scope question for the PM and the founder, not a rider |
 
 ---
 
@@ -3430,7 +3431,7 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 - Grants stay the gate (ADR-072 D4): per-skill permission is a second check after the grant, the way a service assignment and a tool permission are two checks for MCP tools (Hard Constraint #6, ADR-090).
 - ToolSearch also finds skills (C-17) (ST-Q6 A); round 0 had left R31's "one search for both" out without a founder decision (round-1 MAJ-015).
 - Skill categories for built-ins (decided: founder default, former FQ-5), proposal from R32 Appendix B mapped to today's 29 skills: Tools — add-connector, add-provider, capability-plan, change-agent, connect-channel, create-agent, dependency-check, disable-channel, doctor-usage, inbox-triage, install-skill, provider-config, remove-agent, remove-connector, shell-diagnosis, team-delegation, team-setup, welcome-workspace, write-skill; Business — interview, define-goal, plan, orchestrate; Research — deep-research; Testing & Security — verify; Content & Media — elicify-docx, elicify-pdf, elicify-pptx, elicify-xlsx.
-- Project-folder (mount) skills are not listed on the Skills tab (#1380 not a rider by default); they have their own keys, migration and defaults (C-19).
+- Project-folder (mount) skills are not listed on the Skills tab (#1380 is out, chief ruling 2026-11-28); they have their own keys, migration and defaults (C-19).
 - Settings lands first (issue #1963); this package edits named Settings files on the Settings base (C-22) and lists the Settings-spec edits for team-lead to make ("Notes for team-lead").
 - Removed template sections: none.
 
@@ -3516,9 +3517,9 @@ No question is open for the founder or for team-lead. The architect's R2-Q1 poin
 - Between the two landings the release branch has no screen for the global tool grid and skill trust (C-22). The spec makes "do not cut the release in between" a rule (FR-065); a stopgap in Settings is the alternative (row 4). Team-lead decides; not a founder question unless the gap is unacceptable.
 - This package edits files the Settings team owns (`PerformanceSection.tsx`, `IntegrationsSection.tsx`, `SecuritySection.tsx`, the Settings search answers, `src/lib/api/config.ts`). It lands after Settings, so there are no two writers at once, but the Settings owners should know.
 - The Linux kernel rendering of the project-skill gate (C-25) is 🔶 Inferred feasible, not built. If it proves infeasible, Linux falls back to the app-level gate for project skills, as on Windows, and DOC-004 says so; that is a security trade-off for security-lead and, if needed, the founder.
-- The rider set is still unconfirmed by the chief (header, Riders); Stage and Horizon of #1963 were not checked (header).
+- The rider set is confirmed by the Chief Architect (ruling `omnipus-coordination/decisions/2026-11-28-ca-1963-riders.md`, 2026-11-28; header, Riders); Stage and Horizon of #1963 were not checked (header).
 - Upgrade test homes (founder rule 2026-11-28, C-19): UAT lanes and test instances must start from a saved pre-release data folder. A folder that already ran a build of this package from before 2026-11-28 carries upgrade files and a marker that no released install can have; this spec adds no clean-up code for them.
-- Open dispositions after the on-demand review of 106f63ef9 (2026-11-28): (1) the founder answered on 2026-11-28 14:11Z (Discord #team-b, message 1576239077403922534): Q-AUD1 A — the two no-entry cases of the trust-conversion audit are accepted and named in DOC-004 (C-3); Q-UPG1 A — an ordinary save that would remove the last old value of a deferred `config.json` is refused with 409 `skills_not_listable` (C-19, Dataset D13 row 22); security-lead still reviews both before GREEN; (2) the one writer rule (C-19) changes every writer of `config.json` to take the sidecar `config.json.lock`; it is a general store change inside this package's files, not a new product behaviour; chief confirmation of riders stays outstanding as before.
+- Open dispositions after the on-demand review of 106f63ef9 (2026-11-28): (1) the founder answered on 2026-11-28 14:11Z (Discord #team-b, message 1576239077403922534): Q-AUD1 A — the two no-entry cases of the trust-conversion audit are accepted and named in DOC-004 (C-3); Q-UPG1 A — an ordinary save that would remove the last old value of a deferred `config.json` is refused with 409 `skills_not_listable` (C-19, Dataset D13 row 22); security-lead still reviews both before GREEN; (2) the one writer rule (C-19) changes every writer of `config.json` to take the sidecar `config.json.lock`; it is a general store change inside this package's files, not a new product behaviour; chief confirmation of riders is done (ruling `omnipus-coordination/decisions/2026-11-28-ca-1963-riders.md`).
 
 ---
 
@@ -3594,3 +3595,4 @@ Grill round 2 report: `docs/internal/specs/skills-tools-redesign-spec-review-rou
 | 2026-11-28 | Review 8 of 461e000bc (BLOCK on R8-01; W8-01): `set_config` `null` keeps today's meaning — no change at a non-nullable destination, clear at a nullable one, decided from the destination's Go type; test 74 keeps the genuine Q-UPG1 refusal on `PATCH` only and adds the `POST` name-collision case (zero credential writes or deletes, winner intact); cleanup maps hold only credentials actually written; removal cleanup stays after persistence (revision 10, #1963) |
 | 2026-11-28 | Review 9 of 99b2d1110 (BLOCK on R9-01; W9-01): `set_config` no longer re-describes JSON rules: it runs today's `dotSet` on a typed copy decoded inside the lock and copies back only the written key, keeping members whose JSON did not change and members the decoder ignores, with a decode check; a changed list with ignored members or a failed check is refused (`UnshownFieldsError`). The revision 9 and 10 merge and `null` rules are withdrawn (revision 11, #1963) |
 | 2026-11-28 | Review 10 of 772372b94 (PASS WITH NOTES; W10-01, W10-02, handoff note): step 4 decodes the whole candidate document afresh with `DecodeDocument`; an unrecognised list member is one no field matches and whose removal changes nothing, so a known omitted empty member is not refused; the struct-comparison prohibitions are narrowed to the stale-struct and row-correspondence approaches; fixtures added (revision 12, #1963) |
+| 2026-11-28 | Chief Architect ruling on the riders (`omnipus-coordination/decisions/2026-11-28-ca-1963-riders.md`; PM agreed 16:52Z): #99 out (FR-062, S-79 and their traceability row removed); #1570 stays in and its "Cannot load" row is added to Contract Changes as a wire change; #817 item 1 in as a test only (S-134, traced to FR-054); #1063, #708, #1031 and #1380 out; header and Riders table cite the ruling. The upgrade text is unchanged (revision 13, #1963) |
