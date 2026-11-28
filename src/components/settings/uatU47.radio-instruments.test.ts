@@ -1,6 +1,9 @@
 // Test-instrument controls only: synthetic CSS never replaces shipped CSS or
 // production code, and these are NOT CHECK's named-fault/mutation runs.
-import { parse } from 'postcss'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { compile } from '@tailwindcss/node'
+import { parse, type Rule } from 'postcss'
 import { expect, it } from 'vitest'
 import { pseudoTouchU2 } from '../../../tests/helpers/settings-u2-css'
 import { classLengthU47, expectRadioReachU47, fineBeforeU47, radioBoxU47, radioReachU47 } from '../../../tests/helpers/settings-u47-radio'
@@ -137,3 +140,73 @@ it('U48 instrument: the fine-pointer reader refuses supports around the exact co
   // Call this reader directly: pseudoTouchU2's throw must not mask this branch.
   expect(fineBeforeU47(css, target()), 'nested guards cannot certify fine-pointer preservation').toBe(true)
 })
+
+it.each([
+  ['nested media', `[data-radio-target]::before { ${boxU48} @media (width >= 1px) { width: 44px; } }`],
+  ['nested rule', `[data-radio-target]::before { ${boxU48} & { width: 44px; } }`],
+  ['nesting-only second rule', `[data-radio-target]::before { ${boxU48} }
+    [data-radio-target]::before { @media (width >= 1px) { width: 44px; } }`],
+])('U49 instrument: %s is unreadable, not an ignored child', (_name, source) => {
+  // Harmless values still cannot certify nesting; this is not CHECK's ND-1.
+  expect(radioBoxU47(parse(source), target())).toBeNull()
+})
+
+it.each(['[data-radio-target]::before', '*::before, [data-radio-target]::before'])(
+  'U49 instrument: targeted neutral reset %s is not exempt', (selector) => {
+    // Keep a valid box alongside the reset: exempting the targeted rule would
+    // otherwise leave an unreadable empty box and falsely satisfy null anyway.
+    const css = parse(`[data-radio-target]::before { ${boxU48} }
+      ${selector} { box-sizing: border-box; margin: 0; padding: 0; border: 0 solid; }`)
+    expect(radioBoxU47(css, target())).toBeNull()
+  },
+)
+
+it.each([
+  [`[data-radio-target]::before { ${boxU48} scale: 1; }`, 'rule [data-radio-target]::before: unsupported property scale'],
+  [`[data-radio-target]::before { ${boxU48} } [data-radio-target=""]::before { top: 50%; }`,
+    'multiple matching box rules: [data-radio-target]::before and [data-radio-target=""]::before'],
+  ['[data-radio-target]::before { width: 10vh; height: 44px; }', 'rule [data-radio-target]::before: unreadable width: 10vh'],
+  ['[data-radio-target]::before { width: 44px; height: 44px; left: calc(50% - 22px); top: 50%; }',
+    'rule [data-radio-target]::before: unreadable left: calc(50% - 22px)'],
+  ['[data-radio-target]::before { width: 44px; height: 44px; transform: translateX(-50%) translateY(-50%); }',
+    'rule [data-radio-target]::before: unreadable transform: translateX(-50%) translateY(-50%)'],
+  ['[data-radio-target]::before { @media (width >= 1px) { width: 44px; } }',
+    'rule [data-radio-target]::before: non-declaration child @media (width >= 1px)'],
+])('U49 instrument: caller refusal names %s', (source, reason) => {
+  const element = target()
+  const card = document.createElement('label')
+  card.append(element)
+  document.createElement('div').append(card)
+  expect(() => expectRadioReachU47(parse(source), element, card, 'diagnostic control')).toThrow(reason)
+})
+
+it.each(['shipped', 'EQ-1', 'EQ-5', 'EQ-6', 'EQ-8'])(
+  'U49 instrument: %s stays readable through the shipped compile path', async (version) => {
+    // Only allowed positive rewrites of an in-memory copy; no production file
+    // or named fault is changed. Expected rectangle remains the hand derivation.
+    const source = parse(readFileSync(resolve('src/styles/globals.css'), 'utf8'))
+    const original = source.toString()
+    const rules: Rule[] = []
+    source.walkRules((rule) => { if (rule.selector === '[data-radio-target]::before') rules.push(rule) })
+    expect(rules, `${version}: locate exactly one source rule before rewriting`).toHaveLength(1)
+    const rule = rules[0]!
+    if (version === 'EQ-1') {
+      const values: Record<string, string> = { width: '44px', height: '44px', left: '6.5px', top: '6.5px', transform: 'translate(-22px, -22px)' }
+      rule.walkDecls((decl) => { if (values[decl.prop]) decl.value = values[decl.prop] })
+    } else if (version === 'EQ-5') {
+      const dimensions = rule.nodes.filter((node) => node.type === 'decl' && ['width', 'height', 'transform'].includes(node.prop))
+      expect(dimensions, 'EQ-5: all three dimension/translation declarations are split out').toHaveLength(3)
+      const second = rule.cloneAfter({ nodes: [] })
+      for (const node of dimensions) { second.append(node.clone()); node.remove() }
+    } else if (version === 'EQ-6') {
+      rule.walkDecls((decl) => { if (['width', 'height'].includes(decl.prop)) decl.value = 'max(100%, 44px)' })
+    } else if (version === 'EQ-8') rule.selector = '[data-radio-target=""]::before'
+    if (version !== 'shipped') expect(source.toString(), `${version}: positive rewrite actually applied`).not.toBe(original)
+    const compiled = await compile(source.toString(), { base: resolve('src/styles'), onDependency() {} })
+    const css = parse(compiled.build([]))
+    const element = target()
+    expect(radioBoxU47(css, element), `${version}: independently calculated bounds`).toEqual(boundsU48)
+    expect(pseudoTouchU2(css, element), `${version}: coarse touch area`).toBe(true)
+    expect(fineBeforeU47(css, element), `${version}: no added fine-pointer region`).toBe(false)
+  },
+)

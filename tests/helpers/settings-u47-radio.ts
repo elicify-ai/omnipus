@@ -1,8 +1,9 @@
 // U8-A / FR-070: bounded CSS arithmetic, NEVER painted boxes or hit-testing.
 // Glyph=13 is the U9 measured environmental input (tester-report-u9.md §4),
 // not a product minimum. In radioBoxU47's matched ::before declaration model,
-// unknown properties/lengths or multiple box rules yield null, never a made-up
-// size. Neutral universal box resets are excluded; this is not a full cascade.
+// unknown properties/lengths, non-declaration children or multiple box rules
+// yield null with an optional per-call reason, never a made-up size. Neutral
+// universal box resets are excluded; this is not a full cascade.
 import { expect } from 'vitest'
 import type { AtRule, Document, Root, Rule } from 'postcss'
 import { pixelsU43 } from './settings-u43-css'
@@ -27,40 +28,65 @@ export function fineBeforeU47(css: Root, target: Element) {
   return found
 }
 
-export function radioBoxU47(css: Root, target: Element, glyph = 13) {
+export function radioBoxU47(css: Root, target: Element, glyph = 13, diagnostics: string[] = []) {
   const supported = ['content', 'position', 'left', 'top', 'width', 'height', 'transform', 'pointer-events']
   const neutralReset: Record<string, string> = { 'box-sizing': 'border-box', margin: '0', padding: '0', border: '0 solid' }
   const hit: Record<string, string> = {}
-  let boxRules = 0, unreadable = false
+  const refuse = (reason: string) => { diagnostics.push(reason); return null }
+  let boxRules = 0, unreadable = false, boxSelector = ''
   css.walkRules((rule) => {
+    if (unreadable) return // Do not attempt to match descendants of a refused nested rule.
     const selectors = rule.selector.split(',').filter((part) => /::?before\b/.test(part))
       .map((part) => part.replace(/::?before\b/g, '').trim() || '*')
     if (!selectors.some((selector) => target.matches(selector))) return
+    // Check before the empty-declaration shortcut: nesting is never invisible.
+    const child = rule.nodes.find((node) => node.type !== 'decl')
+    if (child) {
+      const description = child.type === 'atrule' ? `@${child.name} ${child.params}`
+        : child.type === 'rule' ? `rule ${child.selector}` : child.type
+      refuse(`rule ${rule.selector}: non-declaration child ${description}`)
+      unreadable = true
+      return
+    }
     const declarations = rule.nodes.filter((node) => node.type === 'decl')
     if (declarations.length === 0) return
     // Only universal, exactly neutral resets are outside the tap-box model.
     // A targeted reset or an added non-neutral/unknown declaration is NOT exempt.
     if (selectors.every((selector) => selector === '*')
       && declarations.every((decl) => neutralReset[decl.prop] === decl.value.trim())) return
-    if (declarations.some((decl) => !supported.includes(decl.prop)) || ++boxRules > 1) {
+    const unsupported = declarations.find((decl) => !supported.includes(decl.prop))
+    if (unsupported) {
+      refuse(`rule ${rule.selector}: unsupported property ${unsupported.prop}: ${unsupported.value}`)
       unreadable = true
       return
     }
+    if (++boxRules > 1) {
+      refuse(`multiple matching box rules: ${boxSelector} and ${rule.selector}`)
+      unreadable = true
+      return
+    }
+    boxSelector = rule.selector
     for (const decl of declarations) hit[decl.prop] = decl.value
   })
   // Refuse cascade ambiguity instead of letting source order invent a box.
   if (unreadable) return null
-  const length = (value: string | undefined, reference: number) => value === undefined ? null
-    : pixelsU43(css, value.replace(/(-?[\d.]+)%/g, (_, n: string) => `${Number(n) * reference / 100}px`))
-  const width = length(hit.width, glyph), height = length(hit.height, glyph)
+  if (boxRules === 0) return refuse('no matching ::before box rule')
+  const length = (property: string, value: string | undefined, reference: number) => {
+    const result = value === undefined ? null
+      : pixelsU43(css, value.replace(/(-?[\d.]+)%/g, (_, n: string) => `${Number(n) * reference / 100}px`))
+    if (result === null) refuse(`rule ${boxSelector}: unreadable ${property}: ${value ?? '(missing)'}`)
+    return result
+  }
+  const width = length('width', hit.width, glyph), height = length('height', hit.height, glyph)
   if (width === null || height === null) return null
   // CSS translate percentages are relative to the pseudo box; left/top to its
   // containing wrapper. Equivalent px/%/max spellings are intentionally legal.
   const transform = hit.transform?.trim() ?? 'none'
   const translate = /^translate\(\s*([^,]+),\s*([^,]+)\)$/.exec(transform)
-  const dx = transform === 'none' ? 0 : length(translate?.[1], width)
-  const dy = transform === 'none' ? 0 : length(translate?.[2], height)
-  const x = length(hit.left, glyph), y = length(hit.top, glyph)
+  if (transform !== 'none' && !translate) return refuse(`rule ${boxSelector}: unreadable transform: ${transform}`)
+  const dx = transform === 'none' ? 0 : length('transform translate-x', translate?.[1], width)
+  const dy = transform === 'none' ? 0 : length('transform translate-y', translate?.[2], height)
+  const x = length('left', hit.left, glyph), y = length('top', hit.top, glyph)
   if (x === null || y === null || dx === null || dy === null) return null
   const left = x + dx, top = y + dy
   return { width, height, left, top, right: left + width, bottom: top + height,
@@ -88,8 +114,9 @@ export function radioReachU47(css: Root, target: Element, card: Element, glyph =
   const gap = classLengthU47(css, card.parentElement!, ['gap-y-', 'gap-', 'space-y-'], null)
   const minimumHeight = classLengthU47(css, card, ['pointer-coarse:min-h-', 'min-h-'], null)
   const offset = padding === null || margin === null ? null : border + padding + margin
-  const box = radioBoxU47(css, target, glyph)
-  return { box, minimumHeight, gap, offset,
+  const unreadable: string[] = []
+  const box = radioBoxU47(css, target, glyph, unreadable)
+  return { box, unreadable, minimumHeight, gap, offset,
     top: box === null || offset === null ? null : offset + box.top,
     bottom: box === null || offset === null ? null : offset + box.bottom }
 }
@@ -97,7 +124,8 @@ export function radioReachU47(css: Root, target: Element, card: Element, glyph =
 export function expectRadioReachU47(css: Root, target: Element, card: Element, name: string) {
   const reach = radioReachU47(css, target, card)
   const details = `${name}/U8-A: ${JSON.stringify(reach)}`
-  expect(reach.box, `${details}; size, offsets and translation must be readable`).not.toBeNull()
+  const cause = reach.unreadable.join('; ')
+  expect(reach.box, `${details}; size, offsets and translation must be readable${cause ? `; ${cause}` : ''}`).not.toBeNull()
   expect(reach.minimumHeight, `${details}; derive the card minimum from its own class`).not.toBeNull()
   expect(reach.gap, `${details}; derive the spacing between option cards`).not.toBeNull()
   expect(reach.offset, `${details}; derive border/padding/wrapper margin`).not.toBeNull()
