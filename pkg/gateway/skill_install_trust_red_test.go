@@ -12,23 +12,25 @@ package gateway
 // Oracles: skills-tools-redesign-spec.md C-3 trust table ("deny | refused:
 // 'This skill is unverified, and unverified skills are set to Deny in
 // Skills & Tools. Nothing was installed.'"), BDD S-27 and S-28. The
-// configured trust here is the POST-migration vocabulary value "deny"
-// (config.SkillTrustLevel is a string type, so the assignment compiles
-// before the migration of C-3 lands — today it matches nothing, which is
-// exactly the missing behaviour this test pins).
+// configured trust here is the spec's stored value "deny" (C-3), written as
+// the literal so that the test pins the spec's vocabulary and not the name of
+// a Go constant.
 //
 // The spec's S-27 also disables the screen's Install button in the review;
 // the review endpoint itself (POST /skills/install/review) is C-13 and is
 // RED-tested by orders 35/53 — the subtest below pins only its trust-Deny
 // refusal so the rule is not lost between the two.
 //
-// S-28b builds install_skill by hand over a fake registry. A tool built that
-// way has no trust source and applies no trust refusal of its own, so the
-// subtest hands it the API's live trust setting the way the agent loop does
-// for the tool it registers (handTrustToInstallSkill). The refusal reaches the
-// model as a JSON envelope, and encoding/json writes "&" in it as the six
-// characters \u0026, so the C-3 sentence ("Skills & Tools") is read from the
-// decoded reason (installRefusalReason), not from the raw bytes.
+// S-28b builds install_skill by hand over a fake registry and gives it the
+// API's live trust setting with a direct SetSkillTrust call, the way the agent
+// loop does for the tool it registers (pkg/agent/loop_wire.go). The call is
+// direct on purpose: a tree whose tool has no such setter does not build. The
+// tool the loop itself registers is run by
+// skill_install_trust_loop_red_test.go. The refusal reaches the model as a
+// JSON envelope, and encoding/json writes "&" in it as the six characters
+// \u0026, so the C-3 sentence ("Skills & Tools") is read from the decoded
+// reason and from the decoded error.message (installRefusalReason,
+// installRefusalErrorMessage), not from the raw bytes.
 
 import (
 	"context"
@@ -67,8 +69,8 @@ func trustDenyAPI(t *testing.T) *restAPI {
 			},
 		},
 	}
-	// C-3 vocabulary value after the migration; today's enum does not know
-	// it (string-typed, so this compiles), which is the gap under test.
+	// The spec's stored value for Deny (C-3), as a literal: the test pins the
+	// spec's vocabulary, not the name of a Go constant.
 	cfg.Sandbox.SkillTrust = config.SkillTrustLevel("deny")
 	// A slug install or review needs an enabled skill marketplace: without one
 	// the handler answers 409 "no skill marketplace is enabled" before it ever
@@ -95,30 +97,10 @@ func trustDenyAPI(t *testing.T) *restAPI {
 	}
 }
 
-// skillTrustSetter is the call that gives install_skill the live trust setting
-// (C-3, S-28): the agent loop makes it on the tool it registers
-// (pkg/agent/loop_wire.go). It is reached through an interface, not called
-// directly, so that this file still compiles on a tree whose tool has no such
-// call: there the tool stays unwired, installs, and S-28b fails on its own
-// assertions (the behaviour S-28 forbids) instead of on a compile error that
-// would turn the whole package red.
-type skillTrustSetter interface {
-	SetSkillTrust(trust func() config.SkillTrustLevel)
-}
-
-// handTrustToInstallSkill gives a hand-built install_skill the API's live trust
-// setting, read at call time from the loaded config the way the REST install
-// path reads it (rest_skills_install_trust.go). It reports whether the tool took it.
-func handTrustToInstallSkill(tool *tools.InstallSkillTool, api *restAPI) bool {
-	setter, ok := any(tool).(skillTrustSetter)
-	if !ok {
-		return false
-	}
-	setter.SetSkillTrust(func() config.SkillTrustLevel {
-		return api.agentLoop.GetConfig().Sandbox.EffectiveSkillTrust()
-	})
-	return true
-}
+// c3DenyInstallRefusal is the sentence C-3's deny row gives for the refusal of
+// an install, word for word from the spec. It is the oracle of every install
+// path under Deny (S-27, S-28, FR-029).
+const c3DenyInstallRefusal = "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
 
 // installRefusalReason is the sentence an install_skill refusal carries. The
 // result is a JSON envelope whose "reason" holds the refusal, and encoding/json
@@ -136,10 +118,27 @@ func installRefusalReason(text string) string {
 	return text
 }
 
+// installRefusalErrorMessage is the "error.message" of the same refusal
+// envelope: the sentence reaches the model twice, as the reason and as the
+// error's message. Like the reason it is read decoded, because the raw bytes
+// carry "&" as the six characters \u0026. It is empty when the result is not
+// such an envelope or carries no message.
+func installRefusalErrorMessage(text string) string {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		return ""
+	}
+	return envelope.Error.Message
+}
+
 // TestInstall_TrustDenyRefusesUnverified (order 6, S-27/S-28).
 // Traces to: BDD S-27, S-28; spec C-3 (trust table, deny row).
 func TestInstall_TrustDenyRefusesUnverified(t *testing.T) {
-	const wantText = "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
+	const wantText = c3DenyInstallRefusal
 
 	t.Run("S-28a REST upload install of an unverified skill is refused", func(t *testing.T) {
 		api := trustDenyAPI(t)
@@ -163,11 +162,15 @@ func TestInstall_TrustDenyRefusesUnverified(t *testing.T) {
 		registryMgr := skills.NewRegistryManager()
 		registryMgr.AddRegistry(&fakeSkillRegistry{}) // installs an unverified skill
 		tool := tools.NewInstallSkillTool(registryMgr, globalSkills)
-		wired := handTrustToInstallSkill(tool, api)
-		t.Logf("install_skill was handed the live trust setting through SetSkillTrust: %t", wired)
+		// The trust source the agent loop gives the tool it registers
+		// (pkg/agent/loop_wire.go): the live setting, read at call time.
+		tool.SetSkillTrust(func() config.SkillTrustLevel {
+			return api.agentLoop.GetConfig().Sandbox.EffectiveSkillTrust()
+		})
 		result := tool.Execute(context.Background(), map[string]any{"slug": "notes-helper", "registry": "fake"})
 		require.True(t, result.IsError, "trust deny must refuse the install_skill call (C-3); got %+v", result)
 		require.Contains(t, installRefusalReason(result.ForLLM), wantText, "the refusal carries the C-3 text")
+		require.Contains(t, installRefusalErrorMessage(result.ForLLM), wantText, "the refusal's error.message carries the C-3 text")
 		_, err := os.Stat(filepath.Join(globalSkills, "notes-helper"))
 		require.True(t, errors.Is(err, os.ErrNotExist), "no folder for the refused skill may exist")
 	})
