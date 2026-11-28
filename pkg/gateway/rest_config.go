@@ -1066,8 +1066,10 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		// #1519 FR-044 / FR-100: refuse, by effect, any merged result that
-		// does not decode or that changes a retention or Performance value.
-		if err := checkConfigEffectUnchanged(effectBefore, m); err != nil {
+		// does not decode or that changes a retention or Performance value;
+		// Skills & Tools C-22: refuse a body that names a retired
+		// tool-loading key with a value other than the stored one.
+		if err := checkConfigEffectUnchanged(effectBefore, m, typedBody); err != nil {
 			return err
 		}
 		changed = changedConfigKeys(stored, m)

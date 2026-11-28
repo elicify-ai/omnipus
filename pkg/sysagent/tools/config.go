@@ -944,8 +944,9 @@ func validateRetiredConfigKey(cfg *config.Config, key string) error {
 // at its parent tools.manifest, or a section write that would change it, is
 // refused with retiredToolLoadingText.
 const (
-	manifestCompressedConfigKey = "tools.manifest.compressed"
-	manifestConfigKey           = "tools.manifest"
+	manifestCompressedConfigKey     = "tools.manifest.compressed"
+	manifestPreviewAllLazyConfigKey = "tools.manifest.preview_all_lazy"
+	manifestConfigKey               = "tools.manifest"
 )
 
 // validatePerformanceOnlyConfigKey refuses a key at or under a
@@ -966,32 +967,77 @@ func validatePerformanceOnlyConfigKey(cfg *config.Config, key string) error {
 	return nil
 }
 
-// performanceOnlyConfig is the value of the performance-only fields.
+// performanceOnlyConfig is the value of the performance-only fields and of
+// the retired tool-loading keys.
 type performanceOnlyConfig struct {
-	maxToolIterations  int
-	envImported        bool
-	manifestCompressed bool
+	maxToolIterations int
+	envImported       bool
+	retired           retiredToolLoadingConfig
+}
+
+// retiredToolLoadingConfig is the stored state of the three retired
+// tool-loading keys (C-22). A server's deferred is kept as its tri-state
+// value ("" unset, "true", "false").
+type retiredToolLoadingConfig struct {
+	manifestCompressed     bool
+	manifestPreviewAllLazy bool
+	serverDeferred         map[string]string
+}
+
+// changedFrom reports which retired key, if any, a write changed. A server
+// that is no longer in the config has no deferred left to change; a server
+// that stays or is added must keep the stored deferred, or leave it unset.
+func (r retiredToolLoadingConfig) changedFrom(before retiredToolLoadingConfig) (string, bool) {
+	if r.manifestCompressed != before.manifestCompressed {
+		return manifestCompressedConfigKey, true
+	}
+	if r.manifestPreviewAllLazy != before.manifestPreviewAllLazy {
+		return manifestPreviewAllLazyConfigKey, true
+	}
+	ids := make([]string, 0, len(r.serverDeferred))
+	for id := range r.serverDeferred {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if r.serverDeferred[id] != before.serverDeferred[id] {
+			return "tools.mcp.servers." + id + ".deferred", true
+		}
+	}
+	return "", false
 }
 
 func snapshotPerformanceOnlyConfig(cfg *config.Config) performanceOnlyConfig {
+	deferred := make(map[string]string, len(cfg.Tools.MCP.Servers))
+	for id, server := range cfg.Tools.MCP.Servers {
+		deferred[id] = ""
+		if server.Deferred != nil {
+			deferred[id] = strconv.FormatBool(*server.Deferred)
+		}
+	}
 	return performanceOnlyConfig{
-		maxToolIterations:  cfg.Agents.Defaults.MaxToolIterations,
-		envImported:        cfg.Agents.Defaults.MaxToolIterationsEnvImported,
-		manifestCompressed: cfg.Tools.Manifest.Compressed,
+		maxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
+		envImported:       cfg.Agents.Defaults.MaxToolIterationsEnvImported,
+		retired: retiredToolLoadingConfig{
+			manifestCompressed:     cfg.Tools.Manifest.Compressed,
+			manifestPreviewAllLazy: cfg.Tools.Manifest.PreviewAllLazy,
+			serverDeferred:         deferred,
+		},
 	}
 }
 
 // checkPerformanceOnlyConfigUnchanged refuses a write that changed a
-// performance-only field through an ancestor key.
+// performance-only field or a retired tool-loading key through an ancestor
+// key.
 func checkPerformanceOnlyConfigUnchanged(key string, before performanceOnlyConfig, cfg *config.Config) error {
 	after := snapshotPerformanceOnlyConfig(cfg)
-	if after == before {
-		return nil
-	}
-	if after.manifestCompressed != before.manifestCompressed {
+	if retiredKey, changed := after.retired.changedFrom(before.retired); changed {
 		return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s (%s); "+
-			"leave manifest.compressed out of the object",
-			key, manifestCompressedConfigKey, retiredToolLoadingText)
+			"leave it out of the object",
+			key, retiredKey, retiredToolLoadingText)
+	}
+	if after.maxToolIterations == before.maxToolIterations && after.envImported == before.envImported {
+		return nil
 	}
 	return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
 		"leave max_tool_iterations out of the object",

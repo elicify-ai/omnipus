@@ -18,7 +18,7 @@ import (
 
 // Install refusals of an unverified skill (C-3, S-28, S-95).
 const (
-	installTrustDenyText = "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
+	installTrustDenyText = skills.InstallTrustDenyText
 	installTrustAskText  = "Review needed: this skill is unverified, and unverified skills are set to Ask. Review it in Skills & Tools first."
 )
 

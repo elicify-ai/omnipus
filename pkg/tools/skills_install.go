@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/utils"
@@ -32,7 +33,10 @@ type InstallSkillTool struct {
 	// directory, whereas this is always the same fixed global directory
 	// regardless of which agent or turn is calling.
 	globalSkillsDir string
-	mu              sync.Mutex
+	// skillTrust reads the live trust setting for unverified skills
+	// (SetSkillTrust); nil applies no trust refusal of its own.
+	skillTrust func() config.SkillTrustLevel
+	mu         sync.Mutex
 }
 
 // publishInstalledSkill is a test-only override of the publication step,
@@ -63,6 +67,17 @@ func NewInstallSkillTool(registryMgr *skills.RegistryManager, globalSkillsDir st
 		globalSkillsDir: globalSkillsDir,
 		mu:              sync.Mutex{},
 	}
+}
+
+// SetSkillTrust gives the tool the live trust setting for unverified skills
+// (Skills & Tools C-3). Under Deny an unverified skill is refused before
+// publication and before any approval card, with the same text as the
+// screen and REST install. Without a trust source the tool applies no trust
+// refusal of its own; its approval card still guards the install.
+func (t *InstallSkillTool) SetSkillTrust(trust func() config.SkillTrustLevel) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.skillTrust = trust
 }
 
 // stagingDirName is the dedicated, non-scanned subdirectory of the global
@@ -328,6 +343,9 @@ func (t *InstallSkillTool) stage(ctx context.Context, req *installRequest) (*sta
 	}
 	if result.IsMalwareBlocked {
 		return fail(ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", req.slug)))
+	}
+	if !result.Verified && t.skillTrust != nil && t.skillTrust() == config.SkillTrustDeny {
+		return fail(ErrorResult(skills.InstallTrustDenyText))
 	}
 	revision, err := skills.ContentRevision(stageDir)
 	if err != nil {

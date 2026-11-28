@@ -695,7 +695,14 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		// globalSkillsDir's doc comment in context.go) — never
 		// agent.Home, so a skill installed by one agent is discoverable
 		// by every other agent.
-		agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
+		installSkill := tools.NewInstallSkillTool(registryMgr, globalSkillsDir())
+		// C-3: under Deny an unverified skill is refused, read from the live
+		// config at call time like the screen and REST install.
+		al := rw.rs.al
+		installSkill.SetSkillTrust(func() config.SkillTrustLevel {
+			return al.GetConfig().Sandbox.EffectiveSkillTrust()
+		})
+		agent.Tools.RegisterReplacing(installSkill)
 		// remove_skill is retired (skills spec r15 §5.1): a skill is deleted with
 		// edit_skill action=delete. Do not register a removal tool here.
 	}

@@ -50,6 +50,11 @@ type InstallResult struct {
 	Verified bool
 }
 
+// InstallTrustDenyText is the refusal of an unverified install when
+// unverified skills are set to Deny (Skills & Tools C-3, S-28). The screen,
+// REST and install_skill paths all answer with it.
+const InstallTrustDenyText = "This skill is unverified, and unverified skills are set to Deny in Skills & Tools. Nothing was installed."
+
 // SkillRegistry is the interface that all skill registries must implement.
 // Each registry represents a different source of skills (e.g., clawhub.ai)
 type SkillRegistry interface {
