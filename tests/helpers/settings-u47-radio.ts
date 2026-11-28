@@ -1,6 +1,8 @@
 // U8-A / FR-070: bounded CSS arithmetic, NEVER painted boxes or hit-testing.
 // Glyph=13 is the U9 measured environmental input (tester-report-u9.md §4),
-// not a product minimum. Unknown active CSS yields null, never a made-up size.
+// not a product minimum. In radioBoxU47's matched ::before declaration model,
+// unknown properties/lengths or multiple box rules yield null, never a made-up
+// size. Neutral universal box resets are excluded; this is not a full cascade.
 import { expect } from 'vitest'
 import type { AtRule, Document, Root, Rule } from 'postcss'
 import { pixelsU43 } from './settings-u43-css'
@@ -26,14 +28,28 @@ export function fineBeforeU47(css: Root, target: Element) {
 }
 
 export function radioBoxU47(css: Root, target: Element, glyph = 13) {
+  const supported = ['content', 'position', 'left', 'top', 'width', 'height', 'transform', 'pointer-events']
+  const neutralReset: Record<string, string> = { 'box-sizing': 'border-box', margin: '0', padding: '0', border: '0 solid' }
   const hit: Record<string, string> = {}
+  let boxRules = 0, unreadable = false
   css.walkRules((rule) => {
-    if (!rule.selector.includes('[data-radio-target]') || !/::?before\b/.test(rule.selector)) return
-    const selectors = rule.selector.split(',').map((part) => part.replace(/::?before\b/g, '').trim())
-    if (selectors.some((selector) => target.matches(selector))) {
-      rule.walkDecls((decl) => { hit[decl.prop] = decl.value })
+    const selectors = rule.selector.split(',').filter((part) => /::?before\b/.test(part))
+      .map((part) => part.replace(/::?before\b/g, '').trim() || '*')
+    if (!selectors.some((selector) => target.matches(selector))) return
+    const declarations = rule.nodes.filter((node) => node.type === 'decl')
+    if (declarations.length === 0) return
+    // Only universal, exactly neutral resets are outside the tap-box model.
+    // A targeted reset or an added non-neutral/unknown declaration is NOT exempt.
+    if (selectors.every((selector) => selector === '*')
+      && declarations.every((decl) => neutralReset[decl.prop] === decl.value.trim())) return
+    if (declarations.some((decl) => !supported.includes(decl.prop)) || ++boxRules > 1) {
+      unreadable = true
+      return
     }
+    for (const decl of declarations) hit[decl.prop] = decl.value
   })
+  // Refuse cascade ambiguity instead of letting source order invent a box.
+  if (unreadable) return null
   const length = (value: string | undefined, reference: number) => value === undefined ? null
     : pixelsU43(css, value.replace(/(-?[\d.]+)%/g, (_, n: string) => `${Number(n) * reference / 100}px`))
   const width = length(hit.width, glyph), height = length(hit.height, glyph)
