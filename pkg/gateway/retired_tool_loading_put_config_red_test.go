@@ -24,18 +24,19 @@ package gateway
 // and it replaces the Settings guard "which name[s] Settings → Limits"; C-22
 // also drops `tools_on_demand` from `PUT /performance`, so that endpoint is no
 // longer a place a retired key can be changed — a refusal that sends the
-// caller there is a dead end. C-6: "stored values stay in place, ignored".
+// caller there is a dead end.
 //
-// What the spec leaves open, named rather than guessed:
+// What the spec leaves open, ruled 2026-11-28 (team-lead; the spec-sync note
+// for the PR is team-lead's):
 //   - the HTTP status of the refusal (the neighbouring guards answer 400 for
-//     an effect refusal and 403 for a blocked path) — these tests accept any
-//     4xx and pin the text and the stored state;
-//   - "a change": the by-effect function below reads it as a change to the
-//     stored value, so a body that repeats the stored values is NOT a change
-//     (the whole-config round trip of C-6's "stored values stay in place"
-//     keeps working) and a body that replaces a section and thereby drops a
-//     stored retired value IS one. That is the strict reading; it is a
-//     separate function so it can be dropped without touching the first.
+//     an effect refusal and 403 for a blocked path): any 4xx is accepted, so
+//     these tests accept any 4xx and pin the text and the stored state;
+//   - "a change to them": by name only. The refusal is of a body that names a
+//     retired key. A body that merely drops a stored retired value is not
+//     pinned: the upgrade is expected to remove stored retired values, so
+//     refusing that would contradict it (the by-effect reading, a separate
+//     function in the earlier version of this file, was taken out; it can
+//     return if the Chief Architect's redesign of the upgrade rules otherwise).
 //
 // The refusal must also store nothing: config.json is compared before and
 // after, as the neighbouring blocked-path tests do. updateConfig is called
@@ -45,8 +46,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,24 +55,6 @@ import (
 
 // rtlRefusalText is C-22 row 3's refusal text, character for character.
 const rtlRefusalText = "This setting was replaced by levels in Skills & Tools."
-
-// rtlSeedTools rewrites the fixture's config.json so its "tools" section is
-// toolsJSON — the stored state an upgraded install carries (C-6: stored values
-// stay in place).
-func rtlSeedTools(t *testing.T, api *restAPI, toolsJSON string) {
-	t.Helper()
-	path := filepath.Join(api.homePath, "config.json")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err, "fixture: config.json must be readable")
-	var stored map[string]any
-	require.NoError(t, json.Unmarshal(raw, &stored), "fixture: config.json must be valid JSON")
-	var tools map[string]any
-	require.NoError(t, json.Unmarshal([]byte(toolsJSON), &tools), "fixture: the seeded tools section must be a JSON object")
-	stored["tools"] = tools
-	out, err := json.Marshal(stored)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, out, 0o600))
-}
 
 // rtlPut sends body to PUT /api/v1/config through updateConfig.
 func rtlPut(api *restAPI, body string) *httptest.ResponseRecorder {
@@ -167,64 +148,5 @@ func TestUpdateConfig_RefusesRetiredToolLoadingKeys(t *testing.T) {
 		require.True(t, ok, "the accepted write must have stored tools.read_file")
 		require.Equal(t, float64(4096), readFile["max_read_file_size"],
 			"the accepted write must have landed in config.json")
-	})
-}
-
-// TestUpdateConfig_RetiredToolLoadingKeys_RefusedByEffectNotByName — the
-// refusal follows what the write does to the stored retired value, not which
-// names the body spells (the strict reading of C-21's "a change to them").
-// A whole-section replace that names no retired key but drops a stored one is
-// refused; a round trip that repeats the stored values is not.
-// Traces to: C-21 ("refuse a change to them"), C-6 ("stored values stay in
-// place, ignored"), BDD S-44 (an install that had the switch off).
-func TestUpdateConfig_RetiredToolLoadingKeys_RefusedByEffectNotByName(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		seed       string
-		body       string
-		compressed bool
-	}{
-		{"replacing tools.manifest drops a stored compressed=false",
-			`{"manifest":{"compressed":false}}`, `{"tools":{"manifest":{}}}`, true},
-		{"replacing tools.manifest drops a stored preview_all_lazy=true",
-			`{"manifest":{"preview_all_lazy":true}}`, `{"tools":{"manifest":{}}}`, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			api := newTestRestAPIWithHome(t)
-			rtlSeedTools(t, api, tc.seed)
-			before := readConfigOnDisk(t, api)
-
-			w := rtlPut(api, tc.body)
-			msg := rtlRefusalMessage(t, w, tc.name)
-			require.Contains(t, msg, rtlRefusalText,
-				"C-21/C-22: a write that changes a stored retired value is refused with the spec's text, got: %s", msg)
-			if tc.compressed {
-				require.NotContains(t, msg, "/api/v1/performance",
-					"C-21/C-22: the refusal must not send the caller to an endpoint that no longer takes the key")
-			}
-			require.Equal(t, before, readConfigOnDisk(t, api),
-				"a refused write stores nothing: config.json must be unchanged")
-		})
-	}
-
-	// Control: "a change to them" — repeating the stored values is not one.
-	// A whole-config round trip (read, edit one unrelated setting, write back)
-	// carries every stored retired value unchanged and must keep working
-	// (C-6: stored values stay in place, so every upgraded install has them).
-	t.Run("control: a round trip that repeats the stored retired values is accepted", func(t *testing.T) {
-		api := newTestRestAPIWithHome(t)
-		rtlSeedTools(t, api, `{"manifest":{"compressed":false,"preview_all_lazy":true}}`)
-
-		w := rtlPut(api, `{"tools":{"manifest":{"compressed":false,"preview_all_lazy":true},`+
-			`"read_file":{"max_read_file_size":4096}}}`)
-		require.Equal(t, http.StatusOK, w.Code,
-			"repeating the stored values is not a change to them; got %d: %s", w.Code, w.Body.String())
-
-		tools := rtlToolsOnDisk(t, api)
-		require.Equal(t, map[string]any{"compressed": false, "preview_all_lazy": true}, tools["manifest"],
-			"the stored retired values must be exactly as they were")
-		readFile, ok := tools["read_file"].(map[string]any)
-		require.True(t, ok, "the unrelated setting in the same write must have landed")
-		require.Equal(t, float64(4096), readFile["max_read_file_size"])
 	})
 }

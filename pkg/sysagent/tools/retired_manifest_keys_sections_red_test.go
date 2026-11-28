@@ -24,14 +24,14 @@ package systools_test
 // that changes preview_all_lazy), or at any MCP ancestor of a server's deferred
 // is refused with that text.
 //
-// Spec gap, named rather than guessed: the spec does not say which text wins
-// when another guard (the security block list that refuses tools, tools.mcp and
-// tools.mcp.servers as ancestors of blocked keys) also refuses the same write.
-// These rows read C-22 literally — the text is the refusal of a retired key,
-// whichever way the write arrives — so every row asserts BOTH that the write is
-// refused AND that the refusal carries the C-22 text. The write is also
-// required to store nothing, on disk and in the live config (a refusal that
-// left a half-applied section behind is a change).
+// The spec does not say which text wins when another guard (the security block
+// list that refuses tools, tools.mcp, tools.mcp.servers and a server as
+// ancestors of blocked keys) also refuses the same write. Ruled 2026-11-28
+// (team-lead; the spec-sync note for the PR is team-lead's): that guard's own
+// reason may stand. So every row requires the write to be refused and to store
+// nothing, on disk and in the live config (a refusal that left a half-applied
+// section behind is a change); the C-22 text is required only where the write
+// would otherwise be accepted, the two rows at tools.manifest (wantText).
 
 import (
 	"context"
@@ -51,27 +51,32 @@ func TestSetConfig_RefusesRetiredKeysThroughSectionWrites(t *testing.T) {
 		name  string
 		key   string
 		value any
+		// wantText: the refusal must carry the C-22 text. True where the write
+		// would otherwise be accepted (tools.manifest); false where the
+		// security block list already refuses the write for its own reason,
+		// which may stand (ruled 2026-11-28).
+		wantText bool
 	}{
 		// The parent of the two retired manifest keys, once per key.
 		{"at tools.manifest, value turns preview_all_lazy on", "tools.manifest",
-			map[string]any{"preview_all_lazy": true}},
+			map[string]any{"preview_all_lazy": true}, true},
 		{"at tools.manifest, value turns compressed off", "tools.manifest",
-			map[string]any{"compressed": false}},
+			map[string]any{"compressed": false}, true},
 		// The whole tools section, carrying each retired key.
 		{"at tools, value carries manifest.compressed", "tools",
-			map[string]any{"manifest": map[string]any{"compressed": false}}},
+			map[string]any{"manifest": map[string]any{"compressed": false}}, false},
 		{"at tools, value carries manifest.preview_all_lazy", "tools",
-			map[string]any{"manifest": map[string]any{"preview_all_lazy": true}}},
+			map[string]any{"manifest": map[string]any{"preview_all_lazy": true}}, false},
 		{"at tools, value carries a server's deferred", "tools",
 			map[string]any{"mcp": map[string]any{"servers": map[string]any{
-				"github": map[string]any{"deferred": true}}}}},
+				"github": map[string]any{"deferred": true}}}}, false},
 		// The MCP ancestors of tools.mcp.servers.<id>.deferred, nearest last.
 		{"at tools.mcp, value carries a server's deferred", "tools.mcp",
-			map[string]any{"servers": map[string]any{"github": map[string]any{"deferred": true}}}},
+			map[string]any{"servers": map[string]any{"github": map[string]any{"deferred": true}}}, false},
 		{"at tools.mcp.servers, value carries a server's deferred", "tools.mcp.servers",
-			map[string]any{"github": map[string]any{"deferred": true}}},
+			map[string]any{"github": map[string]any{"deferred": true}}, false},
 		{"at one server, value carries its deferred", "tools.mcp.servers.github",
-			map[string]any{"deferred": true}},
+			map[string]any{"deferred": true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, cfgPath := newTestDepsWithRealSave(t)
@@ -88,8 +93,10 @@ func TestSetConfig_RefusesRetiredKeysThroughSectionWrites(t *testing.T) {
 			require.True(t, res.IsError,
 				"C-22 row 3: a write at %q that carries a retired tool-loading key must be refused, got success: %s",
 				tc.key, res.ForLLM)
-			require.Contains(t, res.ForLLM, wantReason,
-				"C-22 row 3: the refusal of a write at %q carries the spec's text, got: %s", tc.key, res.ForLLM)
+			if tc.wantText {
+				require.Contains(t, res.ForLLM, wantReason,
+					"C-22 row 3: the refusal of a write at %q carries the spec's text, got: %s", tc.key, res.ForLLM)
+			}
 
 			diskAfter, err := os.ReadFile(cfgPath)
 			require.NoError(t, err)
