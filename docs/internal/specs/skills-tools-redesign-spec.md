@@ -1233,6 +1233,7 @@ Oracles come from this spec (Contract Changes C-0 to C-10, Behavioral Contract) 
 - **Given** the External tools tab and service `github` with 5 tools at Ask
 - **When** the person chooses the `github` group's Set all → Allow
 - **Then** all 5 rows show Allow and "Saved" appears
+- **And** a real call by an agent to one of those 5 tools then runs without a card (rider #1063)
 
 #### Scenario: S-04 No tool row ever shows Unset
 
@@ -3419,7 +3420,7 @@ Search: `gh issue list --repo elicify-ai/omnipus --search "skills OR tools in:ti
 | #1570 one unreadable skill fails GET /skills | the Skills tab's list | IN (FR-063) |
 | #1576 copies show source name | Skills tab rows, Make a copy | IN (FR-064) |
 | #817 item 1 agents loosen other agents' permissions | `set_agent_permissions` gains skill changes | IN as a test only, no new rule: skill changes go through the same tool, which asks a person and is never settled by Auto-approve (S-134, FR-054); close #817 item 1 with that test |
-| #1063 MCP tools denied despite allow | External tools tab values | OUT as a rider: observed 2026-09-29 before the tool-registry redesign, never reproduced; this package's own check of an external tool at Allow decides it (close #1063 if it passes; fix it here if it fails) |
+| #1063 MCP tools denied despite allow | External tools tab values | OUT as a rider: observed 2026-09-29 before the tool-registry redesign, never reproduced; scenario S-03 (an external tool set to Allow runs without a card) decides it (close #1063 if it passes; fix it here if it fails) |
 | #708 save after stopping a plan shows a network error | agent tab save | OUT: the cause is in the plan engine's reload drain, outside this package's files |
 | #1031 skill/tool discovery ranking | Hidden skills rely on `Skill` search | OUT: a separate ranking design; FR-073 does not need it |
 | #1380 show project-folder skills | Skills tab list | OUT: a product scope question for the PM and the founder, not a rider |
