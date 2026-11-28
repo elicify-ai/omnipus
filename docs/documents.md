@@ -252,17 +252,19 @@ a copy yourself.
     `config error: <field> entry "<entry>" would give agents write access to the <component> program folder <folder>; agents can never get write access there.`
     An entry Omnipus cannot reduce to a folder is refused too:
     `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
-    In Settings, a new path refused on save does not become a saved entry. If
-    you have not started a newer change to the sandbox path list or the
-    internal-address list while that save was pending, both lists return to
-    their saved values, and the path that save added returns to the input with
-    the reason under it.
+    In Settings, **Sandbox & network**, a new path refused when you press
+    **Save changes** does not become a saved entry. It leaves the list and goes
+    back into the add box of its own list, with the reason under the box, so
+    the next Save does not send it again. Your other unsaved changes stay. A
+    path that was already saved and is refused keeps its row, with the reason
+    under it. If the refused path was your only unsaved change, the Save bar
+    closes; otherwise it counts only the changes that still could not be saved.
 
-    If you have already typed something new in the input, your text stays and
-    the reason appears in the save error below the lists instead. If you have
-    started a newer change to either list, the earlier failure leaves the newer
-    lists and input alone; its reason still appears in the save error below the
-    lists.
+    If you have already typed something new in that add box, or changed the
+    refused row, after pressing Save, nothing is moved: your text and the lists
+    stay as they are, and the reason appears below the sandbox settings
+    instead. A refusal from an earlier Save never moves or removes a newer
+    change.
 - Access that was already there is not refused: settings in force when Omnipus
   started, entries a reload leaves unchanged, and a mount or a remembered chat
   approval made before the folder became a program folder. Omnipus checks for
