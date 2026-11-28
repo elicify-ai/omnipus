@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,6 +155,82 @@ func getTaskRuns(t *testing.T, api *restAPI, id string) *httptest.ResponseRecord
 	r.URL.Path = "/api/v1/tasks/" + id + "/runs"
 	api.HandleTasks(w, r)
 	return w
+}
+
+// getTaskRunsFrom is getTaskRuns with the caller's RemoteAddr set. GET
+// /tasks/{id}/runs sits behind the package-global, per-IP taskReadLimiter
+// (240/min sliding window); httptest.NewRequest gives every request the same
+// 192.0.2.1, so a polling loop on getTaskRuns shares — and can exhaust — the
+// window of every other test in the package. A dedicated address isolates the
+// poll's budget, as TestTaskOccurrences' limiter subtests already do.
+func getTaskRunsFrom(t *testing.T, api *restAPI, id, remoteAddr string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id+"/runs", nil)
+	r.URL.Path = "/api/v1/tasks/" + id + "/runs"
+	r.RemoteAddr = remoteAddr
+	api.HandleTasks(w, r)
+	return w
+}
+
+// The live-executor Run-now subtests poll GET /tasks/{id}/runs until the
+// dispatched run reaches Done. Two limits shape the poll:
+//
+//   - taskRunNowPollBound: a full turn plus the Judge's verdict took 4.7 s of
+//     one subtest under -race on a slow CI runner (run 46109810043); 20 s
+//     leaves headroom for the race detector's slowdown without hiding a run
+//     that never finishes.
+//   - taskRunNowPollInterval: the poll must stay inside taskReadLimiter's
+//     per-IP budget for the whole bound (bound/interval <= 240), otherwise
+//     the limiter answers 429 with a Retry-After near a minute and the poll
+//     can never observe Done. With the old 20 ms interval the budget was gone
+//     after 4.8 s of polling, which is exactly how run 46109810043 failed.
+const (
+	taskRunNowPollBound    = 20 * time.Second
+	taskRunNowPollInterval = 100 * time.Millisecond
+)
+
+// pollTaskRunNowDone polls GET /tasks/{id}/runs from remoteAddr until match
+// accepts a run, and fails the test with the last observed status (so a 429
+// from the limiter is named, never a bare "condition never satisfied").
+func pollTaskRunNowDone(
+	t *testing.T, api *restAPI, taskID, remoteAddr string, match func(gen.TaskRun) bool, msg string,
+) gen.TaskRun {
+	t.Helper()
+	require.LessOrEqual(t, int(taskRunNowPollBound/taskRunNowPollInterval), taskReadLimiter.limit,
+		"instrument: the poll must fit inside taskReadLimiter's per-IP window")
+	var (
+		mu       sync.Mutex
+		matched  gen.TaskRun
+		lastCode int
+		lastBody string
+	)
+	ok := assert.Eventually(t, func() bool {
+		w := getTaskRunsFrom(t, api, taskID, remoteAddr)
+		mu.Lock()
+		defer mu.Unlock()
+		lastCode, lastBody = w.Code, w.Body.String()
+		if w.Code != http.StatusOK {
+			return false
+		}
+		var runs []gen.TaskRun
+		if err := json.Unmarshal(w.Body.Bytes(), &runs); err != nil {
+			return false
+		}
+		for _, run := range runs {
+			if match(run) {
+				matched = run
+				return true
+			}
+		}
+		return false
+	}, taskRunNowPollBound, taskRunNowPollInterval, msg)
+	mu.Lock()
+	defer mu.Unlock()
+	if !ok {
+		t.Fatalf("last GET /tasks/%s/runs answered %d: %s", taskID, lastCode, lastBody)
+	}
+	return matched
 }
 
 // TestTaskRunsEndpoint covers GET /api/v1/tasks/{id}/runs: the happy path
@@ -435,24 +512,9 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 		// gen.TaskRunStatusDone (NOT "done or failed" — see this test's own
 		// doc comment for why accepting Failed here would let the
 		// context-cancellation bug masquerade as a pass).
-		var matched gen.TaskRun
-		require.Eventually(t, func() bool {
-			w := getTaskRuns(t, api, tsk.Id)
-			if w.Code != http.StatusOK {
-				return false
-			}
-			var runs []gen.TaskRun
-			if err := json.Unmarshal(w.Body.Bytes(), &runs); err != nil {
-				return false
-			}
-			for _, run := range runs {
-				if run.OccurrenceMs != nil && *run.OccurrenceMs == occMs && run.Status == gen.TaskRunStatusDone {
-					matched = run
-					return true
-				}
-			}
-			return false
-		}, 10*time.Second, 20*time.Millisecond,
+		matched := pollTaskRunNowDone(t, api, tsk.Id, "203.0.113.221:1111", func(run gen.TaskRun) bool {
+			return run.OccurrenceMs != nil && *run.OccurrenceMs == occMs && run.Status == gen.TaskRunStatusDone
+		},
 			"the occurrence run must round-trip via GET /tasks/{id}/runs and reach a genuine Done — "+
 				"a spurious request-context cancel closes the run as `failed` instead (the task run loop's "+
 				"execution-error branch), which is itself a terminal status and would otherwise pass unnoticed")
@@ -481,24 +543,9 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 		require.NoError(t, resp.Body.Close())
 		require.Equal(t, http.StatusAccepted, resp.StatusCode, "body=%s", string(respBody))
 
-		var matched gen.TaskRun
-		require.Eventually(t, func() bool {
-			w := getTaskRuns(t, api, tsk.Id)
-			if w.Code != http.StatusOK {
-				return false
-			}
-			var runs []gen.TaskRun
-			if err := json.Unmarshal(w.Body.Bytes(), &runs); err != nil {
-				return false
-			}
-			for _, run := range runs {
-				if run.OccurrenceMs == nil && run.Status == gen.TaskRunStatusDone {
-					matched = run
-					return true
-				}
-			}
-			return false
-		}, 10*time.Second, 20*time.Millisecond,
+		matched := pollTaskRunNowDone(t, api, tsk.Id, "203.0.113.222:1111", func(run gen.TaskRun) bool {
+			return run.OccurrenceMs == nil && run.Status == gen.TaskRunStatusDone
+		},
 			"the ad-hoc re-run (empty body) must round-trip via GET /tasks/{id}/runs and reach a genuine "+
 				"Done — see the occurrence-run subtest's own comment for why 'done or failed' cannot "+
 				"distinguish this from the context-cancellation bug")

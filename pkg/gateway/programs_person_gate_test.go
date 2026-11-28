@@ -250,6 +250,18 @@ func pgNewGateway(t *testing.T, recordRoutes bool) (*pgGateFixture, []string) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// A credential save (PUT /programs/{id}/credential) and a recheck start
+	// the entry's account check on a background goroutine
+	// (programs.Service.launchLocked); its finish step writes
+	// <home>/programs/connections.json and the program.check_result audit
+	// row into this fixture's temp home. Cleanups run last-registered-first,
+	// so registering the join HERE, after every t.TempDir above, makes it run
+	// before those temp dirs are removed (and before the store, bus and loop
+	// close). Without it a check still finishing while the test ends races
+	// the TempDir RemoveAll ("directory not empty", CI run 46109810043,
+	// D1_row10 under -race).
+	t.Cleanup(func() { api.programService().Wait() })
 	return f, routes
 }
 
