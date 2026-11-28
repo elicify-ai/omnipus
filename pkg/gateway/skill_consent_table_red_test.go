@@ -15,6 +15,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -281,7 +282,7 @@ func seedNativeD10(t *testing.T, in d10RawInput) (*nativeSkillHarness, string, *
 		// this name") before the first-sight question under test could be asked: an order fault in
 		// the fixture, hidden until the roster fix let the turn run. A real update installs the
 		// shipped folder first and binds the grants after it. Every D10#18 assertion is unchanged.
-		if _, statErr := os.Stat(filepath.Join(h.api.homePath, "skills", key)); os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(filepath.Join(h.api.homePath, "skills", key)); errors.Is(statErr, os.ErrNotExist) {
 			require.NoError(t, skills.ExportEmbeddedPackage(key, filepath.Join(h.api.homePath, "skills", key)))
 		} else {
 			require.NoError(t, statErr)
@@ -1040,7 +1041,7 @@ func nativeD10StagedFiles(t *testing.T, home string) []string {
 	root := filepath.Join(home, "skills")
 	require.DirExists(t, root, "known-positive actual installed shelf before trusting an absent staging container")
 	_, err := os.Stat(filepath.Join(root, ".staging"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

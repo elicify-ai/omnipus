@@ -37,6 +37,7 @@ package tools
 // no card facts exist. Every leg fails on that missing implementation.
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,7 +132,7 @@ func TestInstallSkill_OneCard(t *testing.T) {
 		}))
 		require.True(t, staged, "S-118: the staged copy with SKILL.md exists before the card")
 		_, statErr := os.Stat(filepath.Join(globalSkills, "weather"))
-		require.True(t, os.IsNotExist(statErr), "S-118: staging never publishes (nothing installed yet)")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "S-118: staging never publishes (nothing installed yet)")
 	})
 
 	t.Run("S-118 leg 2: approving installs exactly the staged revision, even when the registry changed", func(t *testing.T) {
@@ -172,7 +173,7 @@ func TestInstallSkill_OneCard(t *testing.T) {
 		require.NoError(t, discardStagedInstallSkill(tool, pin), "native installer must discard the actual prepared pin")
 
 		_, statErr := os.Stat(filepath.Join(globalSkills, "weather"))
-		require.True(t, os.IsNotExist(statErr), "S-118 leg 3: denying installs nothing")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "S-118 leg 3: denying installs nothing")
 		staged := false
 		stagingRoot := filepath.Join(globalSkills, ".staging")
 		require.NoError(t, filepath.Walk(stagingRoot, func(path string, info os.FileInfo, err error) error {

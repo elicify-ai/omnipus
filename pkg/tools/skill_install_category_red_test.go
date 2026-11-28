@@ -34,6 +34,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,7 +113,7 @@ func TestInstallSkillCategoryParity(t *testing.T) {
 				"the refusal names the allowed categories (S-72): %s", res.ForLLM)
 		}
 		_, statErr := os.Stat(filepath.Join(globalSkills, "weather"))
-		require.True(t, os.IsNotExist(statErr),
+		require.True(t, errors.Is(statErr, os.ErrNotExist),
 			"S-72: nothing is installed after the refusal")
 	})
 }

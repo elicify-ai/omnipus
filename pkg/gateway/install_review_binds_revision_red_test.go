@@ -35,6 +35,7 @@ package gateway
 // exist, so S-95 installs today (200) and S-94's legs answer 404.
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -72,7 +73,7 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 		// Nothing on disk afterwards.
 		installed := filepath.Join(api.homePath, "skills", "weather")
 		_, err := os.Stat(installed)
-		require.True(t, os.IsNotExist(err), "S-95: nothing may be installed at %s", installed)
+		require.True(t, errors.Is(err, os.ErrNotExist), "S-95: nothing may be installed at %s", installed)
 	})
 
 	t.Run("S-94: the stage-only review endpoint exists and binds the revision", func(t *testing.T) {
@@ -122,7 +123,7 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 		// The refusal publishes nothing (CHECK finding 14: the stale refusal
 		// now also checks nothing was installed).
 		_, statErr := os.Stat(filepath.Join(api.homePath, "skills", "weather"))
-		require.True(t, os.IsNotExist(statErr),
+		require.True(t, errors.Is(statErr, os.ErrNotExist),
 			"S-94: the stale-review refusal installs nothing at skills/weather")
 	})
 
@@ -157,11 +158,11 @@ func TestInstallReview_StageBindsRevision(t *testing.T) {
 		// The staged copy is discarded; nothing was installed.
 		for _, staged := range stagedBefore {
 			_, err = os.Stat(filepath.Join(stagingRoot, staged.Name()))
-			require.True(t, os.IsNotExist(err),
+			require.True(t, errors.Is(err, os.ErrNotExist),
 				"S-94/C-13: the cancel discards the staged folder %q", staged.Name())
 		}
 		_, err = os.Stat(filepath.Join(api.homePath, "skills", "weather"))
-		require.True(t, os.IsNotExist(err),
+		require.True(t, errors.Is(err, os.ErrNotExist),
 			"S-94: the cancel installs nothing — Nothing was installed.")
 	})
 }
