@@ -190,7 +190,14 @@ func TestOfficeUpload_ImageOnlyPDFOffersPagesAndActionablePath(t *testing.T) {
 	store := mediatest.NewFileMediaStore(t)
 	ref := officeUpload(t, officepreview.PDF(30), "thirty.pdf", store)
 	sink := &offloadSink{workDir: t.TempDir()}
-	got := resolveMediaRefsWithOffload([]providers.Message{{Role: "user", Content: "inspect PDF", Media: []string{ref}}}, store, 20<<20, "office-provider", "office-model", sink, cat, nil, "")
+	// Rewritten 2026-11-28 (one PDF mechanism): resolution keeps the upload
+	// as a PDF candidate; the attempt path renders its page images for a
+	// model that sees images but does not read PDFs, and the per-attempt
+	// presenter sends the PDF itself as text. The assertions are on the
+	// request the provider receives.
+	rt := officeUnifiedTurn(t, cat, "office-provider", nil)
+	resolved := resolveMediaRefsForTurn([]providers.Message{{Role: "user", Content: "inspect PDF", Media: []string{ref}}}, store, 20<<20, "office-provider", "office-model", sink, cat, nil, "", rt.chatPDFs)
+	got := officeUnifiedSend(t, rt, "office-provider", "office-model", resolved)
 	require.Len(t, got, 1)
 	if len(got[0].Media) == 0 {
 		t.Fatal("BLOCKED: uploaded-PDF page-image routing not implemented — required by office-preview spec §4.1, AD-11 / T-44, T-71")

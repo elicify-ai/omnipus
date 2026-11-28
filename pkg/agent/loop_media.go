@@ -211,8 +211,9 @@ func resolveMediaRefsForTurn(
 			// PDF (issue #1968 FR-15): resolution no longer decides native
 			// versus text. A PDF within max_media_size is encoded for the
 			// per-attempt presenter (pdf_present.go), which decides per
-			// provider attempt from the catalogue row; a larger one is shown
-			// as text with L1.
+			// provider attempt from the catalogue's PDF yes/no and the limits
+			// config.json pdf_limits resolves; a larger one is shown as text
+			// with L1.
 			if isPDF(mime, meta.Filename) {
 				dataURL, injection := encodeChatPDF(localPath, mime, meta.Filename, info.Size(), maxSize, pdfs)
 				if dataURL != "" {

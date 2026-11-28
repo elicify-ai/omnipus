@@ -4,8 +4,9 @@ package protocoltypes
 // (issue #1968, spec FR-18). Every transport sends a PDF data URL inline as
 // a document with its exact bytes; a malformed one becomes the visible
 // PDFMalformedNote text instead of being dropped or forwarded. No transport
-// applies a numeric limit: limits are catalogue data the agent applies
-// before the request is built.
+// applies a numeric limit: limits come from config.json pdf_limits
+// (config.Config.ResolvePDFLimits), and the agent applies them before the
+// request is built.
 
 import (
 	"encoding/base64"

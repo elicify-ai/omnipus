@@ -40,9 +40,10 @@ const (
 	pdfFallbackName = "attachment.pdf"
 )
 
-// pdfLimitWording names each catalogue document limit in plain language for
+// pdfLimitWording names each configured PDF limit in plain language for
 // L2 (spec §5.6, S10: "100 pages per file"), never as its data key. The
-// value is the limit itself, from catalogue data.
+// value is the limit itself, from config.json pdf_limits
+// (config.Config.ResolvePDFLimits).
 var pdfLimitWording = map[string]string{
 	"max_file_bytes":            "file size limit of %d bytes",
 	"max_total_file_bytes":      "total file size limit of %d bytes per request",
@@ -54,7 +55,8 @@ var pdfLimitWording = map[string]string{
 }
 
 // pdfNoteLimit is L2: a PDF demoted to text because admitting it would break
-// the named document limit of the attempt's catalogue row.
+// the named limit config.json pdf_limits resolves for the attempt's
+// provider/model.
 func pdfNoteLimit(owner, limit string, value int64) string {
 	wording, ok := pdfLimitWording[limit]
 	if !ok {

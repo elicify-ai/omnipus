@@ -1,9 +1,9 @@
 package providers
 
 // pdf_wire.go — optional transport capabilities for native PDFs (issue
-// #1968, spec FR-11 and FR-12). The agent consults them only when the
-// catalogue states the matching limit; no transport enforces a numeric
-// limit itself.
+// #1968, spec FR-11 and FR-12). The agent consults them only when
+// config.json pdf_limits (config.Config.ResolvePDFLimits) states the
+// matching limit; no transport enforces a numeric limit itself.
 
 import (
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
