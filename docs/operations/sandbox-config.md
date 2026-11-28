@@ -4,7 +4,7 @@ The Omnipus process sandbox is configured from the SPA at **Settings → Sandbox
 
 Note: prior to [ADR-035](../internal/architecture/ADR-035-remove-per-agent-sandbox-profile.md), this section also documented a `default_profile` field (a global fallback for a per-agent `sandbox_profile` setting). Both the per-agent field and its global fallback were removed — new agents no longer have a configurable sandbox profile, so there is nothing left for a default to apply to.
 
-The gateway applies sandbox config exactly once, at boot. There is no hot-reload — changes to `sandbox.mode`, `sandbox.allowed_paths`, `sandbox.ssrf.*`, or any other field in this section take effect only after a gateway restart. This is documented invariant FR-J-015 (`pkg/gateway/sandbox_apply.go:32`); the SPA surfaces a "Restart required" banner whenever the saved-on-disk value diverges from the running process (`src/components/settings/SandboxSection.tsx:1015-1034`).
+Settings compares each draft with the saved sandbox configuration. A successful sandbox-settings write saves the partial update and attempts to refresh configuration in the running process; this does not mean every operating-system protection was rebuilt. Follow the **Needs restart** badges, the Save outcome and the saved-changes restart banner for the settings you changed. **Sandbox mode**, **Filesystem model**, **Shell workspace limit** and **Allowed folders** carry restart badges; **Internal network addresses** does not. You can use the in-app restart offer when a gateway restart is needed.
 
 ## Config file shape
 
@@ -163,6 +163,4 @@ Graceful degradation is **not** a failure. Omnipus boots to completion with appl
 
 ## Restart-required UX
 
-The SPA Sandbox section (`src/components/settings/SandboxSection.tsx`) compares each editable field to the running value reported by `/api/v1/security/sandbox-status` and renders a "Restart required" pill next to any field that diverges. The mode toggle, allowed-paths editor, and SSRF preset all participate.
-
-Saving writes to disk via the existing config-update endpoint but does **not** trigger any in-process reload — the operator must run `systemctl restart omnipus` (or the equivalent for their deployment) for the new policy to take effect.
+See the start of this page: Settings shows **Needs restart** badges on **Sandbox mode**, **Filesystem model**, **Shell workspace limit** and **Allowed folders**, and offers a restart after saving them. **Internal network addresses** carries no restart badge.

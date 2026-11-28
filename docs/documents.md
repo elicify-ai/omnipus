@@ -252,19 +252,33 @@ a copy yourself.
     `config error: <field> entry "<entry>" would give agents write access to the <component> program folder <folder>; agents can never get write access there.`
     An entry Omnipus cannot reduce to a folder is refused too:
     `config error: <field> entry "<entry>": Omnipus cannot tell which folders it covers, so it may include a document preview program folder; write it as ^/<folder>(?:/\|$).`
-    In Settings, **Sandbox & network**, a new path refused when you press
-    **Save changes** does not become a saved entry. It leaves the list and goes
-    back into the add box of its own list, with the reason under the box, so
-    the next Save does not send it again. Your other unsaved changes stay. A
-    path that was already saved and is refused keeps its row, with the reason
-    under it. If the refused path was your only unsaved change, the Save bar
-    closes; otherwise it counts only the changes that still could not be saved.
+    In Settings, **Sandbox & network**, a refused Save does not store the new
+    path. When the refusal identifies one new entry from that Save, the entry
+    leaves the list and returns to its own list's add box, with the reason
+    under the box. For **Internal network addresses**, **Advanced (custom
+    list)** opens to show that box. Text in an add box is not sent by the next
+    **Save changes** unless you press **Add** again.
 
-    If you have already typed something new in that add box, or changed the
-    refused row, after pressing Save, nothing is moved: your text and the lists
-    stay as they are, and the reason appears below the sandbox settings
-    instead. A refusal from an earlier Save never moves or removes a newer
-    change.
+    Other changes sent with the refused sandbox request stay unsaved. The
+    network proxy has a separate write on the same Save and can still save
+    successfully.
+
+    An entry returned to its add box is no longer part of the list. If the
+    list is back to its saved value, it no longer counts as an unsaved or
+    failed change. If no other draft remains, the Save bar closes; the reason
+    under the input remains. A list that still has other unsaved edits counts
+    as one changed setting.
+
+    An already-saved refused path keeps its row. The reason appears under that
+    row when the refusal identifies the row; otherwise it appears below the
+    sandbox settings.
+
+    For a new entry, if you typed something new in its add box or changed the
+    submitted row while the Save was running, nothing is moved: your text and
+    the lists stay as they are, and the reason appears below the sandbox
+    settings. The same fallback applies when the refusal cannot be matched to
+    one new entry. An earlier refusal does not replace newer text or remove a
+    newer, different row.
 - Access that was already there is not refused: settings in force when Omnipus
   started, entries a reload leaves unchanged, and a mount or a remembered chat
   approval made before the folder became a program folder. Omnipus checks for
