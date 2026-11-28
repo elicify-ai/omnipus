@@ -19,9 +19,10 @@ func TestShowToUser_PolicySeed(t *testing.T) {
 	// catalog this branch merged is 121 — origin/release/v0.1.1 at 1fdbc5599
 	// added set_channel_outbound; counted 2026-11-08 the catalog_count_test
 	// way, the seed.go literal and the defaults.go policy ceiling agree at
-	// 121, entry for entry — so the pin is 122.
-	if got := len(coreagent.AllStaticToolNames()); got != 122 {
-		t.Errorf("static catalog size = %d, want 122 after show_to_user (release catalog 121 + this tool; BS-6.14 test 12)", got)
+	// 121, entry for entry. The office preview work adds preview_document on
+	// top — so the pin is 123.
+	if got := len(coreagent.AllStaticToolNames()); got != 123 {
+		t.Errorf("static catalog size = %d, want 123 (release catalog 121 + preview_document + show_to_user; BS-6.14 test 12)", got)
 	}
 	inCatalog := false
 	for _, name := range coreagent.AllStaticToolNames() {

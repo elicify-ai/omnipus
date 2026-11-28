@@ -684,6 +684,9 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			return nil
 		}); err != nil {
 			slog.Error("rest: save config for channel routing (bound)", "channel_id", scr.channelID, "error", err)
+			if writeRequestRefusal(scr.w, err) {
+				return true
+			}
 			jsonServerFailure(scr.w, http.StatusInternalServerError, "could not save config", err)
 			return true
 		}
@@ -781,6 +784,9 @@ func (a *restAPI) createChannelInstance(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		slog.Error("rest: create channel instance: save config", "instance", instanceKey, "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
@@ -899,6 +905,9 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		var refreshErr *configRefreshError
 		if !errors.As(err, &refreshErr) {
 			slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
+			if writeRequestRefusal(w, err) {
+				return
+			}
 			jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 			return // pre-persistence failure: no accepted deletion to finalize
 		}
@@ -1056,6 +1065,9 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 			// R4-A06). Nothing starts from this request.
 			jsonServerFailure(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s setting saved, but the running configuration could not be refreshed", channelID), err)
+			return enableFailed
+		}
+		if writeRequestRefusal(w, err) {
 			return enableFailed
 		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
@@ -1481,6 +1493,11 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 			// The file now selects this request's references (FR-050 (i));
 			// no RequestRestart, no reload (T-6b).
 			a.markCredentialsPending(channelID, markAfterWrite)
+		}
+		// §3.4 D9 route 7: a refusal with no credential stored is a plain 400;
+		// with one stored, the coded 500 below carries the refusal text.
+		if code == gen.ChannelConfigureErrorCodeCouldNotSave && writeRequestRefusal(w, err) {
+			return
 		}
 		writeConfigureFailure(w, channelID, code, "", err)
 		return

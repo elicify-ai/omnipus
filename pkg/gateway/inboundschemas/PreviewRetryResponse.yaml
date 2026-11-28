@@ -1,0 +1,16 @@
+title: PreviewRetryResponse
+description: >
+  202 body of POST /sessions/{session_id}/previews/{tool_call_id}/retry
+  (office-preview spec §5.2). The retry was admitted and started; its result
+  arrives asynchronously as a new MediaFrame (presentation "page_thumbnails")
+  carrying the same tool_call_id, never in this response.
+type: object
+required:
+  - status
+additionalProperties: false
+properties:
+  status:
+    type: string
+    enum:
+      - started
+    description: Always "started" for an admitted retry.

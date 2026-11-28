@@ -16,7 +16,23 @@ The `cross-platform.yml` workflow is a required PR gate and runs on every push t
 | Linux | arm64 (`aarch64`) | `ubuntu-24.04-arm` | Same as amd64. The `seccomp_linux_arm64.go` BPF emitter is exercised here. |
 | macOS | arm64 (Apple Silicon) | `macos-latest` | Seatbelt confines every process Omnipus starts; the gateway process itself is not confined. Application-level checks apply to the gateway, and to children too only when `sandbox-exec` is missing or disabled. |
 
-Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus start` that hits `/health`. Signed release binaries are produced for these same three targets by `.goreleaser.yaml:52-64`.
+Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus start` that hits `/health`. Release archives are produced by `.goreleaser.yaml` for these three targets and for macOS Intel (see below).
+
+## Release downloads and document-preview components
+
+Each release publishes:
+
+| Download | Platforms |
+|---|---|
+| `omnipus_<Os>_<arch>.tar.gz` — the binary, plus the bundled Chrome-for-Testing in `chromium/` | `Linux_x86_64`, `Linux_arm64` (no bundled Chrome; the browser tools fall back to their managed Chrome download), `Darwin_arm64`, `Darwin_x86_64` |
+| `omnipus_x86_64.deb` / `.rpm`, `omnipus_aarch64.deb` / `.rpm` — binary, bundled Chrome (x86_64 only) and both document-preview components | Linux x86_64 and ARM64 |
+| `office_<os>_<arch>.tar.gz` — official LibreOffice 26.8 build with its packaged manifest | `linux_amd64`, `linux_arm64`, `darwin_arm64`, `darwin_amd64` |
+| `pdfium_<os>_<arch>.tar.gz` — the PDF page renderer | the same four |
+| `pdfium_windows_amd64.zip` — the PDF page renderer for Windows, to unpack and register with `omnipus pdf-renderer register` | Windows x86_64 |
+| Docker image `ghcr.io/elicify-ai/omnipus` — binary and both document-preview components | linux/amd64, linux/arm64 |
+| `checksums.txt` — a SHA256 entry for every file above | — |
+
+The one-line installer fetches the binary archive and, unless told otherwise with `--without-office` or `--without-pdf-renderer`, both components for the machine it runs on, and checks each against `checksums.txt` before installing. Windows has no LibreOffice download: on Windows you install LibreOffice 26.8 yourself and register it with `omnipus office register`. See [getting-started](../getting-started.md) and [documents](../documents.md).
 
 ## Test-only candidate binaries
 
@@ -69,7 +85,7 @@ Each of these targets is deferred from v0.1; the linked tracking issue (where on
 
 ### macOS amd64 (Intel)
 
-The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build -tags goolm,stdjson ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml`'s `builds.ignore` (the `goos: darwin` / `goarch: amd64` entry). Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
+Intel Macs are now a release and installer target: `.goreleaser.yaml` builds `omnipus_Darwin_x86_64.tar.gz`, the installer accepts Intel Macs, and the release carries `office_darwin_amd64.tar.gz` and `pdfium_darwin_amd64.tar.gz`. The release pipeline builds and starts both components on a `macos-15-intel` runner before publishing them. What is still missing is the `cross-platform.yml` leg: the Go tests and the smoke boot do not run on an Intel Mac in CI. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
 
 ### Windows amd64
 

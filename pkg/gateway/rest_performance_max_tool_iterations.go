@@ -493,6 +493,9 @@ func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAg
 			Details: &details,
 		}}
 	}
+	if refused := performanceRefusal(cause); refused != nil {
+		return refused // every lowered agent is restored
+	}
 	if isLoweringConflict(cause) {
 		return freshDriftError(store, defaults, upd.value)
 	}
@@ -549,15 +552,19 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 	}
 	written, writeErr := a.writeConfigJSONLocked(mutate)
 	if writeErr != nil {
-		// writeConfigJSONLocked only fails reading, parsing, serializing or
+		// writeConfigJSONLocked fails reading, parsing, serializing or
 		// writing config.json (a filesystem or JSON error — no refresh or
-		// credential text can reach it), so the real cause is logged here
-		// for the operator while the response keeps the fixed cause class.
+		// credential text can reach it), or refuses the candidate (office
+		// preview spec §3.2). The real cause is logged here for the operator;
+		// the response keeps the fixed cause class, or the refusal's own text.
 		cause := configWriteFailure(writeErr)
 		logsafeError("rest: PUT /performance: could not write config.json",
 			"cause", cause.Error(), "error", writeErr)
 		if len(done) > 0 {
 			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", cause)
+		}
+		if refused := performanceRefusal(cause); refused != nil {
+			return out, refused
 		}
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
 			body: gen.ErrorResponse{Error: "could not update performance settings: " + cause.Error()}}
@@ -598,7 +605,10 @@ var errPerformanceRefreshFailed = errors.New("config.json written but the in-mem
 func configWriteFailure(err error) error {
 	var pathErr *fs.PathError
 	var syntaxErr *json.SyntaxError
+	var refusal *requestRefusalError
 	switch {
+	case errors.As(err, &refusal):
+		return err // §3.4 D9b row 32: the refusal passes through unchanged
 	case errors.Is(err, fs.ErrPermission):
 		return errors.New("the settings file is not accessible")
 	case errors.Is(err, fs.ErrNotExist):
@@ -610,6 +620,17 @@ func configWriteFailure(err error) error {
 	default:
 		return errors.New("the settings could not be written")
 	}
+}
+
+// performanceRefusal is §3.4 D9b row 32's answer to a refused config write:
+// 400 with the refusal text, once nothing is lowered or every lowered agent
+// was restored. nil when cause is not a refusal.
+func performanceRefusal(cause error) *performanceWriteError {
+	var refusal *requestRefusalError
+	if !errors.As(cause, &refusal) {
+		return nil
+	}
+	return &performanceWriteError{status: http.StatusBadRequest, body: gen.ErrorResponse{Error: refusal.Error()}}
 }
 
 // commitPerformanceOutcome records a committed write: the lowered agents in

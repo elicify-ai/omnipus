@@ -45,6 +45,8 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/preview"
+	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -249,6 +251,10 @@ type applySandboxState struct {
 	allowedExecPaths       []string
 	policy                 sandbox.SandboxPolicy
 	registerTurnPolicyBase func(enforcing bool)
+	// startupGrantRecord is what the confined Linux startup rules granted to
+	// the Office preview components (office-preview spec §3.8 BR-2.5); nil
+	// under the open model and off Linux.
+	startupGrantRecord *component.StartupGrantRecord
 }
 
 // applySandbox is the Sprint-J boot step. It MUST run after credential
@@ -291,6 +297,24 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	}
 
 	return as.applyLinuxSandbox()
+}
+
+// componentStartupGrants lists the Office preview component folders and the
+// omnipus program file the confined Linux startup rules grant read+execute on
+// (office-preview spec §3.8 BR-2.1, BR-2.2), computed once, before the rules
+// are applied. ok is false under the open model and off Linux, where the
+// rules take no grants. A resolver that cannot be built leaves the list empty
+// and says so: Office and PDF previews then fail under the confined sandbox.
+func (as *applySandboxState) componentStartupGrants() (grants []string, notes []string, ok bool) {
+	if as.filesystemModel == sandbox.FilesystemModelOpen || runtime.GOOS != "linux" {
+		return nil, nil, false
+	}
+	resolver, err := component.NewResolver(as.opts.HomePath)
+	if err != nil {
+		return nil, []string{"component folders not granted: the omnipus program file cannot be located: " + err.Error()}, true
+	}
+	grants, notes = component.ConfinementStartupGrants(resolver)
+	return grants, notes, true
 }
 
 // resolveFilesystemModel normalizes output streams and validates the configured filesystem model.
@@ -484,8 +508,16 @@ func (as *applySandboxState) buildPolicy() {
 	// deliberately NOT folded into configTouched: treating it as "the operator
 	// configured something" would make configTouched permanently true and
 	// silently disable the Docker permissive auto-downgrade.
-	as.policy = sandbox.DefaultPolicyForModel(
-		as.filesystemModel, as.opts.HomePath, as.allowedPaths, as.allowedExecPaths, as.warnFn, as.bindPorts)
+	grants, grantNotes, componentGrants := as.componentStartupGrants()
+	as.policy = sandbox.DefaultBootPolicyForModel(
+		as.filesystemModel, as.opts.HomePath, as.allowedPaths, as.allowedExecPaths, as.warnFn, as.bindPorts, grants)
+	if componentGrants {
+		rec, recordNotes := preview.RecordStartupGrants(as.policy, grants)
+		as.startupGrantRecord = rec
+		slog.Info("sandbox.component_grants",
+			"granted", rec.Granted(),
+			"skipped", append(grantNotes, recordNotes...))
+	}
 
 	// Spec FR-4.4 / FR-5.3: say once, at boot, how the secret set is actually
 	// protected here — the mechanism differs per platform and the difference is
@@ -788,6 +820,13 @@ func (as *applySandboxState) applyLinuxSandbox() (*SandboxApplyResult, error) {
 	// saved mode is permissive, so registering a base under permissive would
 	// promise confinement the backend has explicitly declined to deliver.
 	as.registerTurnPolicyBase(as.mode == sandbox.ModeEnforce)
+	// BR-2.5: from here on a component folder these rules do not cover is
+	// refused with the "stop and start Omnipus" text instead of failing
+	// with a permission error. Only while enforcing: permissive mode
+	// blocks nothing.
+	if as.mode == sandbox.ModeEnforce {
+		component.SetStartupGrants(as.startupGrantRecord)
+	}
 
 	// Step 8 — Populate result state for /health and /api/.../sandbox-status.
 	// abiVersion is already resolved above for the net-rule gating.

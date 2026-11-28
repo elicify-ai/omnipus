@@ -92,6 +92,7 @@ func checkConfig(cfg *config.Config) []warning {
 	warnings = append(warnings, checkBuildIntegrity()...)
 	warnings = append(warnings, checkBrowserVideoCapability(cfg)...)
 	warnings = append(warnings, checkBrowserPackageChrome()...)
+	warnings = append(warnings, checkDocumentPreview(cfg)...)
 	return warnings
 }
 

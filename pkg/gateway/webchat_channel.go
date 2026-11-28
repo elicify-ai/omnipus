@@ -229,8 +229,9 @@ func mediaRefURL(ref string) string {
 // nobody is watching: the caller (the agent loop's tool-media delivery)
 // treats an error as fatal and would otherwise discard toolResult.Media, so
 // the attachment would be lost from the transcript too.
-func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
-	if len(msg.Parts) == 0 {
+func (c *webchatChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	group := msg.Presentation == previewPresentationPageThumbnails
+	if len(msg.Parts) == 0 && !group {
 		slog.Warn("webchat: SendMedia called with empty parts — skipping", "chat_id", msg.ChatID)
 		return nil
 	}
@@ -261,8 +262,15 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 			caption := p.Caption
 			part.Caption = &caption
 		}
+		if p.PageNumber > 0 {
+			page := p.PageNumber
+			part.PageNumber = &page
+		}
 		part.LibraryRef = libraryRefForMedia(mediaStore, c.wsHandler.home, p.Ref, msg.WorkspaceID)
 		parts = append(parts, part)
+	}
+	if group {
+		return c.sendPreviewGroup(msg, parts, isPreviewRetryPublish(ctx))
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf(
@@ -293,5 +301,50 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), hubFrameMeta{
 		kind: hubKindItem, key: "media:" + parts[0].Url + ":" + strconv.Itoa(len(parts)),
 	}, frame)
+	return nil
+}
+
+// sendPreviewGroup publishes one preview_document thumbnail group
+// (office-preview spec §5.2), the same projection replay builds
+// (replay.go::buildMediaFrame): empty parts only for an unavailable
+// preview.
+//
+// retry marks a Retry result (rest_preview_retry.go), published after the
+// chat record was settled, so the group's projected frame must hold what is
+// saved. Only a successful Retry is saved: its frame replaces the earlier
+// one (SFH-01: an obsolete unavailable group outlived a saved Retry, and a
+// call outside the snapshot's history page got no group at all). An
+// unavailable Retry result (rendering failed, or the pages could not be
+// saved) leaves the saved record unchanged, so the earlier frame stays and
+// this one goes to the journal only, for an incremental catch-up (B07: an
+// unsaved Retry's pages must not come back in a snapshot). A group whose
+// call is on the snapshot's history page comes from that page and its
+// projected copy is skipped (ws_hub_projection.go::projectionFrames, B06).
+func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart, retry bool) error {
+	if len(parts) == 0 && (msg.Preview == nil || msg.Preview.Outcome != previewOutcomeUnavailable) {
+		return fmt.Errorf("webchat: preview group for tool call %s has no stored thumbnails and is not marked unavailable", msg.ToolCallID)
+	}
+	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
+	id := msg.ToolCallID
+	presentation := previewPresentationPageThumbnails
+	frame := generated.MediaFrame{
+		Type:         string(generated.WsFrameTypeMedia),
+		SessionId:    sid,
+		Parts:        parts,
+		ToolCallId:   &id,
+		Presentation: &presentation,
+		Preview:      msg.Preview,
+	}
+	if sid == "" {
+		if origin != nil {
+			sendConnGenFrame(origin, string(generated.WsFrameTypeMedia), frame)
+		}
+		return nil
+	}
+	meta := hubFrameMeta{kind: hubKindItem, key: previewItemKey(id)}
+	if retry && (msg.Preview == nil || msg.Preview.Outcome == previewOutcomeUnavailable) {
+		meta = hubFrameMeta{kind: hubKindOther}
+	}
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), meta, frame)
 	return nil
 }

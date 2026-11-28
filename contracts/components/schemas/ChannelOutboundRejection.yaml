@@ -30,7 +30,10 @@ properties:
   code:
     type: string
     description: >
-      Machine-readable reason. 400: invalid_targets, too_many_targets. 409:
+      Machine-readable reason. 400: invalid_targets, too_many_targets,
+      program_access_refused (config.json holds a write entry that would give
+      agents write access to a document preview program folder; office
+      preview spec §3.4 D9b row 34). 409:
       stale_revision, connect_first, saved_live_mismatch. 422:
       platform_cannot_start, platform_cannot_message_people. 502:
       lookup_unavailable.
@@ -43,6 +46,7 @@ properties:
       - connect_first
       - lookup_unavailable
       - saved_live_mismatch
+      - program_access_refused
     example: invalid_targets
   target_errors:
     type: array

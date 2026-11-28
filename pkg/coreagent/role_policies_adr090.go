@@ -36,7 +36,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	// Main/Worker core below then adds the positive defaults from the
 	// 2026-10-22 table, including received-attachment downloads at Allow.
 	// Sending mail remains Ask. Hidden system roles use a separate seed.
-	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "run_retrospective", "recall_conversation", "send_message", "answer_request", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
+	commonWork := []string{"read_file", "preview_document", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "run_retrospective", "recall_conversation", "send_message", "answer_request", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 	switch id {
 	case IDMia:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "write_file", "edit_file", "append_file", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "set_todos", "find_skills")...)

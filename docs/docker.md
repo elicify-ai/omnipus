@@ -26,14 +26,14 @@ Two `Dockerfile`s ship in `docker/`. They are not two flavours of the same build
 
 | Image | Dockerfile | How it is built | Browser tools | Python / Node MCP |
 |---|---|---|---|---|
-| **Published release** — `ghcr.io/elicify-ai/omnipus:latest` | [`docker/Dockerfile.goreleaser`](../docker/Dockerfile.goreleaser) | goreleaser hands it a prebuilt per-architecture binary; the Dockerfile only copies it onto `alpine:3.21` with `ca-certificates` and `tzdata` | No | No |
+| **Published release** — `ghcr.io/elicify-ai/omnipus:latest` | [`docker/Dockerfile.goreleaser`](../docker/Dockerfile.goreleaser) | goreleaser hands it a prebuilt per-architecture binary; the Dockerfile copies it onto `debian:trixie-slim` together with LibreOffice and the PDF renderer for document previews, the libraries LibreOffice needs, and a basic font set | No | No |
 | **Heavy** — build it yourself | [`docker/Dockerfile.heavy`](../docker/Dockerfile.heavy) | Builds the SPA and the Go binary from source, then layers a full browser and scripting runtime | Yes — bundled Chrome-for-Testing | Yes — Node 24, Python 3, `uv`/`uvx`, `git`, `jq` |
 
 ### One image is the intent, not yet the reality
 
 ADR-067 decided the project should ship **one** container image, the heavy one. That decision is recorded, and part of it has landed — but the consolidation is not finished, and this guide describes what exists today rather than what is planned:
 
-- The image you **pull** is still the small Alpine one. Its contents did not change in the consolidation work.
+- The image you **pull** is still the release image, not the heavy one. It moved from Alpine to Debian slim so it can carry LibreOffice and the PDF renderer for document previews (see "Document previews in the published image" below); it still has no browser and no Python or Node.
 - `Dockerfile.heavy` is still **build-it-yourself**. Nothing publishes it.
 - Merging the two is genuine redesign work, not a path swap: goreleaser's container model copies an already-built binary, while the heavy image compiles its own. A single Dockerfile would have to accept goreleaser's prebuilt binary *and* carry the heavy runtime. That is tracked as follow-up work. See ADR-067 §10.1.
 
@@ -63,11 +63,22 @@ The former `-full` variants of these targets were deleted along with the Dockerf
 
 The published image (`ghcr.io/elicify-ai/omnipus:latest`) contains **no browser**. Without one, the entire `browser.*` tool family (`browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action`) will not work, nor will `web_serve` dev-server previews, nor any skill or MCP server that shells out to a system Chrome.
 
-It also does not carry the bundled Chrome-for-Testing payload that the `.tar.gz` archives and the `.deb` / `.rpm` packages ship — the Dockerfile copies the `omnipus` binary and nothing else.
-
-The gateway falls through to its managed-Chromium download path on first call, and on this image that download does not help: the downloaded binary is glibc-linked and Alpine is musl, so launching it fails with a misleading `no such file or directory` (the missing piece is the ELF interpreter `/lib64/ld-linux-x86-64.so.2`, not the binary). The agent degrades to `web_fetch` and surfaces the failure inline in chat.
+It also does not carry the bundled Chrome-for-Testing payload that the `.tar.gz` archives and the `.deb` / `.rpm` packages ship, nor the full set of system libraries Chrome needs: the image installs only the libraries LibreOffice needs. The gateway falls through to its managed-Chromium download path on first call; do not rely on that download working inside this image. When a browser cannot start, the agent degrades to `web_fetch` and surfaces the failure inline in chat.
 
 **If you need browser tools, build the heavy image.**
+
+### Document previews in the published image
+
+The published image carries both document-preview components, packaged and ready, so agents can show page images of Word, Excel, PowerPoint and PDF files without any setup:
+
+| Component | Where it is in the image |
+|---|---|
+| LibreOffice 26.8 (Office files to PDF) | `/usr/local/share/omnipus/office` |
+| PDF renderer (pages to images) | `/usr/local/share/omnipus/pdfium` |
+
+They sit next to the binary in the place Omnipus looks for packaged components, so you do not run `omnipus office register` or `omnipus pdf-renderer register` in the container. A LibreOffice mounted into the container anywhere other than inside `/usr/local/share/omnipus` cannot be registered. The image also ships `fontconfig` and the Liberation fonts, so documents that use common fonts render with metric-compatible ones. The LibreOffice files make the image considerably larger than the old Alpine one.
+
+There is no image without the components. If you want a container without LibreOffice, build your own from the release binary. What previews need and how they behave are in [documents.md](documents.md).
 
 ### Building the heavy image
 

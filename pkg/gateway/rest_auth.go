@@ -853,6 +853,9 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("auth: login failed", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "login failed")
 		return
 	}
@@ -1032,6 +1035,9 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		return fmt.Errorf("user not found in config")
 	}); err != nil {
 		slog.Error("auth: logout failed", "error", err, "username", user.Username)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "logout failed")
 		return
 	}
@@ -1125,6 +1131,9 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("auth: change-password failed", "error", err, "username", user.Username)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "password change failed")
 		return
 	}

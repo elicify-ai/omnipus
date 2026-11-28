@@ -506,6 +506,9 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 			return true
 		}
 		logsafeError("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+		if writeRequestRefusal(sm.w, err) {
+			return true
+		}
 		jsonServerFailure(sm.w, http.StatusInternalServerError, "could not save config", err)
 		return true
 	}
@@ -656,6 +659,9 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			return
 		}
 		logsafeError("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
