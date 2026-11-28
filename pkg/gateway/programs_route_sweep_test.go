@@ -292,7 +292,14 @@ func pgServeProbe(h http.Handler, prepared *http.Request, deadline time.Duration
 	}
 }
 
-// pgSweepServe fires one sweep probe with a hard 5-second deadline. A probe
+// pgSweepProbeBound is how long one sweep probe may take before S-113 calls it
+// hung. 5 s passed on a fast runner but a race-instrumented full-package run on
+// a loaded CI runner (about 4-5 s per probe overall) missed it once on
+// POST /auth/logout, a handler that did not hang. A genuinely hung handler
+// still fails, and is still joined before any store read.
+const pgSweepProbeBound = 20 * time.Second
+
+// pgSweepServe fires one sweep probe with a hard deadline (pgSweepProbeBound). A probe
 // whose handler does not answer FAILS the sweep — a hanging credential-route
 // handler is itself a defect, not a latency note — and the handler goroutine
 // is joined (request work cancelled first) before returning, so the final
@@ -314,9 +321,9 @@ func pgSweepServeOn(t *testing.T, f *pgGateFixture, h http.Handler, method, path
 		req.Header.Set(reAuthHeader, reauth)
 	}
 	pgAttach(f, req, bearer, false, false)
-	w, out := pgServeProbe(h, req, 5*time.Second)
+	w, out := pgServeProbe(h, req, pgSweepProbeBound)
 	if out.timedOut {
-		t.Errorf("sweep probe %s %s did not answer within 5s (S-113) — the sweep fails and joins the handler before any store read", method, path)
+		t.Errorf("sweep probe %s %s did not answer within %s (S-113) — the sweep fails and joins the handler before any store read", method, path, pgSweepProbeBound)
 	}
 	if !out.handlerDone {
 		t.Fatalf("sweep probe %s %s handler still running 15s after the probe — the store verdict cannot be taken", method, path)
