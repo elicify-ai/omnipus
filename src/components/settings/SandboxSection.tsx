@@ -420,6 +420,9 @@ export function SandboxSection(): React.ReactElement {
     ws?: { changed: boolean; value: boolean | undefined }
     paths?: { changed: boolean; value: string[] }
     ssrf?: { changed: boolean; value: string[] }
+    // The two add inputs, read by a Save's late refusal (FR-015a).
+    pathInput?: string
+    ssrfInput?: string
   }>({})
   useEffect(() => {
     if (!configData) return
@@ -464,6 +467,8 @@ export function SandboxSection(): React.ReactElement {
       ws: { changed: wsChanged, value: currentWorkspaceLimit },
       paths: { changed: pathsChanged, value: pathList },
       ssrf: { changed: ssrfChanged, value: ssrfList },
+      pathInput: newPath,
+      ssrfInput: newSsrfEntry,
     }
   })
 
@@ -591,34 +596,63 @@ export function SandboxSection(): React.ReactElement {
         return
       }
       if (outcome.kind !== 'not-saved') return
-      // A refusal naming one row is shown under that row; any other refusal
-      // under the whole configuration. The refusal belongs to what this Save
-      // sent (4a7d2f269, SFH-03): when the row was edited after Save was
-      // pressed, the newer draft is left alone and the refusal is shown
-      // under the whole configuration instead of under a row it did not name.
+      // FR-015a (release B09): a refusal naming one row belongs to what this
+      // Save sent. A refused path that was a new draft in this Save leaves
+      // the list and goes back into its add input with the server's message
+      // under it, so a later Save does not send it again; every other draft
+      // stays. A refused path that was already saved keeps its row and the
+      // message. When the add input holds newer text or the row no longer
+      // holds what was sent (4a7d2f269, SFH-03), nothing moves: the message
+      // shows under the whole sandbox configuration.
       const sent = sentRef.current
+      const savedBefore = sentBeforeRef.current
       const drafts = draftsRef.current
-      const sameRow = (sentList: string[] | undefined, current: string[] | undefined, idx: number) =>
-        sentList !== undefined && idx < sentList.length && current?.[idx] === sentList[idx]
+      const refusedRow = (sentList: string[] | undefined, current: string[] | undefined, idx: number) =>
+        sentList !== undefined && idx < sentList.length && current?.[idx] === sentList[idx] ? sentList[idx] : null
       const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(outcome.message)
       if (pathRowMatch) {
         const idx = parseInt(pathRowMatch[1], 10)
-        if (sameRow(sent?.allowed_paths, drafts.paths?.value, idx)) {
+        const refused = refusedRow(sent?.allowed_paths, drafts.paths?.value, idx)
+        if (refused === null) {
+          setSaveError(outcome.message)
+          return
+        }
+        if ((savedBefore?.allowed_paths ?? []).includes(refused)) {
           setPathRowErrors({ [idx]: pathRowMatch[2] })
           return
         }
-        setSaveError(outcome.message)
+        if ((drafts.pathInput ?? '') !== '') {
+          setSaveError(outcome.message)
+          return
+        }
+        setPathList((list) => (list[idx] === refused ? list.filter((_, i) => i !== idx) : list))
+        setNewPath(refused)
+        setPathAddError(pathRowMatch[2])
         return
       }
       const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(outcome.message)
       if (ssrfRowMatch) {
         const idx = parseInt(ssrfRowMatch[1], 10)
-        if (sameRow(sent?.ssrf?.allow_internal, drafts.ssrf?.value, idx)) {
+        const refused = refusedRow(sent?.ssrf?.allow_internal, drafts.ssrf?.value, idx)
+        if (refused === null) {
+          setSaveError(outcome.message)
+          return
+        }
+        if ((savedBefore?.ssrf?.allow_internal ?? []).includes(refused)) {
           setSsrfAdvancedOpen(true)
           setSsrfAdvancedErrors({ [idx]: ssrfRowMatch[2] })
           return
         }
-        setSaveError(outcome.message)
+        if ((drafts.ssrfInput ?? '') !== '') {
+          setSaveError(outcome.message)
+          return
+        }
+        const current = drafts.ssrf?.value ?? []
+        applySsrf(current.filter((_, i) => i !== idx))
+        // The add input lives in the advanced editor.
+        setSsrfAdvancedOpen(true)
+        setNewSsrfEntry(refused)
+        setSsrfAddError(ssrfRowMatch[2])
         return
       }
       setSaveError(outcome.message)
