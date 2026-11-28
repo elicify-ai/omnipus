@@ -19,6 +19,10 @@ func decodePerformanceUpdate(w http.ResponseWriter, r *http.Request, req *gen.Pe
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if names, ok := topLevelJSONKeys(raw); ok && namesRetiredPerformanceField(names) {
+		jsonErr(w, http.StatusBadRequest, retiredToolLoadingRefusal)
+		return false
+	}
 	if !decodeAndValidate(w, r, "PerformanceSettingsUpdate", req, validateEnabled) {
 		return false
 	}
@@ -34,4 +38,35 @@ func decodePerformanceUpdate(w http.ResponseWriter, r *http.Request, req *gen.Pe
 		}
 	}
 	return true
+}
+
+// retiredPerformanceField is the Performance field the levels in Skills &
+// Tools replaced (C-22 row 2). It is refused by name, with the PUT /config
+// refusal of the retired tool-loading keys (C-22 row 3), whether or not
+// inbound validation is on: a caller who sends it believes something changed.
+const retiredPerformanceField = "tools_on_demand"
+
+// topLevelJSONKeys returns the keys of a JSON object body; ok is false when
+// the body is not an object (the decoder answers that case).
+func topLevelJSONKeys(raw []byte) ([]string, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	return keys, true
+}
+
+// namesRetiredPerformanceField reports whether a key folds, the way
+// encoding/json matches field names, to retiredPerformanceField.
+func namesRetiredPerformanceField(keys []string) bool {
+	for _, k := range keys {
+		if jsonFoldKey(k) == jsonFoldKey(retiredPerformanceField) {
+			return true
+		}
+	}
+	return false
 }
