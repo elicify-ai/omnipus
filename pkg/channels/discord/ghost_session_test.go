@@ -3,8 +3,10 @@ package discord
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stretchr/testify/assert"
@@ -16,9 +18,10 @@ func ghostTestContext(t *testing.T) context.Context {
 	// The minute is a failure bound only. No assertion waits for it to expire;
 	// progress comes from actual failed handshakes, authentication and dispatch.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	previousLogger := discordgo.Logger
 	t.Cleanup(cancel)
-	t.Cleanup(func() { discordgo.Logger = previousLogger })
+	// discordgo.Logger is installed once per process by the constructor
+	// (installDiscordgoLogger, 57ecd9bf1). Restoring it here wrote the variable
+	// while a closed session's heartbeat goroutine could still read it (race).
 	return ctx
 }
 
@@ -133,4 +136,47 @@ func TestGhostDiscordRunningAdapterReconnectsAndHandlesMessages(t *testing.T) {
 	assert.Equal(t, []string{"discord:" + ghostLateID}, recent)
 	assert.Len(t, fixture.gateway.authentications(), 2, "running adapter must authenticate exactly one recovered connection")
 	assert.True(t, fixture.adapter.IsRunning(), "running control was never stopped")
+}
+
+// discordgoLoggerValue is the installed function value, not its code pointer.
+// discordgo.Logger is not comparable with ==. reflect.Value.Pointer returns
+// Logf's code address, which is identical for every method value, so a second
+// constructor that assigns a new closure still looks unchanged. The func value
+// itself is a pointer to that closure. installDiscordgoLogger writes it once
+// per process; a later assignment is a different closure.
+func discordgoLoggerValue(fn func(msgL, caller int, format string, a ...any)) uintptr {
+	return *(*uintptr)(unsafe.Pointer(&fn))
+}
+
+// Code-review F2 and installDiscordgoLogger: the constructor installs one
+// process-lifetime bridge. A later constructor or fixture teardown must keep
+// that same function value. Non-nil is not enough — a fresh assignment is also
+// non-nil, and it is the rewrite the once-guard exists to prevent.
+// No callback is installed or restored by this test. Constructors and fixture
+// teardown are real.
+func TestGhostDiscordLoggerSurvivesFixtureTeardown(t *testing.T) {
+	for _, name := range []string{"initial-fixtures", "later-fixtures"} {
+		// Hold the closures, not only their addresses, so a replacement cannot
+		// reuse the address of a collected function value.
+		var installed func(msgL, caller int, format string, a ...any)
+		var afterSecond func(msgL, caller int, format string, a ...any)
+		t.Run(name, func(t *testing.T) {
+			ctx := ghostTestContext(t)
+			newGhostDiscordFixture(t, ctx)
+			require.NotNil(t, discordgo.Logger, "the constructor must install the application bridge")
+			installed = discordgo.Logger
+			newGhostDiscordFixture(t, ctx)
+			require.NotNil(t, discordgo.Logger, "a second constructor must retain the bridge")
+			afterSecond = discordgo.Logger
+			require.Equal(t, discordgoLoggerValue(installed), discordgoLoggerValue(afterSecond),
+				"a second constructor must keep the same process-lifetime logger")
+			runtime.KeepAlive(installed)
+			runtime.KeepAlive(afterSecond)
+		})
+		require.NotNil(t, discordgo.Logger, "F2: fixture teardown must not undo the process-lifetime bridge")
+		require.Equal(t, discordgoLoggerValue(afterSecond), discordgoLoggerValue(discordgo.Logger),
+			"F2: fixture teardown must not replace the process-lifetime logger")
+		runtime.KeepAlive(installed)
+		runtime.KeepAlive(afterSecond)
+	}
 }

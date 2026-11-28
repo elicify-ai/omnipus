@@ -87,6 +87,12 @@ func resolveMediaRefsForTurn(
 
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
+	// turnPDFBytes is the decoded size of this turn's own uploaded PDFs the
+	// presenter may send natively (the 32 MiB request budget, architect
+	// rule G5); recorded here because "this turn" is fixed when the request
+	// is resolved.
+	turnIdx := turnUserMessageIndex(result)
+	turnPDFBytes := 0
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -211,6 +217,10 @@ func resolveMediaRefsForTurn(
 				dataURL, injection := encodeChatPDF(localPath, mime, meta.Filename, info.Size(), maxSize, pdfs)
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
+					pdfs.registerSource(dataURL, localPath, sink)
+					if i == turnIdx {
+						turnPDFBytes += int(info.Size())
+					}
 				}
 				if injection != "" {
 					contentInjections = append(contentInjections, injection)
@@ -229,6 +239,9 @@ func resolveMediaRefsForTurn(
 		}
 	}
 
+	if sink != nil {
+		sink.turnMedia = turnUploadMedia{nativePDFBytes: turnPDFBytes}
+	}
 	return result
 }
 
@@ -333,6 +346,18 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 	return "\n\n[user uploaded: " + workPath + "]"
 }
 
+// pdfFallbackText is a PDF's text-fallback injection: its extracted text,
+// or why none could be extracted.
+func pdfFallbackText(data []byte) string {
+	const fallbackName = "attachment.pdf"
+	text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
+	if ok {
+		return fmt.Sprintf("\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text)
+	}
+	return fmt.Sprintf("\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
+		fallbackName, len(data), reason)
+}
+
 // downgradePDFMediaToText converts any native PDF data URL in each message's
 // Media array back into extracted text injected into Content. It is the recovery
 // path for providers that reject native PDF blocks at request time: text input
@@ -341,7 +366,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 // block was downgraded.
 func downgradePDFMediaToText(messages []providers.Message) bool {
 	const pdfPrefix = "data:application/pdf;base64,"
-	const fallbackName = "attachment.pdf"
 	anyChanged := false
 
 	for i := range messages {
@@ -364,15 +388,7 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 					"\n\n[Attached PDF could not be decoded for text fallback]")
 				continue
 			}
-			text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
-			if ok {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text))
-			} else {
-				injections = append(injections, fmt.Sprintf(
-					"\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
-					fallbackName, len(data), reason))
-			}
+			injections = append(injections, pdfFallbackText(data))
 		}
 
 		if msgChanged {
@@ -1241,6 +1257,38 @@ func fallbackName(filename, alt string) string {
 // failing the turn.
 type offloadSink struct {
 	workDir string
+	// turnMedia is filled by the resolver: the decoded document media of
+	// this turn's uploads in the request it returned.
+	turnMedia turnUploadMedia
+}
+
+// turnOffloadSink is the resolver sink of this turn: its work folder.
+func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
+	return &offloadSink{workDir: workDir}
+}
+
+// turnUserMessageIndex is the index of the turn's own user message: the
+// last user message that is neither a tool result nor the request-only
+// volatile note; -1 when there is none. "This turn" starts there
+// (architect rule G5). Messages the loop adds later in the turn with the
+// user role (sub-turn results, repairs) can sit after it, so callers that
+// keep a figure across the turn record it when the request is resolved.
+func turnUserMessageIndex(messages []providers.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if m := messages[i]; m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			return i
+		}
+	}
+	return -1
+}
+
+// turnUploadMedia is the decoded document media of a turn's own uploads
+// (AD-6, architect rule G5): the PDFs the resolver encoded for the
+// presenter (recorded when the request is resolved), and the page images
+// the request assembly rendered from uploaded PDFs for a model that does
+// not read PDFs natively.
+type turnUploadMedia struct {
+	nativePDFBytes, pageImageBytes int
 }
 
 // offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the
@@ -1254,8 +1302,18 @@ type offloadSink struct {
 // the caller then produces the step-7 honest marker (edge case: "step-5 offload
 // cannot copy the file → step 7 honest marker with reason offload-failed").
 func (s *offloadSink) offload(localPath, mime, filename, model string) (string, bool) {
-	if s == nil {
+	dest, err := s.offloadPath(localPath, filename)
+	if err != nil {
 		return "", false
+	}
+	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+}
+
+// offloadPath copies localPath into the turn's work/ dir (step-5 offload)
+// and returns the copy's path; a failure is logged and returned.
+func (s *offloadSink) offloadPath(localPath, filename string) (string, error) {
+	if s == nil {
+		return "", errNoOffloadSink
 	}
 	safeName, err := deriveSafeOffloadName(localPath, filename)
 	if err != nil {
@@ -1263,7 +1321,7 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"path":  localPath,
 			"error": err.Error(),
 		})
-		return "", false
+		return "", err
 	}
 	dest, err := copyToWorkDir(localPath, s.workDir, safeName)
 	if err != nil {
@@ -1272,9 +1330,9 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"work_dir": s.workDir,
 			"error":    err.Error(),
 		})
-		return "", false
+		return "", err
 	}
-	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+	return dest, nil
 }
 
 // sha256PrefixBytes is the number of sha256 digest bytes (16 hex chars) used

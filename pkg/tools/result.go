@@ -64,6 +64,12 @@ type ToolResult struct {
 	// persisted text in ForLLM, and history never holds its bytes (FR-14).
 	InspectionPDFs []InspectionPDF `json:"-"`
 
+	// DocumentPreview is preview_document's output (office-preview spec
+	// §4.1, §5.1): the live-turn model forms, chosen per active model at
+	// request assembly and never persisted, and the display-only thumbnail
+	// group for the person, which never enters model-media admission.
+	DocumentPreview *DocumentPreview `json:"-"`
+
 	// ArtifactTags exposes local artifact paths back to the LLM in a structured
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
 	// reusable local artifact but did not deliver it to the user yet.
@@ -215,6 +221,11 @@ type InspectionPDF struct {
 	HasText      bool
 	LocalFailure string
 	Reauthorize  func(context.Context) error
+	// RenderPages renders pages 1-10 as images on first need: an attempt
+	// whose model sees images but does not receive this PDF natively gets
+	// them (office-preview spec §4.1). It returns the pages, else why they
+	// are unavailable, and a note for the model. Nil means no page images.
+	RenderPages func(context.Context) (pages []DocumentPreviewPage, unavailable, note string)
 }
 
 // ToolDeferral is the structural discriminator a control-gated tool result

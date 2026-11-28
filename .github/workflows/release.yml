@@ -4,8 +4,10 @@ name: Create Tag and Release
 # runs goreleaser, publishes a GitHub Release with binaries + .deb/.rpm,
 # and pushes the Docker image to ghcr.io/elicify-ai/omnipus.
 #
-# Platform matrix is governed by .goreleaser.yaml (currently 3 binaries:
-# linux/amd64, linux/arm64, darwin/arm64).
+# Platform matrix is governed by .goreleaser.yaml (4 binaries: linux/amd64,
+# linux/arm64, darwin/arm64, darwin/amd64). The Office preview components are
+# built first by office-components.yml and published as separate downloads,
+# inside the deb/rpm packages and inside the Docker image.
 
 on:
   workflow_dispatch:
@@ -106,9 +108,16 @@ jobs:
           git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
           git push origin "$RELEASE_TAG"
 
+  components:
+    name: Office preview components
+    needs: create-tag
+    uses: ./.github/workflows/office-components.yml
+    with:
+      ref: ${{ inputs.tag }}
+
   release:
     name: GoReleaser Release
-    needs: create-tag
+    needs: [create-tag, components]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -168,6 +177,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the Office preview components
+        uses: actions/download-artifact@v7
+        with:
+          pattern: office-components-*
+          path: build/components/release
+          merge-multiple: true
+
+      - name: Lay out the Linux components for packages and images
+        run: bash scripts/office-pack/unpack-linux.sh build/components
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7

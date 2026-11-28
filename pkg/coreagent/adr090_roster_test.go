@@ -95,8 +95,9 @@ func assertADR090PolicyInventory(t *testing.T, cfg *config.Config) {
 }
 
 func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testing.T) {
+	// Office-preview AD-14 replaces the four document grants with elicify-office.
 	wantSkills := map[string][]string{
-		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia": {"interview", "define-goal", "inbox-triage", "elicify-office"},
 		"jim": {"interview", "orchestrate", "plan", "define-goal"},
 		// omnipus-system-agent FR-010 (WU-9): the Omnipus workflow skills,
 		// granted to Omnipus only; interview stays shared with Mia and Jim
@@ -104,7 +105,7 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 		"omnipus":        {"interview", "create-agent", "change-agent", "remove-agent", "write-skill", "install-skill", "team-delegation", "welcome-workspace", "add-connector", "remove-connector", "add-provider", "provider-config", "connect-channel", "disable-channel", "doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"},
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
-		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"worker":         {"elicify-office"},
 		"judge":          {"verify"},
 		"plansupervisor": {"plan", "define-goal"},
 	}

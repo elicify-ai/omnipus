@@ -6,6 +6,12 @@ description: >
   renders the attachments inline in the assistant message bubble.
   IMPORTANT: parts MUST be an array (never null). The SPA iterates parts.map()
   directly — null would cause a runtime crash.
+  Office-document preview (office-preview spec §5.2): a preview_document call's
+  page thumbnails arrive as one frame per tool call with presentation
+  "page_thumbnails", the producing tool_call_id and a preview record. The SPA
+  groups media by (message, tool_call_id); frames without tool_call_id (for
+  example browser screenshots) render inline exactly as before. Live
+  (webchat SendMedia), replay and history producers emit the same projection.
 type: object
 required:
   - type
@@ -22,14 +28,42 @@ properties:
     description: Session in which the media was produced.
   parts:
     type: array
-    minItems: 1
+    minItems: 0
     maxItems: 32
     items:
       $ref: MediaPart.yaml
     description: >
-      Non-empty array of media attachments. The server only emits a media frame
-      when at least one part is present. Capped at 32 parts per frame to bound
+      Array of media attachments (never null). Non-empty in every case except
+      one: it MAY be empty only when presentation is "page_thumbnails" and
+      preview.outcome is "unavailable" (the person sees the persistent
+      "page previews unavailable" card instead of thumbnails). The server
+      guarantees this cross-field rule; JSON Schema here only enforces the
+      array shape and the 32-part cap. Capped at 32 parts per frame to bound
       SPA render cost and payload size.
+  tool_call_id:
+    type: string
+    minLength: 1
+    description: >
+      Id of the tool call that produced these media (the ToolCall.id of the
+      transcript entry). Present on preview_document thumbnail frames, where it
+      is the grouping key together with the message; a Retry
+      (POST /sessions/{session_id}/previews/{tool_call_id}/retry) result arrives
+      as a new frame carrying the same tool_call_id. Absent on frames that are
+      not grouped (screenshots and other inline media).
+  presentation:
+    type: string
+    enum:
+      - inline
+      - page_thumbnails
+    default: inline
+    description: >
+      How the SPA presents the parts. "inline" (default when absent) is
+      today's inline media rendering. "page_thumbnails" is a document-preview
+      thumbnail group: the parts are pages in page order (MediaPart.page_number),
+      navigation in the enlarged viewer stays inside the group, and per-image
+      failure toasts are suppressed for this presentation only.
+  preview:
+    $ref: MediaPreview.yaml
 
   seq:
     type: integer

@@ -9,6 +9,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -52,6 +53,20 @@ type agentLoopRunTurn struct {
 	streamerLookupDeclined bool
 	onToolCallProgress     protocoltypes.OnToolCallProgress
 	inspectionImages       map[string][]tools.InspectionImage
+	// documentPreviews holds this turn's live preview_document model forms
+	// (office-preview spec §4.1, AD-6); released at turn end.
+	documentPreviews *turnDocumentPreviews
+	// turnUploadMedia is the decoded document media of this turn's own
+	// uploads: the PDFs the last resolution encoded and the page images the
+	// last attempt stage rendered; it is taken first from the request's
+	// 32 MiB preview budget.
+	turnUploadMedia turnUploadMedia
+	// uploadPageCache keeps this turn's rendered upload page images; the
+	// toolPDFPages map keeps the page images of tool PDFs (read_file,
+	// library_read) rendered on first need (pdf_present_forms.go).
+	uploadPageCache *uploadPageCache
+	toolPDFPagesMu  sync.Mutex
+	toolPDFPages    map[string]*toolPDFPages
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This
@@ -59,15 +74,16 @@ type agentLoopRunTurn struct {
 	// methods.
 	providerCallStreamedBytes atomic.Int64
 	// providerCallAttachCache scopes ONE provider round (one callProviderOnce):
-	// candidate key → the messages with this candidate's inspection IMAGES
-	// attached and fitted. §7.4's in-place retries re-invoke the run closure
-	// for the SAME candidate — the retry must re-send the same request, so
-	// the image attach (and its per-call Reauthorize) runs once per
-	// candidate, not once per call. PDFs are deliberately NOT cached: their
-	// presentation, including each tool PDF's access recheck, runs on every
-	// call (issue #1968 FR-10/FR-13, security finding F2).
+	// candidate key → the attempt stage with this candidate's inspection
+	// IMAGES, upload page images and preview_document forms attached and
+	// fitted. §7.4's in-place retries re-invoke the run closure for the SAME
+	// candidate — the retry must re-send the same request, so the image
+	// attach (and its per-call Reauthorize) runs once per candidate, not
+	// once per call. The PDF decision is deliberately NOT cached: its
+	// presentation, including each tool and preview PDF's access recheck,
+	// runs on every call (issue #1968 FR-10/FR-13, security finding F2).
 	// Reset on every callProviderOnce entry: a new round attaches fresh.
-	providerCallAttachCache map[string][]providers.Message
+	providerCallAttachCache map[string]attemptStage
 	// inspectionPDFs holds the turn-private PDF items read_file and
 	// library_read returned, keyed by tool call id (issue #1968 FR-7/FR-14).
 	// The bytes never leave this map except in an attempt's request copy.

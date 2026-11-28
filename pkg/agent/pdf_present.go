@@ -2,11 +2,15 @@ package agent
 
 // pdf_present.go — the per-attempt PDF presenter of issue #1968 (spec
 // FR-10 to FR-15). runProviderAttempt calls it on the request copy of every
-// provider attempt: chat PDFs (data URLs chat resolution encoded) and tool
-// PDFs (the turn-private InspectionPDFs of read_file/library_read) are
-// presented natively or as text, decided per attempt from the attempt's own
-// catalogue capability and engine-configured limits. Canonical messages are never mutated; tool PDF bytes exist
-// only in the returned request copy.
+// provider attempt: chat PDFs (data URLs chat resolution encoded), tool
+// PDFs (the turn-private InspectionPDFs of read_file/library_read) and
+// preview_document PDFs (attached by attachTurnDocumentPreviewsFor) are
+// presented natively or not, decided per attempt from the attempt's own
+// catalogue capability and engine-configured limits — the one PDF decision
+// and recovery state for every source (founder decision 2026-11-28). A PDF
+// that is not native becomes its text, or its page images on a model that
+// sees images (pdf_present_forms.go). Canonical messages are never
+// mutated; tool PDF bytes exist only in the returned request copy.
 
 import (
 	"context"
@@ -43,15 +47,20 @@ type pdfCandidate struct {
 	tool     bool
 	item     tools.InspectionPDF
 	chat     *chatPDF
-	bytes    int64 // decoded size
+	preview  *previewOrigin // a preview_document PDF the stage attached
+	bytes    int64          // decoded size
 	decision pdfDecision
 	note     string // L2 for pdfOverLimit
+	denied   error  // the access recheck's refusal, for pdfAccessDenied
 }
 
 // pages is the candidate's known page count (0 = unknown).
 func (c *pdfCandidate) pages() int64 {
 	if c.tool {
 		return int64(c.item.Pages)
+	}
+	if c.preview != nil {
+		return int64(c.preview.doc.Record.PageCount)
 	}
 	c.chat.inspect(c.dataURL)
 	return int64(c.chat.pages)
@@ -77,14 +86,21 @@ type pdfAttemptInput struct {
 
 // collectPDFCandidates lists every PDF of messages in wire order: chat data
 // URLs in their message's media order, then tool items of a tool result in
-// the order the tool returned them.
-func (rt *agentLoopRunTurn) collectPDFCandidates(messages []providers.Message) []*pdfCandidate {
+// the order the tool returned them. A PDF data URL in a message the stage
+// attached a preview_document PDF to is that preview's candidate.
+func (rt *agentLoopRunTurn) collectPDFCandidates(messages []providers.Message, previews map[int]previewOrigin) []*pdfCandidate {
 	var out []*pdfCandidate
 	for i := range messages {
 		for j, mediaURL := range messages[i].Media {
 			payload, ok := pdfPayload(mediaURL)
 			if !ok {
 				continue // not a PDF, or malformed: the transport shows its note
+			}
+			if origin, isPreview := previews[i]; isPreview {
+				out = append(out, &pdfCandidate{
+					msg: i, media: j, dataURL: mediaURL, preview: &origin, bytes: pdfDecodedLen(payload),
+				})
+				continue
 			}
 			out = append(out, &pdfCandidate{
 				msg: i, media: j, dataURL: mediaURL,
@@ -114,9 +130,10 @@ func pdfPayload(mediaURL string) (string, bool) {
 // presentAttemptPDFs returns the request copy of one attempt with every PDF
 // presented natively or as text, and whether any PDF travels natively.
 func (rt *agentLoopRunTurn) presentAttemptPDFs(
-	ctx context.Context, in pdfAttemptInput, messages []providers.Message,
+	ctx context.Context, in pdfAttemptInput, stage attemptStage,
 ) ([]providers.Message, bool, error) {
-	cands := rt.collectPDFCandidates(messages)
+	messages := stage.messages
+	cands := rt.collectPDFCandidates(messages, stage.previews)
 	if len(cands) == 0 {
 		return messages, false, nil
 	}
@@ -135,8 +152,12 @@ func (rt *agentLoopRunTurn) presentAttemptPDFs(
 	}
 	owner := in.name + "/" + in.model
 	admitPDFsNewestFirst(cands, limits, owner, pdfWireGroups(in.provider, messages, limits))
-	out := buildPDFRequest(messages, cands)
-	out, err := fitPDFRequestBytes(in, out, messages, cands, limits, owner)
+	build := func() ([]providers.Message, error) { return rt.buildPDFRequest(ctx, messages, cands, stage) }
+	out, err := build()
+	if err != nil {
+		return nil, false, err
+	}
+	out, err = fitPDFRequestBytes(in, out, cands, limits, owner, build)
 	if err != nil {
 		return nil, false, err
 	}
@@ -168,7 +189,20 @@ func (rt *agentLoopRunTurn) decidePDFEligibility(ctx context.Context, cands []*p
 					"name":  c.item.Name,
 					"error": err.Error(),
 				})
-				c.decision = pdfAccessDenied
+				c.decision, c.denied = pdfAccessDenied, err
+			}
+		case c.preview != nil:
+			// The same per-send recheck as a tool PDF (security finding
+			// F2): the preview's bytes go only while access holds.
+			if c.preview.doc.Reauthorize == nil {
+				return fmt.Errorf("preview_document source access cannot be rechecked")
+			}
+			if err := c.preview.doc.Reauthorize(ctx); err != nil {
+				logger.WarnCF("agent", "preview_document access recheck denied; the PDF is not sent", map[string]any{
+					"source": c.preview.doc.Record.SourceName,
+					"error":  err.Error(),
+				})
+				c.decision, c.denied = pdfAccessDenied, err
 			}
 		}
 	}
@@ -266,8 +300,8 @@ func pagesLimited(limits config.PDFLimits) bool {
 // native PDF through a transport that cannot measure is an error, never an
 // unmeasured send.
 func fitPDFRequestBytes(
-	in pdfAttemptInput, out, messages []providers.Message, cands []*pdfCandidate,
-	limits config.PDFLimits, owner string,
+	in pdfAttemptInput, out []providers.Message, cands []*pdfCandidate,
+	limits config.PDFLimits, owner string, build func() ([]providers.Message, error),
 ) ([]providers.Message, error) {
 	maxBytes, set := limits.MaxRequestBytes()
 	if !set || maxBytes == 0 {
@@ -302,28 +336,102 @@ func fitPDFRequestBytes(
 		}
 		cands[native].decision = pdfOverLimit
 		cands[native].note = pdfNoteLimit(owner, "max_request_bytes", maxBytes)
-		out = buildPDFRequest(messages, cands)
+		if out, err = build(); err != nil {
+			return nil, err
+		}
 	}
 }
 
 // buildPDFRequest returns a copy of messages presenting each candidate per
 // its decision. Wire order never changes: a demoted chat PDF leaves its
 // message's media and its text joins the message content; a native tool PDF
-// is appended to its tool result's media.
-func buildPDFRequest(messages []providers.Message, cands []*pdfCandidate) []providers.Message {
+// is appended to its tool result's media; a demoted preview_document PDF is
+// replaced by its page images or text. Tool and preview fallbacks take the
+// request's document budget newest message first.
+func (rt *agentLoopRunTurn) buildPDFRequest(
+	ctx context.Context, messages []providers.Message, cands []*pdfCandidate, stage attemptStage,
+) ([]providers.Message, error) {
 	out := append([]providers.Message(nil), messages...)
 	byMsg := map[int][]*pdfCandidate{}
+	left := stage.docBudget
 	for _, c := range cands {
 		byMsg[c.msg] = append(byMsg[c.msg], c)
-	}
-	for i, group := range byMsg {
-		if group[0].tool {
-			out[i] = presentToolPDFs(out[i], group)
-		} else {
-			out[i] = presentChatPDFs(out[i], group)
+		if c.tool && c.decision == pdfNative {
+			left -= int(c.bytes)
 		}
 	}
-	return out
+	for i := len(messages) - 1; i >= 0; i-- {
+		group, ok := byMsg[i]
+		if !ok {
+			continue
+		}
+		var used int
+		var err error
+		switch {
+		case group[0].preview != nil:
+			out[i], used, err = presentPreviewPDF(ctx, out[i], group[0], left)
+		case group[0].tool:
+			out[i] = presentToolPDFs(out[i], group)
+			out[i], used, err = rt.attachDemotedToolPDFPages(ctx, out[i], group, stage, left)
+		default:
+			out[i] = presentChatPDFs(out[i], group)
+		}
+		if err != nil {
+			return nil, err
+		}
+		left -= used
+	}
+	return out, nil
+}
+
+// presentPreviewPDF presents a preview_document PDF the stage attached: as
+// attached when native; with the access-withheld marker and no media when
+// its source can no longer be read; otherwise rebuilt as its page images
+// (within the budget its own PDF bytes free) or its text, naming why.
+func presentPreviewPDF(ctx context.Context, m providers.Message, c *pdfCandidate, left int) (providers.Message, int, error) {
+	switch c.decision {
+	case pdfNative:
+		return m, 0, nil
+	case pdfAccessDenied:
+		withheld := c.preview.msg
+		withheld.Content += "\n[preview_document content withheld: access to the source was denied: " + c.denied.Error() + "]"
+		return withheld, 0, nil
+	}
+	note := c.note
+	switch c.decision {
+	case pdfNotCapable:
+		note = "this model does not read PDFs natively"
+	case pdfBudgetSpent:
+		note = "the provider rejected the native PDF"
+	}
+	return previewFallback(ctx, *c.preview, left+len(c.preview.doc.PDF), note)
+}
+
+// attachDemotedToolPDFPages gives each tool PDF that is not native on this
+// attempt (other than one whose access was refused) its page images when
+// the attempt's model sees images, within the request's document budget,
+// and names what the model received.
+func (rt *agentLoopRunTurn) attachDemotedToolPDFPages(
+	ctx context.Context, m providers.Message, group []*pdfCandidate, stage attemptStage, left int,
+) (providers.Message, int, error) {
+	if !stage.images {
+		return m, 0, nil
+	}
+	used := 0
+	for _, c := range group {
+		if c.decision == pdfNative || c.decision == pdfAccessDenied {
+			continue
+		}
+		pages := rt.renderToolPDFPages(ctx, c)
+		next, n, line, err := attachToolPDFPages(m, pages, stage.resize, left-used)
+		if err != nil {
+			return m, 0, err
+		}
+		m = next
+		m.Content += "\n" + line
+		used += n
+	}
+	return m, used, nil
 }
 
 // presentChatPDFs presents the chat PDFs of one message (FR-13): a demoted

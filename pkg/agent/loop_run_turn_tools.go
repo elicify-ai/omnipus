@@ -1699,6 +1699,7 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		}
 		ex.toolResult.ArtifactTags = buildArtifactTags(ex.rx.rr.rq.ri.turnMediaStore, ex.toolResult.Media)
 	}
+	ex.deliverPreviewThumbnails()
 
 	userContent := toolResultUserContent(
 		ex.toolName,
@@ -1948,6 +1949,9 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionPDFs[ex.toolCallID] = ex.toolResult.InspectionPDFs
 	}
+	if ex.toolResult.DocumentPreview != nil {
+		ex.rx.rr.rq.ri.rf.rt.documentPreviews.add(ex.toolCallID, ex.toolResult.DocumentPreview)
+	}
 	tcStatus := "success"
 	switch {
 	case ex.toolResult.ParksTurn:
@@ -2030,7 +2034,10 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// originally saw. We store enough metadata (ref + filename +
 	// content_type + type) for replay to reconstruct the wire frame
 	// without re-resolving against the MediaStore at replay time.
-	if len(ex.toolResult.Media) > 0 {
+	if doc := ex.toolResult.DocumentPreview; doc != nil && !doc.ModelOnly && !ex.toolResult.IsError {
+		// office-preview spec §5.2: the display-only thumbnail group.
+		ex.tcRecord.Result = previewToolRecord(doc, ex.contentForLLM)
+	} else if len(ex.toolResult.Media) > 0 {
 		descs := make([]map[string]any, 0, len(ex.toolResult.Media))
 		for _, ref := range ex.toolResult.Media {
 			d := map[string]any{"ref": ref}

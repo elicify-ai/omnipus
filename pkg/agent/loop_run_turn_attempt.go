@@ -215,22 +215,14 @@ func (rt *agentLoopRunTurn) prepareAttemptRequest(
 		snapshot = cat.Document()
 	}
 	attachKey := fmt.Sprintf("%s/%s|budget=%t|snapshot=%p", providerName, model, rt.ts.mediaRetryDone.Load(), snapshot)
-	imageMessages, cached := rt.providerCallAttachCache[attachKey]
+	stage, cached := rt.providerCallAttachCache[attachKey]
 	if !cached {
-		budget := resizeBudgetForModel(cat, providerName, model, int(catalog.DefaultResizeLimits.MaxBytes))
-		attached, err := attachTurnInspectionImagesWithBudget(ctx, messages, rt.inspectionImages, modelSupportsImage(cat, providerName, model), budget)
-		if err != nil {
+		var err error
+		if stage, err = rt.prepareAttemptStage(ctx, cat, providerName, model, messages); err != nil {
 			return attemptPresentation{}, err
 		}
-		// Issue #1435 R1: ordinary inline image media (fresh tool results
-		// and history replays alike) must fit THIS candidate's budget at
-		// the actual send boundary — admission fitting used the tool
-		// round's selection, which can be looser than the candidate now
-		// being attempted. Request-local copy; canonical history bytes are
-		// untouched (the R1 send matrix pins that).
-		imageMessages = fitOrdinaryImageMediaToBudget(attached, budget)
 		if rt.providerCallAttachCache != nil {
-			rt.providerCallAttachCache[attachKey] = imageMessages
+			rt.providerCallAttachCache[attachKey] = stage
 		}
 	}
 	// PDFs are presented on EVERY call, in-place retries included, and
@@ -241,9 +233,43 @@ func (rt *agentLoopRunTurn) prepareAttemptRequest(
 	// so the cached image stage is reused safely.
 	messages, sentPDF, err := rt.presentAttemptPDFs(ctx, pdfAttemptInput{
 		provider: p, name: providerName, model: model, tools: toolDefs, opts: opts, stream: stream,
-	}, imageMessages)
+	}, stage)
 	if err != nil {
 		return attemptPresentation{}, err
 	}
 	return attemptPresentation{messages: messages, sentPDF: sentPDF}, nil
+}
+
+// prepareAttemptStage is the cached part of one candidate's request: its
+// inspection images; for a model that sees images but does not read PDFs,
+// the uploaded PDFs' page images (taken first from the request's 32 MiB
+// document budget); this turn's preview_document forms for this model
+// (office-preview spec section 4.1); and the ordinary image fit.
+func (rt *agentLoopRunTurn) prepareAttemptStage(
+	ctx context.Context, cat *catalog.Catalog, providerName, model string, messages []providers.Message,
+) (attemptStage, error) {
+	budget := resizeBudgetForModel(cat, providerName, model, int(catalog.DefaultResizeLimits.MaxBytes))
+	images := modelSupportsImage(cat, providerName, model)
+	attached, err := attachTurnInspectionImagesWithBudget(ctx, messages, rt.inspectionImages, images, budget)
+	if err != nil {
+		return attemptStage{}, err
+	}
+	attached, rt.turnUploadMedia.pageImageBytes = rt.attachUploadPageImages(ctx, attached, cat, providerName, model, budget)
+	live, previews, docBudget, err := attachTurnDocumentPreviewsFor(ctx, attached, rt.documentPreviews, rt.previewForms(cat, providerName, model, budget))
+	if err != nil {
+		return attemptStage{}, err
+	}
+	// Issue #1435 R1: ordinary inline image media (fresh tool results
+	// and history replays alike) must fit THIS candidate's budget at
+	// the actual send boundary — admission fitting used the tool
+	// round's selection, which can be looser than the candidate now
+	// being attempted. Request-local copy; canonical history bytes are
+	// untouched (the R1 send matrix pins that).
+	return attemptStage{
+		messages:  fitOrdinaryImageMediaToBudget(live, budget),
+		previews:  previews,
+		docBudget: docBudget,
+		images:    images,
+		resize:    budget,
+	}, nil
 }

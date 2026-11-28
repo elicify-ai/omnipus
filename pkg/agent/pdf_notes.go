@@ -84,6 +84,29 @@ type chatPDF struct {
 	// shared PDF parser was busy or timed out (tools.PDFTemporaryFailureReason):
 	// hasText is then false without meaning the file has no text.
 	localFailure string
+
+	// source and sink locate the uploaded file and the turn's work folder,
+	// so an attempt that sends its page images can name a workspace copy
+	// preview_document accepts for later pages (office-preview spec
+	// section 4.1). The copy is made once, on first need.
+	source   string
+	sink     *offloadSink
+	copyOnce sync.Once
+	copyDest string
+	copyErr  error
+}
+
+// workspaceCopy copies the uploaded PDF into the turn's work folder once
+// and returns the copy's path, or why there is none.
+func (c *chatPDF) workspaceCopy() (string, error) {
+	c.copyOnce.Do(func() {
+		if c.source == "" {
+			c.copyErr = errNoOffloadSink
+			return
+		}
+		c.copyDest, c.copyErr = c.sink.offloadPath(c.source, c.name)
+	})
+	return c.copyDest, c.copyErr
 }
 
 // chatPDFInspector inspects a chat PDF's bytes. It is docextract.InspectPDF;
@@ -142,6 +165,20 @@ func (r *chatPDFRegistry) register(dataURL, name string) {
 	}
 	if _, ok := r.entries[dataURL]; !ok {
 		r.entries[dataURL] = &chatPDF{name: name}
+	}
+}
+
+// registerSource records where dataURL's upload lives and the turn's
+// offload sink (the workspace copy named in its page-image note).
+func (r *chatPDFRegistry) registerSource(dataURL, localPath string, sink *offloadSink) {
+	if r == nil {
+		return
+	}
+	entry := r.lookup(dataURL)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if entry.source == "" {
+		entry.source, entry.sink = localPath, sink
 	}
 }
 

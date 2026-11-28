@@ -653,11 +653,13 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+	turnSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsForTurn(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
-		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+		turnSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rp.rc.rx.rr.rq.ri.rf.rt.turnChatPDFs(),
 	)
+	rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = turnSink.turnMedia
 
 	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
 	// PRIMARY provider id is unknown cannot reach any upstream at all, so it
@@ -810,11 +812,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 				activeSkillNames(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts),
 			)
 			trimProvider, trimModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+			trimSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsForTurn(
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
-				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+				trimSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rp.rc.rx.rr.rq.ri.rf.rt.turnChatPDFs(),
 			)
+			rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = trimSink.turnMedia
 		}
 	}
 
@@ -1664,7 +1668,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// recheck per call (the inspection-media boundary test pins
 		// 2 candidates → 2 rechecks, not 4). Scope: THIS provider round
 		// only; every new round (new callProviderOnce) attaches fresh.
-		rt.providerCallAttachCache = make(map[string][]providers.Message)
+		rt.providerCallAttachCache = make(map[string]attemptStage)
 		chain := rt.al.fallback
 		if len(rt.activeCandidates) == 1 {
 			// F1: single-candidate root turns run on a throwaway tracker so a

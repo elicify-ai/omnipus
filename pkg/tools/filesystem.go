@@ -723,7 +723,15 @@ func (t *ReadFileTool) readOpenFile(
 	// FR-5 (#1968): a .pdf name or a %PDF- magic takes the PDF path before
 	// the NUL check, so an ASCII PDF is never returned as raw syntax.
 	if isPDFRead(path, sniff[:sniffN]) {
-		return t.readPDF(file, sniff[:sniffN], path, offset, length, paginationSupplied, reauthorize)
+		result := t.readPDF(file, sniff[:sniffN], path, offset, length, paginationSupplied, reauthorize)
+		// A PDF that is not sent natively on an attempt whose model sees
+		// images goes as page images 1-10 (office-preview spec §4.1),
+		// rendered on first need through the shared preview service.
+		for i := range result.InspectionPDFs {
+			item := &result.InspectionPDFs[i]
+			item.RenderPages = t.pdfPageRenderer(policy, item.Name, sourceIdentity, item.Bytes)
+		}
+		return result
 	}
 
 	// Reject binary files: null bytes are a reliable binary indicator.

@@ -211,6 +211,9 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 // separate from the call id that records its start.
 func emittedResultKey(callID string) string { return "result\x00" + callID }
 
+// emittedPreviewKey is the emitted-set key of a tool call's thumbnail group.
+func emittedPreviewKey(callID string) string { return "preview\x00" + callID }
+
 func recordEmittedIDs(emitted map[string]bool, f any) {
 	switch v := f.(type) {
 	case generated.ReplayMessageFrame:
@@ -231,6 +234,10 @@ func recordEmittedIDs(emitted map[string]bool, f any) {
 		emitted[v.MessageId] = true
 	case generated.HelperEventFrame:
 		emitted[v.MessageId] = true
+	case generated.MediaFrame:
+		if v.ToolCallId != nil && v.Presentation != nil && *v.Presentation == previewPresentationPageThumbnails {
+			emitted[emittedPreviewKey(*v.ToolCallId)] = true
+		}
 	}
 }
 

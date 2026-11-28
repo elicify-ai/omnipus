@@ -1,0 +1,163 @@
+{
+  "skill_name": "elicify-office",
+  "evals": [
+    {
+      "id": "docx-1",
+      "prompt": "Create an editable Word proposal for a two-week onboarding pilot. Include an executive summary, scope, an owner/due-date table, and risks. The fixed price is USD 8,000. Use A4 paper. Do not invent client names. Render and inspect every page if the tools are available.",
+      "expected_output": "An editable .docx with accurate fixed price, real table, clear headings and explicit visual QA evidence or an honest blocker.",
+      "files": [],
+      "assertions": [
+        "The artifact reopens as DOCX and contains USD 8,000 exactly.",
+        "Scope, owners/dates, and risks are present without invented client identity.",
+        "The owner/due-date content is a real Word table.",
+        "The receipt identifies rendering and actual page-image inspection, or explicitly states it was not verified."
+      ]
+    },
+    {
+      "id": "docx-2",
+      "prompt": "In the attached quarterly-review.docx, change only the approved plain-text budget from USD 80,000 to USD 84,000. Preserve existing tracked changes, comments, headers, links, tables, and images; save a new copy. If you cannot establish preservation, explain the limitation and give a proposed edit rather than flattening the file.",
+      "expected_output": "A narrowly edited copy with preservation evidence, or a clear proposed edit when the revision-bearing source cannot be safely edited.",
+      "files": [],
+      "fixture_contract": "Provide quarterly-review.docx with a whole-run budget, mixed formatting, a header, link, image, table, comment, and inserted/deleted text. Harness must generate or supply this original fixture.",
+      "assertions": [
+        "The source bytes remain unchanged.",
+        "Any edited copy changes the budget once and retains the enumerated source features.",
+        "The answer does not falsely equate reopening the document with tracked-change preservation."
+      ]
+    },
+    {
+      "id": "docx-3",
+      "prompt": "Use the attached letterhead.dotx to create a Word letter for Jordan Lee about the meeting on 18 October 2026. Keep the letterhead and page footer. The template has placeholders in the header and a body token split across formatting runs. Do not rename the extension as conversion.",
+      "expected_output": "A new DOCX from a valid template route with correct placeholders and preserved letterhead/footer, or an explicit conversion dependency blocker.",
+      "files": [],
+      "fixture_contract": "Provide an original .dotx with header/footer branding and a body placeholder split across two runs.",
+      "assertions": [
+        "No unresolved placeholder remains in a delivered final document.",
+        "The template is not passed off as converted by extension rename alone.",
+        "Header/footer and mixed-run substitution are explicitly verified."
+      ]
+    },
+    {
+      "id": "xlsx-1",
+      "prompt": "Create an editable sales workbook for a small shop. January sold 20 units at USD 12.50 each and February sold 24 at USD 12.50. Unit cost is USD 7.20. Show revenue, cost, gross profit and margin by month and total, with separate labelled assumptions and a chart. Calculate it, verify it and give me the workbook and a one-page PDF summary.",
+      "expected_output": "An XLSX with genuine formulas and a readable PDF. Independent totals: 44 units, revenue 550.00, cost 316.80, gross profit 233.20, gross margin 42.4%. Evidence distinguishes a real engine recalculation from missing cached results, and actual rendered-page inspection from text checks.",
+      "files": [],
+      "assertions": [
+        "Formula cells remain formulas in the delivered XLSX",
+        "Financial totals match independent arithmetic at declared precision",
+        "A real engine recalculated results or the absence is reported explicitly",
+        "The summary image was inspected for clipped labels and chart readability"
+      ]
+    },
+    {
+      "id": "xlsx-2",
+      "prompt": "Update the tax-rate input in the supplied macro-enabled budget template from 7% to 7.5%. Keep everything else, including its hidden lookup sheet, names, charts, external links and macros. Do not run macros or refresh links. Deliver an edited copy and explain what you checked.",
+      "expected_output": "A targeted XLSM edit preserving the source. The agent inventories advanced features, retains the macro extension, compares macro binary and external link targets, checks formula references, and uses a preservation-capable route or states unsupported fidelity rather than silently dropping features.",
+      "files": [],
+      "fixture_requirements": [
+        "Macro-enabled budget template with synthetic non-executable VBA payload, chart, named tax input, hidden lookup sheet and synthetic external link; package fixture supplied by the evaluation runner"
+      ],
+      "assertions": [
+        "Original bytes unchanged",
+        "Only intended tax input changes semantically",
+        "No macro execution or external-link refresh",
+        "Preservation claims have evidence; unsupported features produce an explicit limitation"
+      ]
+    },
+    {
+      "id": "xlsx-3",
+      "prompt": "Import customer records into Excel and also give me a CSV for people to open in a spreadsheet. IDs 00123 and 00456 must keep their zeros. The notes include =HYPERLINK(\"https://example.invalid\",\"click\") and a value beginning with a tab then =1+1. Keep them as customer text. Explain any export changes.",
+      "expected_output": "A text-safe XLSX preserving IDs and untrusted strings, plus a CSV under an explicit neutralization policy or an explained safe alternative if exact bytes conflict with safe spreadsheet opening. CSV quoting alone is not presented as formula protection.",
+      "files": [],
+      "assertions": [
+        "Imported notes reload as text, not formula cells",
+        "Leading zeros preserved",
+        "Tab-prefixed formula risk handled",
+        "CSV mitigation and any changed raw values disclosed"
+      ]
+    },
+    {
+      "id": "pptx-1",
+      "prompt": "Create an editable three-slide board update: decision requested, performance, and next steps. Performance data: Q1 72%, Q2 81%, Q3 88% on-time delivery. Use a native editable chart with a 0–100% axis and add speaker notes explaining the metric. Render and inspect all slides if tools permit.",
+      "expected_output": "A three-slide PPTX with editable text and chart, accurate values and visible labels, notes, and honest visual QA evidence.",
+      "files": [],
+      "assertions": [
+        "The PPTX contains exactly three slides.",
+        "A native chart contains 72, 81, 88 (or consistently scaled fractions) and correctly formatted percentage labels.",
+        "The chart axis and the data scale agree.",
+        "Speaker notes explain the metric.",
+        "Every slide was visually inspected or the answer explicitly identifies the unverified check."
+      ]
+    },
+    {
+      "id": "pptx-2",
+      "prompt": "Update the attached investor-update.pptx: replace the ARR figure on slide 2 with USD 1.4 million and update its speaker note. Preserve slide order, masters, existing chart workbooks, hyperlinks, and the other slides. Save a new file and show what was checked.",
+      "expected_output": "A focused editable update retaining the source structure and unmodified content, with preservation checks and any unsupported feature limitation.",
+      "files": [],
+      "fixture_contract": "Provide an original deck with at least four slides, custom layout, native chart workbook, slide-2 ARR figure and note, and a hyperlink.",
+      "assertions": [
+        "The original file is unchanged.",
+        "Only the requested ARR content and note change semantically.",
+        "Chart workbook, hyperlink targets and master/layout relationships remain present.",
+        "No whole-slide rasterization replaces editable content."
+      ]
+    },
+    {
+      "id": "pptx-3",
+      "prompt": "Repair the attached training-deck.pptx. Slide 1 has a long paragraph clipped inside a box; slide 2 has a rotated label outside the slide; slide 3 has overlapping table and footer. Keep all facts and editable content. Do not just shrink everything. Render and inspect every slide.",
+      "expected_output": "A repaired editable deck, or an honest visual-tool blocker; no claim that the bounding-box script alone found every defect.",
+      "files": [],
+      "fixture_contract": "Provide a three-slide original deck with the stated internal overflow, rotated extents, and overlap defects.",
+      "assertions": [
+        "All original facts remain in slides or appropriate speaker notes.",
+        "The answer recognizes that top-level geometry checks cannot certify text fit or overlap.",
+        "Rendered images are actually viewed before claiming visual repairs are verified.",
+        "The output remains editable and does not solve all overflow by unreadable text shrinking."
+      ]
+    },
+    {
+      "id": "pdf-1",
+      "prompt": "Create a polished two-page PDF briefing for a customer support team. Include a summary, a 35-row incident table with repeated headings, recommendations, and page numbers. Customer names contain accented characters and the notes include the literal text <urgent>. Deliver the PDF and inspect its layout.",
+      "expected_output": "A readable PDF with escaped literal text, correct glyphs, deliberate pagination and repeated table headers. The agent renders and visually inspects every page, revising overflow instead of claiming a successful save proves layout quality.",
+      "files": [],
+      "assertions": [
+        "Literal <urgent> appears as text",
+        "Accented characters render correctly",
+        "Table rows are complete and headers repeat",
+        "Actual page images inspected; page count requirement checked"
+      ]
+    },
+    {
+      "id": "pdf-2",
+      "prompt": "From the supplied three-page PDF, keep pages 3 then 1. Rotate the second output page clockwise 90 degrees and fill its customer_name field with Ada Lovelace. Keep the form editable and make sure the entered name is visible. Return a new PDF without changing my original.",
+      "expected_output": "Two pages in the requested order with correct rotation, a retained AcroForm field containing Ada Lovelace and a visible generated appearance. Both pages are rendered and inspected. The source is unchanged.",
+      "files": [],
+      "fixture_requirements": [
+        "Three labelled pages with a customer_name AcroForm text field on original page 1"
+      ],
+      "assertions": [
+        "Page order is original 3 then 1",
+        "Second page rotation is 90 degrees",
+        "Field value and editability are preserved",
+        "Rendered appearance visibly contains Ada Lovelace",
+        "Original bytes unchanged"
+      ]
+    },
+    {
+      "id": "pdf-3",
+      "prompt": "This scanned contract has a digital-signature field. Make it searchable and remove a confidential account number securely. I need to know whether the signature remains valid. Do not just cover the number with a rectangle.",
+      "expected_output": "The agent identifies OCR, secure-redaction and signature validation as separate requirements. It uses available capable tools with independent checks or reports specific unavailable capabilities; it preserves the original and never claims a field means a valid signature or an overlay means secure removal.",
+      "files": [],
+      "fixture_requirements": [
+        "Synthetic scanned contract with a visible test account number, signature field and separate embedded text/metadata occurrence of that number"
+      ],
+      "assertions": [
+        "Original preserved",
+        "OCR accuracy checked against visible source",
+        "No overlay-only redaction claim",
+        "No cryptographic-validity claim based merely on signature-field presence",
+        "Unavailable specialist checks are explicit"
+      ]
+    }
+  ]
+}

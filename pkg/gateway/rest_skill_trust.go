@@ -100,6 +100,9 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: update skill trust", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}
