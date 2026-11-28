@@ -51,6 +51,11 @@ package systools_test
 // scenario "Performance values cannot be changed around Settings" (refused
 // "with a message naming Settings → Limits or PUT /api/v1/performance").
 // Expected values come from the spec, never from the tool's current output.
+//
+// Superseded in part by the Skills & Tools spec (#1963, C-22 row 3): D-16
+// rows 7 and 8 and the tools.manifest.compressed parity row keep their
+// refusal but now expect c22RetiredToolLoadingRefusal and no Settings path;
+// the agents.defaults.max_tool_iterations rows are unchanged.
 
 import (
 	"bytes"
@@ -68,6 +73,16 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"gopkg.in/yaml.v3"
 )
+
+// c22RetiredToolLoadingRefusal is the refusal text the Skills & Tools spec
+// (docs/internal/specs/skills-tools-redesign-spec.md: C-6, C-21 "retired
+// manifest switches" row, C-22 row 3 "Moves the guard", BDD S-44) gives
+// set_config for the retired tool-loading key tools.manifest.compressed. It
+// supersedes the Settings spec's "Settings → Limits" wording for that key
+// (D-16 rows 7 and 8): the key stays refused, only the text and the path it
+// names move. The Performance row for agents.defaults.max_tool_iterations is
+// not retired and keeps its Settings wording.
+const c22RetiredToolLoadingRefusal = "This setting was replaced by levels in Skills & Tools."
 
 func TestSetConfig_RefusesPerformanceValues(t *testing.T) {
 	t.Run("D16 row 5: performance.max_parallel_agents is an unknown section", func(t *testing.T) {
@@ -107,43 +122,52 @@ func TestSetConfig_RefusesPerformanceValues(t *testing.T) {
 		}
 	})
 
-	t.Run("D16 row 7: tools.manifest.compressed is newly refused, message names Settings → Limits", func(t *testing.T) {
+	t.Run("D16 row 7: tools.manifest.compressed is refused with the C-22 text, not the retired Settings path", func(t *testing.T) {
 		deps, cfg := newTestDeps(t)
 		if !cfg.Tools.Manifest.Compressed {
 			t.Fatalf("fixture: DefaultConfig().Tools.Manifest.Compressed must be true (pkg/config pins this default)")
 		}
 		res := systools.NewConfigSetTool(deps).Execute(context.Background(),
 			map[string]any{"key": "tools.manifest.compressed", "value": false})
-		// RED: the spec's new refusal (FR-100, D-16 row 7). Today tools. is a
-		// writable prefix and the value guard watches only agents.defaults.
+		// Re-aimed to the Skills & Tools spec (C-22 row 3, C-6, S-44): the
+		// refusal of D-16 row 7 stays; its text becomes "This setting was
+		// replaced by levels in Skills & Tools." and it no longer names Settings.
 		if !res.IsError {
-			t.Fatalf("RED (D-16 row 7, FR-100): set_config accepted tools.manifest.compressed — "+
-				"the #936 refusal does not exist yet; required: refusal whose message names Settings → Limits. Got: %s", res.ForLLM)
+			t.Fatalf("D-16 row 7 / C-22: set_config accepted tools.manifest.compressed — the key must stay refused, "+
+				"now with the text %q. Got: %s", c22RetiredToolLoadingRefusal, res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "Settings → Limits") {
-			t.Errorf("refusal must name Settings → Limits (spec D-16 row 7): %s", res.ForLLM)
+		if !strings.Contains(res.ForLLM, c22RetiredToolLoadingRefusal) {
+			t.Errorf("refusal must carry the C-22 text %q: %s", c22RetiredToolLoadingRefusal, res.ForLLM)
+		}
+		if strings.Contains(res.ForLLM, "Settings →") {
+			t.Errorf("refusal must not name the retired Settings path (C-22 moved the guard): %s", res.ForLLM)
 		}
 		if !cfg.Tools.Manifest.Compressed {
 			t.Errorf("refused write changed the config: Compressed must stay true")
 		}
 	})
 
-	t.Run("D16 row 8: parent tools.manifest is refused at or under the key", func(t *testing.T) {
+	t.Run("D16 row 8: parent tools.manifest is refused at or under the key, with the C-22 text", func(t *testing.T) {
 		deps, cfg := newTestDeps(t)
 		if !cfg.Tools.Manifest.Compressed {
 			t.Fatalf("fixture: DefaultConfig().Tools.Manifest.Compressed must be true")
 		}
 		res := systools.NewConfigSetTool(deps).Execute(context.Background(),
 			map[string]any{"key": "tools.manifest", "value": map[string]any{}})
-		// RED: D-16 row 8 ("refused — at or under the key"): a write at the
-		// parent of a performance-only key is refused too, whatever the value
-		// carries.
+		// Re-aimed to the Skills & Tools spec (C-22 row 3): D-16 row 8
+		// ("refused — at or under the key") stays — a write at the parent of
+		// the retired key is refused too, whatever the value carries — and the
+		// refusal carries the C-22 text instead of pointing at Settings.
 		if !res.IsError {
-			t.Fatalf("RED (D-16 row 8, FR-100): set_config accepted a write AT tools.manifest, the parent of a "+
-				"performance-only key — required by the spec: refused at or under the key. Got: %s", res.ForLLM)
+			t.Fatalf("D-16 row 8 / C-22: set_config accepted a write AT tools.manifest, the parent of a "+
+				"retired tool-loading key — required: refused at or under the key, with the text %q. Got: %s",
+				c22RetiredToolLoadingRefusal, res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "Settings →") {
-			t.Errorf("refusal must point at Settings (scenario: names Settings → Limits or PUT /api/v1/performance): %s", res.ForLLM)
+		if !strings.Contains(res.ForLLM, c22RetiredToolLoadingRefusal) {
+			t.Errorf("refusal must carry the C-22 text %q: %s", c22RetiredToolLoadingRefusal, res.ForLLM)
+		}
+		if strings.Contains(res.ForLLM, "Settings →") {
+			t.Errorf("refusal must not name the retired Settings path (C-22 moved the guard): %s", res.ForLLM)
 		}
 		if !cfg.Tools.Manifest.Compressed {
 			t.Errorf("refused write changed the config: Compressed must stay true")
@@ -816,7 +840,7 @@ func refusalListingViolations(listed []string, rows []guardRow) []string {
 
 // guardRow is one driven row of the FR-101 guard. wantInRefusal pins a
 // refusal family ("unknown config key", "not writable via this tool",
-// "Settings → Limits", "Settings →"); an empty wantInRefusal marks a setter
+// c22RetiredToolLoadingRefusal, "Settings →"); an empty wantInRefusal marks a setter
 // row whose receipt JSON is verified instead. value is a write that would
 // change the stored value — the threat the refusals exist for (an agent or
 // a stolen token raising its own limits, or deleting data on a schedule).
@@ -855,7 +879,7 @@ func allGuardRows() []guardRow {
 		{"planning.goal_reminder_quiet_seconds", float64(45), "unknown config key"},
 		{"planning.goal_stalled_checkin_enabled", true, "unknown config key"},
 		{"planning.goal_stalled_checkin_minutes", float64(30), "unknown config key"},
-		{"tools.manifest.compressed", false, "Settings → Limits"},
+		{"tools.manifest.compressed", false, c22RetiredToolLoadingRefusal},
 		{"agents.defaults.max_tool_iterations", float64(900), "Settings →"},
 
 		// The second C-7 table's listed user-only reasons (team-lead ruling
@@ -1046,6 +1070,11 @@ func TestSettingsAgentWriteParity(t *testing.T) {
 				}
 				if !strings.Contains(res.ForLLM, tc.wantInRefusal) {
 					t.Errorf("refusal for %q must contain %q: %s", tc.key, tc.wantInRefusal, res.ForLLM)
+				}
+				// C-22: a retired tool-loading key's refusal says "replaced by
+				// levels in Skills & Tools" and never names the retired Settings path.
+				if tc.wantInRefusal == c22RetiredToolLoadingRefusal && strings.Contains(res.ForLLM, "Settings →") {
+					t.Errorf("refusal for %q must not name the retired Settings path (C-22 moved the guard): %s", tc.key, res.ForLLM)
 				}
 				// R3-02: after a refusal, the state is unchanged. Replaces the
 				// old two-field spot check (tools.manifest.compressed and
