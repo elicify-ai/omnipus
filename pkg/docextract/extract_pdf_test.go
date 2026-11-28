@@ -290,54 +290,89 @@ func makeCyclicPageTreePDF(t *testing.T) []byte {
 	return pdf
 }
 
-// TestExtractBytes_PDFCyclicPageTreeDefaultBudgetTimesOut — behavioural proof
-// for the cyclic page-tree hang, written WITHOUT the (not yet existing)
-// pdfExtractTimeout variable so the package still compiles before the fix:
-// today this call never returns and the go-test -timeout kills the binary;
-// after the decided fix it must fail on the default budget with the exact
-// timeout reason. Takes up to the default budget (15s), so it skips under
-// -short. Placed before the budget-shortened tests, which reset the stuck-cap
-// state themselves.
-func TestExtractBytes_PDFCyclicPageTreeDefaultBudgetTimesOut(t *testing.T) {
-	if testing.Short() {
-		t.Skip("default-budget wait (up to 15s) — skipped under -short")
-	}
-	pdf := makeCyclicPageTreePDF(t)
+// pdfTimeoutReason is the exact reason of a parse that outlives its budget.
+const pdfTimeoutReason = "pdf extraction timed out (the file may be malformed)"
 
-	txt, ok, reason := ExtractBytes(pdf, "", "cyclic.pdf")
-	if ok {
-		t.Fatalf("expected cyclic page tree extraction to fail on the default budget, got ok=true text=%q", txt)
-	}
-	if reason != "pdf extraction timed out (the file may be malformed)" {
-		t.Fatalf("expected the exact timeout reason, got %q", reason)
-	}
-	if txt != "" {
-		t.Fatalf("expected no text from a timed-out extraction, got %q", txt)
-	}
+// holdParseInFlight runs one extraction of a real, valid PDF behind a
+// gatedReaderAt that stays blocked, so the parse never finishes inside the
+// budget: the deterministic way to reach the timeout, no-leak and stuck-cap
+// paths now that the bounded #1968 parser rejects the cyclic page tree before
+// any parse time is spent. The gate is released (and the late parse allowed to
+// finish and hand back its slot) when the test ends.
+func holdParseInFlight(t *testing.T, venue []byte) (string, bool, string) {
+	t.Helper()
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	return extractPDF(&gatedReaderAt{
+		data: bytes.NewReader(venue), release: release, starts: &atomic.Int32{},
+	}, int64(len(venue)))
 }
 
-// TestExtractBytes_PDFCyclicPageTreeTimesOutWithinBudget — the decided fix,
-// requirement (a): with pdfExtractTimeout shortened to 300ms, ExtractBytes on
-// the cyclic page tree must return well within 5s with ok=false, no text, and
-// the exact timeout reason from the fix decision ("pdf extraction timed out
-// (the file may be malformed)"). RED today at compile time: pdfExtractTimeout
-// does not exist yet (the team lead adds it with the fix).
-func TestExtractBytes_PDFCyclicPageTreeTimesOutWithinBudget(t *testing.T) {
-	orig := pdfExtractTimeout
-	pdfExtractTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { pdfExtractTimeout = orig })
+// settleHeldParses runs as the LAST cleanup of a test that held parses: the
+// holds are released by then, so it waits until the late parses have handed
+// their slots back (waitForStuckZero, waitForAllSlotsReleased) before the next
+// test starts from full capacity.
+func settleHeldParses(t *testing.T) {
+	t.Helper()
+	waitForStuckZero(t, 5*time.Second)
+	waitForAllSlotsReleased(t, 2*time.Second)
 	resetPDFStuckForTest()
+}
 
+// TestExtractBytes_PDFCyclicPageTreeIsRejectedFastBySafetyLimits - #1968: the
+// bounded parser refuses the self-referencing page tree before parsing any
+// further, so ExtractBytes returns at once (no budget wait, no goroutine left
+// stuck, no slot held) with ok=false, no text and the typed reason naming the
+// limit. This replaces the #1959 expectation that the same file ends in the
+// timeout reason.
+func TestExtractBytes_PDFCyclicPageTreeIsRejectedFastBySafetyLimits(t *testing.T) {
+	resetPDFStuckForTest()
+	t.Cleanup(resetPDFStuckForTest)
 	pdf := makeCyclicPageTreePDF(t)
+
 	start := time.Now()
 	txt, ok, reason := ExtractBytes(pdf, "", "cyclic.pdf")
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("extraction returned in %v, expected the 300ms budget to end it well within 5s", elapsed)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cyclic page tree must be rejected fast, took %v", elapsed)
 	}
+	if ok || txt != "" {
+		t.Fatalf("expected rejection with no text, got ok=%v text=%q", ok, txt)
+	}
+	const want = "pdf exceeds the parser's safety limits: pdf: structure exceeds parser safety bounds: page tree deeper than 256"
+	if reason != want {
+		t.Fatalf("expected the safety-limit reason\n%q\ngot\n%q", want, reason)
+	}
+	if got := pdfStuck.Load(); got != 0 {
+		t.Fatalf("a fast rejection must leave no stuck parse, pdfStuck = %d", got)
+	}
+	// The worker sends its result before its deferred slot release runs, so a
+	// bare len(pdfSlots) check can race with correct cleanup (PORT-SEC-3):
+	// wait for the release, and still fail if a token is never returned.
+	waitForAllSlotsReleased(t, 2*time.Second)
+	if got := len(pdfSlots); got != 0 {
+		t.Fatalf("a fast rejection must hold no slot, %d token(s) present", got)
+	}
+}
+
+// TestExtractBytes_PDFDefaultBudgetTimesOut - behavioural proof that a parse
+// which never finishes ends on the DEFAULT budget with the exact timeout
+// reason and no text. The never-finishing parse is a valid PDF behind a gated
+// reader (the cyclic file no longer gets that far, see the fast-rejection
+// test). Takes up to the default budget (15s), so it skips under -short.
+func TestExtractBytes_PDFDefaultBudgetTimesOut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("default-budget wait (up to 15s) - skipped under -short")
+	}
+	resetPDFStuckForTest()
+	t.Cleanup(func() { settleHeldParses(t) })
+
+	venue := makeSyntheticPDF(t, true, "Venue: Grand Hotel Amsterdam, 12 March")
+	txt, ok, reason := holdParseInFlight(t, venue)
 	if ok {
-		t.Fatalf("expected cyclic page tree extraction to fail, got ok=true text=%q", txt)
+		t.Fatalf("expected the gated parse to fail on the default budget, got ok=true text=%q", txt)
 	}
-	if reason != "pdf extraction timed out (the file may be malformed)" {
+	if reason != pdfTimeoutReason {
 		t.Fatalf("expected the exact timeout reason, got %q", reason)
 	}
 	if txt != "" {
@@ -345,27 +380,58 @@ func TestExtractBytes_PDFCyclicPageTreeTimesOutWithinBudget(t *testing.T) {
 	}
 }
 
-// TestExtractBytes_PDFCyclicTimeoutDoesNotLeakIntoNextExtraction — the decided
-// fix, requirement (b): right after a timed-out cyclic parse, a valid NUL-free
-// PDF must still extract its exact text — the timeout leaves no state that
-// corrupts or refuses the next extraction. RED today at compile time
-// (pdfExtractTimeout / resetPDFStuckForTest do not exist yet).
-func TestExtractBytes_PDFCyclicTimeoutDoesNotLeakIntoNextExtraction(t *testing.T) {
+// TestExtractBytes_PDFTimesOutWithinBudget - with pdfExtractTimeout shortened
+// to 300ms, an extraction whose parse never finishes must return well within
+// 5s with ok=false, no text and the exact timeout reason. The never-finishing
+// parse is held by a gatedReaderAt.
+func TestExtractBytes_PDFTimesOutWithinBudget(t *testing.T) {
 	orig := pdfExtractTimeout
 	pdfExtractTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { pdfExtractTimeout = orig })
 	resetPDFStuckForTest()
-
-	cyclic := makeCyclicPageTreePDF(t)
-	if _, ok, reason := ExtractBytes(cyclic, "", "cyclic.pdf"); ok || reason != "pdf extraction timed out (the file may be malformed)" {
-		t.Fatalf("expected the cyclic PDF to time out first, got ok=%v reason=%q", ok, reason)
-	}
+	t.Cleanup(func() { settleHeldParses(t) })
 
 	venue := makeSyntheticPDF(t, true, "Venue: Grand Hotel Amsterdam, 12 March")
 	start := time.Now()
+	txt, ok, reason := holdParseInFlight(t, venue)
+	elapsed := time.Since(start)
+	if elapsed > 5*time.Second {
+		t.Fatalf("extraction returned in %v, expected the 300ms budget to end it well within 5s", elapsed)
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("extraction returned in %v, before the 300ms budget: the gate did not hold the parse", elapsed)
+	}
+	if ok {
+		t.Fatalf("expected the gated parse to fail, got ok=true text=%q", txt)
+	}
+	if reason != pdfTimeoutReason {
+		t.Fatalf("expected the exact timeout reason, got %q", reason)
+	}
+	if txt != "" {
+		t.Fatalf("expected no text from a timed-out extraction, got %q", txt)
+	}
+}
+
+// TestExtractBytes_PDFTimeoutDoesNotLeakIntoNextExtraction - requirement (b):
+// right after a timed-out parse, a valid NUL-free PDF must still extract its
+// exact text: the timeout leaves no state that corrupts or refuses the next
+// extraction. The timed-out parse is held by a gatedReaderAt.
+func TestExtractBytes_PDFTimeoutDoesNotLeakIntoNextExtraction(t *testing.T) {
+	orig := pdfExtractTimeout
+	pdfExtractTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { pdfExtractTimeout = orig })
+	resetPDFStuckForTest()
+	t.Cleanup(func() { settleHeldParses(t) })
+
+	venue := makeSyntheticPDF(t, true, "Venue: Grand Hotel Amsterdam, 12 March")
+	if _, ok, reason := holdParseInFlight(t, venue); ok || reason != pdfTimeoutReason {
+		t.Fatalf("expected the gated parse to time out first, got ok=%v reason=%q", ok, reason)
+	}
+
+	start := time.Now()
 	txt, ok, reason := ExtractBytes(venue, "", "venue.pdf")
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("valid extraction after a timeout took %v — timed-out state leaked into the next parse", elapsed)
+		t.Fatalf("valid extraction after a timeout took %v - timed-out state leaked into the next parse", elapsed)
 	}
 	if !ok {
 		t.Fatalf("expected the valid PDF to extract right after a timeout, got ok=false reason=%q", reason)
@@ -375,34 +441,34 @@ func TestExtractBytes_PDFCyclicTimeoutDoesNotLeakIntoNextExtraction(t *testing.T
 	}
 }
 
-// TestExtractBytes_PDFStuckParseCapRefusesFurtherExtractions — the decided
-// fix, requirement (c): with a 100ms budget, two cyclic parses time out and
-// stay stuck; the third extraction must be refused immediately (under 50ms,
-// no new goroutine) with the exact stuck-cap reason ("pdf extraction
-// unavailable: earlier extractions are still stuck"). resetPDFStuckForTest is
-// the test-only helper the team lead provides with the fix to reset the
-// package cap state so the three-call script starts from a clean slate; RED
-// today at compile time (neither symbol exists yet).
+// TestExtractBytes_PDFStuckParseCapRefusesFurtherExtractions - requirement
+// (c): with a 100ms budget, two gated parses time out and stay stuck; the
+// third extraction must be refused immediately (under 50ms, no new goroutine)
+// with the exact stuck-cap reason ("pdf extraction unavailable: earlier
+// extractions are still stuck"). The third call is a perfectly valid PDF, so
+// only the cap can refuse it. resetPDFStuckForTest gives the three-call script
+// a clean slate.
 func TestExtractBytes_PDFStuckParseCapRefusesFurtherExtractions(t *testing.T) {
 	orig := pdfExtractTimeout
 	pdfExtractTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { pdfExtractTimeout = orig })
 	resetPDFStuckForTest()
+	t.Cleanup(func() { settleHeldParses(t) })
 
-	pdf := makeCyclicPageTreePDF(t)
+	venue := makeSyntheticPDF(t, true, "Venue: Grand Hotel Amsterdam, 12 March")
 	for i := 1; i <= 2; i++ {
 		start := time.Now()
-		_, ok, reason := ExtractBytes(pdf, "", "cyclic.pdf")
+		_, ok, reason := holdParseInFlight(t, venue)
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
 			t.Fatalf("stuck parse %d returned in %v, expected the 100ms budget to end it", i, elapsed)
 		}
-		if ok || reason != "pdf extraction timed out (the file may be malformed)" {
+		if ok || reason != pdfTimeoutReason {
 			t.Fatalf("stuck parse %d: expected the exact timeout reason, got ok=%v reason=%q", i, ok, reason)
 		}
 	}
 
 	start := time.Now()
-	_, ok, reason := ExtractBytes(pdf, "", "cyclic.pdf")
+	_, ok, reason := ExtractBytes(venue, "", "venue.pdf")
 	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
 		t.Fatalf("cap refusal took %v, expected an immediate refusal under 50ms", elapsed)
 	}

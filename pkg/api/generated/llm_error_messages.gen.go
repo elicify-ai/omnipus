@@ -88,6 +88,7 @@ var LLMErrorCodes = []string{
 	"goal_state_unavailable",
 	"external_cli_not_found",
 	"external_cli_invalid_config",
+	"model_list_unavailable",
 	"delegation_not_resumable",
 	"unknown",
 }
@@ -138,6 +139,7 @@ var LLMErrorUserMessages = map[string]string{
 	"goal_state_unavailable":         "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment.",
 	"external_cli_not_found":         "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
 	"external_cli_invalid_config":    "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
+	"model_list_unavailable":         "PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
 	"delegation_not_resumable":       "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation.",
 	"unknown":                        "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
@@ -188,6 +190,7 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"goal_state_unavailable":         LLMErrorAttributionAmbiguous,
 	"external_cli_not_found":         LLMErrorAttributionConfig,
 	"external_cli_invalid_config":    LLMErrorAttributionConfig,
+	"model_list_unavailable":         LLMErrorAttributionProduct,
 	"delegation_not_resumable":       LLMErrorAttributionAmbiguous,
 	"unknown":                        LLMErrorAttributionUnknown,
 }
@@ -205,6 +208,7 @@ var LLMErrorProviderMessages = map[string]string{
 	"bad_model":                 "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings.",
 	"provider_request_rejected": "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
 	"model_route_unavailable":   "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
+	"model_list_unavailable":    "PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
 }
 
 // LLMErrorMessageVariants maps the codes that carry catalogue variants to

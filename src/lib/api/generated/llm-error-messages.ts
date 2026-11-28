@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "delegation_not_resumable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "external_cli_invalid_args", "external_cli_model_unavailable", "external_cli_needs_signin", "external_cli_failed", "external_cli_turn_limit", "external_cli_upstream_refused", "provider_error", "agent_request_limit", "tool_assembly_duplicate", "transcript_save_failed", "goal_state_unavailable", "external_cli_not_found", "external_cli_invalid_config", "model_list_unavailable", "delegation_not_resumable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -84,6 +84,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   goal_state_unavailable: "I couldn't read the goal for this conversation, so I didn't continue working on it. Try again in a moment.",
   external_cli_not_found: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
   external_cli_invalid_config: "I couldn't start {cli}: the program could not be launched. Check the CLI worker's program path in Settings.",
+  model_list_unavailable: "PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
   delegation_not_resumable: "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
@@ -133,6 +134,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   goal_state_unavailable: "ambiguous",
   external_cli_not_found: "config",
   external_cli_invalid_config: "config",
+  model_list_unavailable: "product",
   delegation_not_resumable: "ambiguous",
   unknown: "unknown",
 }
@@ -152,6 +154,7 @@ export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {
   bad_model: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings.",
   provider_request_rejected: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
   model_route_unavailable: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
+  model_list_unavailable: "PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the \"catalog\" error in the log.",
 }
 
 /**

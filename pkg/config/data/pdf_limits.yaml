@@ -1,0 +1,155 @@
+# Engine-owned inline PDF limits (#1968), research 2026-11-22, config ownership
+# decision 2026-11-25. Catalogue data supplies only the pdf input modality.
+# Bytes are literal: MB = 1,000,000; MiB = 1,048,576. Unstated fields inherit.
+# [ASSUMED] marks founder-accepted values without an official page limit.
+# Equal researched model rows are represented by family prefixes, including
+# the regional Bedrock and OpenRouter alias ids present in the research seed.
+# No whole-request default: measure only where a route states a ceiling.
+default:
+  max_file_bytes: 50000000
+  max_total_file_bytes: 50000000
+  max_pages_per_file: 100
+  max_documents_per_request: 5
+
+overrides:
+  # OpenAI PDF files guide; 100 pages per request is [ASSUMED].
+  - provider: openai
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  # Anthropic API overview / PDF support. 600 pages needs a 1M-context request;
+  # use the stricter 100-page ceiling because we do not request that context.
+  - provider: anthropic
+    max_request_bytes: 128000000
+    max_pages_per_request: 100
+  # Gemini API document-processing / file-input-methods.
+  - provider: google
+    max_pages_per_file: 1000
+    max_pages_per_request: 1000
+    max_request_bytes: 100000000
+  # xAI documents only URL/file-id delivery; inline base64 remains unverified.
+  - provider: xai
+    inline_pdf: false
+  # DeepSeek document parsing turns uploads into text, not inline PDF input.
+  - provider: deepseek
+    inline_pdf: false
+  # Bedrock Converse Message / inference-api-restrictions: every model shares
+  # the file, document-count and body ceilings; only Claude has the page row.
+  - provider: amazon-bedrock
+    max_file_bytes: 4500000
+    max_documents_per_message: 5
+    max_request_bytes: 20000000
+  - provider: amazon-bedrock
+    model: anthropic.claude-*
+    max_pages_per_request: 100
+  - provider: amazon-bedrock
+    model: in.anthropic.claude-*
+    max_pages_per_request: 100
+  # Vertex document-understanding: endpoint migration state unknown, so keep
+  # the conservative non-migrated 50 MiB / 1,000-page limits for Gemini.
+  - provider: google-vertex
+    max_file_bytes: 52428800
+    max_pages_per_file: 1000
+  # Anthropic overview: Claude on Vertex also appears under google-vertex.
+  # 20 MB decoded leaves base64 headroom under the 30 MB encoded ceiling.
+  - provider: google-vertex
+    model: claude-*
+    max_file_bytes: 20000000
+    max_total_file_bytes: 20000000
+    max_request_bytes: 30000000
+    max_pages_per_request: 100
+  - provider: google-vertex-anthropic
+    max_file_bytes: 20000000
+    max_total_file_bytes: 20000000
+    max_request_bytes: 30000000
+    max_pages_per_request: 100
+  # Azure Foundry OpenAI Responses file-input docs; request pages [ASSUMED].
+  - provider: azure
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  - provider: azure-cognitive-services
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  # Anthropic API overview: Claude on Foundry, 20 MB decoded / 32 MB encoded.
+  - provider: azure
+    model: claude-*
+    max_file_bytes: 20000000
+    max_total_file_bytes: 20000000
+    max_request_bytes: 32000000
+  - provider: azure-cognitive-services
+    model: claude-*
+    max_file_bytes: 20000000
+    max_total_file_bytes: 20000000
+    max_request_bytes: 32000000
+  # Z.ai chat-completion file_data route. Request pages are [ASSUMED].
+  - provider: zai
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  - provider: zhipuai
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  - provider: zai-coding-plan
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  - provider: zhipuai-coding-plan
+    max_file_bytes: 50000000
+    max_total_file_bytes: 50000000
+    max_pages_per_file: 100
+    max_documents_per_request: 5
+    max_pages_per_request: 100 # [ASSUMED]
+  # Kimi's Files API parses uploads to text; no inline PDF route.
+  - provider: moonshotai
+    inline_pdf: false
+  - provider: moonshotai-cn
+    inline_pdf: false
+  - provider: kimi-code-plan-cn
+    inline_pdf: false
+  - provider: kimi-code-plan-global
+    inline_pdf: false
+  - provider: kimi-for-coding
+    inline_pdf: false
+  # Perplexity Agent working-with-files: 50 MiB combined, 72 MiB JSON body.
+  - provider: perplexity-agent
+    max_total_file_bytes: 52428800
+    max_documents_per_request: 30
+    max_request_bytes: 75497472
+  # Meta documents Files API / URL delivery, not inline PDF.
+  - provider: meta
+    inline_pdf: false
+  # OpenRouter forwards upstream limits [INFERENCE]; upstream-family rows
+  # retain the same values for canonical ids and the researched alias ids.
+  - provider: openrouter
+    model: anthropic/*
+    max_request_bytes: 128000000
+    max_pages_per_request: 100
+  - provider: openrouter
+    model: ~anthropic/*
+    max_request_bytes: 128000000
+    max_pages_per_request: 100
+  - provider: openrouter
+    model: x-ai/*
+    inline_pdf: false
+  - provider: openrouter
+    model: ~x-ai/*
+    inline_pdf: false
+  - provider: openrouter
+    model: meta-llama/*
+    inline_pdf: false
+  # No other provider/model override: use the engine default row.

@@ -123,3 +123,16 @@ token budget, zero LLM calls, deletes nothing on disk. The legacy LLM
 summariser (`maybeSummarize`, `summarizeSession`, `forceCompression`) is
 deleted — `window_trim_test.go` asserts those methods are never redefined.
 The sliding window is the authoritative history.
+
+## PDF presentation limits (#1968)
+
+`pdf_present.go::presentAttemptPDFs` reads the catalogue only for the exact
+provider/model's PDF modality, and resolves limits from the live config
+under the config read lock (`config.Config.ResolvePDFLimits`).
+`media_present.go::pdfNativeSupported` combines that capability with the
+resolved inline-route switch. No catalogue field supplies a PDF limit.
+
+The presenter still admits newest PDFs first, applies inclusive stated
+limits, and fits whole serialized bodies only when configured. Explicit
+zero is unlimited; missing quantities are not enforced. PDF tests supply
+limit fixtures through `config.PDFLimitsConfig`, not catalogue JSON.

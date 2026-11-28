@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -75,73 +73,55 @@ func newUploadPageAllowance() *uploadPageAllowance {
 	return &uploadPageAllowance{pages: uploadPagesPerRequest, bytes: previewRequestBudget}
 }
 
-// uploadPageJob is one uploaded PDF whose page images go into message msg:
-// the images at Media index mediaAt, the note inside injection injAt at
-// byte noteAt (between the offload line and the text).
-type uploadPageJob struct {
-	msg, mediaAt, injAt, noteAt int
-	localPath, name, dest       string
-	offErr                      error
-	limits                      catalog.ResizeLimits
-	turn                        bool // one of this turn's own uploads
-}
-
-// renderUploadPageJobs renders the jobs newest first within one request
-// allowance and places each one's images and note. Jobs are in request
-// order, so placing them in reverse keeps every earlier job's indices valid.
-// It returns the decoded bytes of the page images of this turn's uploads.
-func renderUploadPageJobs(ctx context.Context, jobs []uploadPageJob, media, injections [][]string) int {
-	allowance := newUploadPageAllowance()
-	turnBytes := 0
-	for j := len(jobs) - 1; j >= 0; j-- {
-		job := jobs[j]
-		pages := uploadPDFPageImagesWithin(ctx, allowance, job.localPath, job.name, job.limits)
-		m := media[job.msg]
-		media[job.msg] = append(m[:job.mediaAt:job.mediaAt], append(pages.images, m[job.mediaAt:]...)...)
-		inj := injections[job.msg][job.injAt]
-		injections[job.msg][job.injAt] = inj[:job.noteAt] + pages.note(job.dest, job.offErr) + inj[job.noteAt:]
-		if job.turn {
-			for _, img := range pages.images {
-				turnBytes += dataURLDecodedSize(img)
-			}
-		}
-	}
-	return turnBytes
-}
-
-// uploadPDFPageImages renders an uploaded PDF's first pages without a turn
-// (no Stop to follow) and with a request allowance of its own.
-func uploadPDFPageImages(localPath, name string, limits catalog.ResizeLimits) uploadPages {
-	return uploadPDFPageImagesWithin(context.Background(), newUploadPageAllowance(), localPath, name, limits)
-}
-
-// uploadPDFPageImagesWithin renders pages 1–10 of an uploaded PDF through
-// the shared preview service (same admission, limits, cache and sandbox as
-// preview_document) and resizes them to the model's image limits, taking
-// the images from the request's allowance. It runs under the turn's
-// context, so Stop ends it, and within uploadRenderTimeout (AD-6), not the
-// 120 s whole-call budget of preview_document.
-func uploadPDFPageImagesWithin(turnCtx context.Context, allowance *uploadPageAllowance, localPath, name string, limits catalog.ResizeLimits) uploadPages {
-	if allowance.pages <= 0 || allowance.bytes <= 0 {
-		return uploadPages{problem: fmt.Sprintf("newer uploads used this request's %d page images or %d MiB", uploadPagesPerRequest, previewRequestBudget>>20)}
-	}
+// uploadPDFPageImagesFrom renders pages 1–10 of an uploaded PDF's bytes
+// through the shared preview service (same admission, limits, cache and
+// sandbox as preview_document) and resizes them to the model's image
+// limits. It runs under the turn's context, so Stop ends it, and within
+// uploadRenderTimeout (AD-6), not the 120 s whole-call budget of
+// preview_document. The request allowance is applied by within.
+func uploadPDFPageImagesFrom(turnCtx context.Context, data []byte, name string, limits catalog.ResizeLimits) uploadPages {
 	ctx, cancel := context.WithTimeoutCause(turnCtx, uploadRenderTimeout, errUploadRenderTimeout)
 	defer cancel()
-	pages := renderUploadPages(ctx, allowance, localPath, name, limits)
+	pages := renderUploadPages(ctx, data, name, limits)
 	if len(pages.images) == 0 && errors.Is(context.Cause(ctx), errUploadRenderTimeout) {
 		pages.problem = fmt.Sprintf("page rendering did not finish within %d s", int(uploadRenderTimeout/time.Second))
 	}
 	return pages
 }
 
-func renderUploadPages(ctx context.Context, allowance *uploadPageAllowance, localPath, name string, limits catalog.ResizeLimits) uploadPages {
+// within takes the rendered images from the request's allowance, in page
+// order, and returns what this request sends.
+func (p uploadPages) within(allowance *uploadPageAllowance) uploadPages {
+	if len(p.images) == 0 {
+		return p
+	}
+	if allowance.pages <= 0 || allowance.bytes <= 0 {
+		return uploadPages{problem: fmt.Sprintf("newer uploads used this request's %d page images or %d MiB", uploadPagesPerRequest, previewRequestBudget>>20)}
+	}
+	out := uploadPages{first: p.first, pageCount: p.pageCount}
+	for k, img := range p.images {
+		size := dataURLDecodedSize(img)
+		if allowance.pages == 0 || size > allowance.bytes {
+			break
+		}
+		out.images = append(out.images, img)
+		out.last = p.first + k
+		allowance.pages--
+		allowance.bytes -= size
+	}
+	if len(out.images) == 0 {
+		out.problem = "the page images do not fit this model's image limits or this request's upload page allowance"
+	}
+	return out
+}
+
+func renderUploadPages(ctx context.Context, data []byte, name string, limits catalog.ResizeLimits) uploadPages {
 	svc := preview.Shared()
 	if svc == nil {
 		return uploadPages{problem: "document preview is not running"}
 	}
-	data, err := readUploadPDF(localPath)
-	if err != nil {
-		return uploadPages{problem: "the PDF could not be read (" + err.Error() + ")"}
+	if len(data) > preview.MaxInputBytes {
+		return uploadPages{problem: fmt.Sprintf("the PDF could not be read (larger than %d bytes)", preview.MaxInputBytes)}
 	}
 	adm, err := svc.Admit(ctx, false)
 	if err != nil {
@@ -164,16 +144,14 @@ func renderUploadPages(ctx context.Context, allowance *uploadPageAllowance, loca
 	}
 	out := uploadPages{pageCount: res.PageCount}
 	for _, page := range res.Pages {
-		if allowance.pages == 0 {
-			break
-		}
 		decoded, _, decErr := image.Decode(bytes.NewReader(page.PNG))
 		if decErr != nil {
 			logger.WarnCF("agent", "uploaded PDF page image invalid", map[string]any{"page": page.Number, "error": decErr.Error()})
 			break
 		}
 		normalized, rsErr := resize.ResizeToFit(decoded, limits)
-		if rsErr != nil || len(normalized.Data) > allowance.bytes {
+		if rsErr != nil {
+			logger.WarnCF("agent", "uploaded PDF page image cannot fit the model's image limits", map[string]any{"page": page.Number, "error": rsErr.Error()})
 			break
 		}
 		if len(out.images) == 0 {
@@ -181,27 +159,9 @@ func renderUploadPages(ctx context.Context, allowance *uploadPageAllowance, loca
 		}
 		out.last = page.Number
 		out.images = append(out.images, "data:"+normalized.Mime+";base64,"+base64.StdEncoding.EncodeToString(normalized.Data))
-		allowance.pages--
-		allowance.bytes -= len(normalized.Data)
 	}
 	if len(out.images) == 0 {
 		out.problem = "the page images do not fit this model's image limits or this request's upload page allowance"
 	}
 	return out
-}
-
-func readUploadPDF(localPath string) ([]byte, error) {
-	f, err := os.Open(localPath) // a resolved media-store path (already authorized)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, preview.MaxInputBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > preview.MaxInputBytes {
-		return nil, fmt.Errorf("larger than %d bytes", preview.MaxInputBytes)
-	}
-	return data, nil
 }

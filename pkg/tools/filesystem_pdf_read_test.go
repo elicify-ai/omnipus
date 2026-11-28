@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -118,18 +119,46 @@ func requireHeaderNULs(t *testing.T, pdf []byte, wantNUL bool) {
 // fixes its length at 38 characters with "Grand" at character offset 7.
 const venuePDFText = "Venue: Grand Hotel Amsterdam, 12 March"
 
-// assertExtractedPDFPage asserts the full documented extraction contract of
-// issue #1959 item 1: a [document: ...] header carrying the marker and the
-// character range "a-b of 38", the page body as the exact tail of the output,
-// and none of the raw PDF syntax ever leaking through as ordinary text.
-func assertExtractedPDFPage(t *testing.T, out, displayName, headerRange, body string) {
+// pdfNativeNoticeR1 is notice R1 of the #1968 spec (section 5.6), written out
+// here as the oracle rather than read from the production constant.
+const pdfNativeNoticeR1 = "[PDF: sent natively to models that support PDFs, within their limits, this turn only; later turns see this text]"
+
+var pdfCharsRangeRE = regexp.MustCompile(`chars (\d+)-(\d+) of (\d+)`)
+
+// assertExtractedPDFPage asserts the #1968 persisted text view (spec FR-8 and
+// section 5.6): the header line
+// "[document: <name> | extracted text | chars a-b of n | <pages> pages]" first,
+// the optional notice line (R1 for a native-capable read, "" for a paged read
+// that is never sent natively) directly before the page body, the body as the
+// exact tail of the output, and no raw PDF syntax. The range "a-b" is
+// inclusive (a header "chars 0-37 of 38" covers 38 characters), so the test
+// also checks b-a+1 equals the body's character count: header and body can
+// never drift apart.
+func assertExtractedPDFPage(t *testing.T, out, displayName, headerRange, body, notice string) {
 	t.Helper()
-	wantHeader := fmt.Sprintf("[document: %s | extracted text | %s]", displayName, headerRange)
-	if !strings.Contains(out, wantHeader) {
-		t.Fatalf("expected document header %q, got:\n%s", wantHeader, out)
+	wantHeader := fmt.Sprintf("[document: %s | extracted text | %s | 1 pages]", displayName, headerRange)
+	if !strings.HasPrefix(out, wantHeader+"\n") {
+		t.Fatalf("expected document header %q as the first line, got:\n%s", wantHeader, out)
 	}
-	if !strings.HasSuffix(out, "\n\n"+body) {
-		t.Fatalf("expected extracted page body %q as the output tail, got:\n%s", body, out)
+	wantTail := "\n" + body
+	if notice != "" {
+		wantTail = "\n" + notice + wantTail
+	}
+	if !strings.HasSuffix(out, wantTail) {
+		t.Fatalf("expected tail %q (notice then extracted page body), got:\n%s", wantTail, out)
+	}
+	if notice == "" && strings.Contains(out, "[PDF: sent natively") {
+		t.Fatalf("a paged read must not claim native sending, got:\n%s", out)
+	}
+	m := pdfCharsRangeRE.FindStringSubmatch(headerRange)
+	if m == nil {
+		t.Fatalf("test bug: header range %q has no chars a-b of n", headerRange)
+	}
+	var a, b int
+	fmt.Sscanf(m[1], "%d", &a)
+	fmt.Sscanf(m[2], "%d", &b)
+	if got := len([]rune(body)); b-a+1 != got {
+		t.Fatalf("header range %q covers %d characters but the body has %d", headerRange, b-a+1, got)
 	}
 	for _, banned := range []string{"%PDF-", "stream", "endobj", "FlateDecode", "[file: "} {
 		if strings.Contains(out, banned) {
@@ -138,6 +167,20 @@ func assertExtractedPDFPage(t *testing.T, out, displayName, headerRange, body st
 	}
 	if strings.ContainsRune(out, '�') {
 		t.Fatalf("U+FFFD replacement rune in output:\n%s", out)
+	}
+}
+
+// assertOneNativePDFItem asserts spec FR-7: an unpaged read of a %PDF- file
+// carries exactly one turn-private PDF item with the file's exact bytes.
+func assertOneNativePDFItem(t *testing.T, res *ToolResult, name string, raw []byte, wantText bool) {
+	t.Helper()
+	if len(res.InspectionPDFs) != 1 {
+		t.Fatalf("expected exactly one InspectionPDFs item, got %d", len(res.InspectionPDFs))
+	}
+	it := res.InspectionPDFs[0]
+	if it.Name != name || !bytes.Equal(it.Bytes, raw) || it.HasText != wantText {
+		t.Fatalf("item mismatch: name=%q bytes-equal=%v hasText=%v (want %q, true, %v)",
+			it.Name, bytes.Equal(it.Bytes, raw), it.HasText, name, wantText)
 	}
 }
 
@@ -159,7 +202,8 @@ func TestReadFile_PDFWithoutNULInHeaderReturnsExtractedText(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected PDF extraction to succeed, got error: %s", res.ForLLM)
 	}
-	assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 0-38 of 38", venuePDFText)
+	assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 0-37 of 38", venuePDFText, pdfNativeNoticeR1)
+	assertOneNativePDFItem(t, res, "invitation.pdf", pdf, true)
 }
 
 // TestReadFile_PDFWithNULInHeaderReturnsExtractedText — issue #1959 item 2:
@@ -178,7 +222,8 @@ func TestReadFile_PDFWithNULInHeaderReturnsExtractedText(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected PDF extraction to succeed, got error: %s", res.ForLLM)
 	}
-	assertExtractedPDFPage(t, res.ForLLM, "spec-nul.pdf", "chars 0-38 of 38", venuePDFText)
+	assertExtractedPDFPage(t, res.ForLLM, "spec-nul.pdf", "chars 0-37 of 38", venuePDFText, pdfNativeNoticeR1)
+	assertOneNativePDFItem(t, res, "spec-nul.pdf", pdf, true)
 }
 
 // TestReadFile_PDFSignatureDecidesNotFilename — issue #1959 item 3: the %PDF-
@@ -199,7 +244,8 @@ func TestReadFile_PDFSignatureDecidesNotFilename(t *testing.T) {
 			if res.IsError {
 				t.Fatalf("expected signature-routed PDF extraction to succeed, got error: %s", res.ForLLM)
 			}
-			assertExtractedPDFPage(t, res.ForLLM, name, "chars 0-38 of 38", venuePDFText)
+			assertExtractedPDFPage(t, res.ForLLM, name, "chars 0-37 of 38", venuePDFText, pdfNativeNoticeR1)
+			assertOneNativePDFItem(t, res, name, pdf, true)
 		})
 	}
 }
@@ -227,9 +273,12 @@ func TestReadFile_PDFPaginationUsesCharacterOffsets(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("mid page errored: %s", res.ForLLM)
 		}
-		assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 7-12 of 38", "Grand")
-		if !strings.Contains(res.ForLLM, "TRUNCATED") || !strings.Contains(res.ForLLM, "offset=12") {
-			t.Fatalf("expected TRUNCATED hint with continue offset=12, got:\n%s", res.ForLLM)
+		assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 7-11 of 38", "Grand", "")
+		if !strings.Contains(res.ForLLM, "more text follows") || !strings.Contains(res.ForLLM, "offset=12") {
+			t.Fatalf("expected a more-text-follows hint with continue offset=12, got:\n%s", res.ForLLM)
+		}
+		if len(res.InspectionPDFs) != 0 {
+			t.Fatalf("a paged read returns text only (spec FR-8), got %d PDF items", len(res.InspectionPDFs))
 		}
 	})
 
@@ -240,12 +289,12 @@ func TestReadFile_PDFPaginationUsesCharacterOffsets(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("final page errored: %s", res.ForLLM)
 		}
-		assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 12-38 of 38", " Hotel Amsterdam, 12 March")
-		if strings.Contains(res.ForLLM, "TRUNCATED") {
-			t.Fatalf("final page must not advertise truncation, got:\n%s", res.ForLLM)
+		assertExtractedPDFPage(t, res.ForLLM, "invitation.pdf", "chars 12-37 of 38", " Hotel Amsterdam, 12 March", "")
+		if strings.Contains(res.ForLLM, "more text follows") || strings.Contains(res.ForLLM, "re-read with offset") {
+			t.Fatalf("final page must not advertise more text, got:\n%s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "END OF DOCUMENT") {
-			t.Fatalf("expected end-of-document marker, got:\n%s", res.ForLLM)
+		if len(res.InspectionPDFs) != 0 {
+			t.Fatalf("a paged read returns text only (spec FR-8), got %d PDF items", len(res.InspectionPDFs))
 		}
 	})
 
@@ -256,22 +305,31 @@ func TestReadFile_PDFPaginationUsesCharacterOffsets(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("past-end page errored: %s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "chars 38-38 of 38") {
-			t.Fatalf("expected clamped header chars 38-38 of 38, got:\n%s", res.ForLLM)
+		// The spec does not fix the past-the-end wording: assert the
+		// invariants. The header names the requested offset and the total,
+		// no document text is returned and nothing invites a further read.
+		if !strings.Contains(res.ForLLM, "[document: invitation.pdf | extracted text |") ||
+			!strings.Contains(res.ForLLM, "offset 1000") || !strings.Contains(res.ForLLM, "of 38") {
+			t.Fatalf("expected a header naming offset 1000 and total 38, got:\n%s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "END OF DOCUMENT") {
-			t.Fatalf("expected end-of-document marker, got:\n%s", res.ForLLM)
+		for _, banned := range []string{"Venue", "Grand", "March", "re-read with offset", "more text follows"} {
+			if strings.Contains(res.ForLLM, banned) {
+				t.Fatalf("past-the-end page must carry no text or continuation (%q found):\n%s", banned, res.ForLLM)
+			}
 		}
 	})
 }
 
-// TestReadFile_PDFWithNoExtractableTextErrors — issue #1959 item 5: a PDF
-// that yields no text must return IsError=true with the structured
-// "binary file detected: could not extract document text (...)" message —
-// never raw PDF syntax or stream bytes as ordinary text. Both fixtures are
-// NUL-free, which is exactly the path that today falls through to the raw
-// read (fails today).
-func TestReadFile_PDFWithNoExtractableTextErrors(t *testing.T) {
+// TestReadFile_PDFWithNoExtractableTextReturnsNoticeNotError - #1968 FR-7/FR-8
+// (supersedes the #1959 item-5 error expectation, which the spec replaces on
+// purpose): a %PDF- file the local parser cannot read, or that has no text,
+// is NOT an error. The persisted result is a notice (N3 for "could not be read
+// locally", N1 for "no extractable text") followed by R1, and the file still
+// rides as one native item with its exact bytes so a PDF-capable model can
+// read it. Kept from #1959: raw PDF bytes and file lines never appear in the
+// output. With offset/length there is no text to page, so E2/E3 are errors
+// and no item is attached (FR-8).
+func TestReadFile_PDFWithNoExtractableTextReturnsNoticeNotError(t *testing.T) {
 	t.Run("corrupt garbage after the header", func(t *testing.T) {
 		ws := t.TempDir()
 		garbage := []byte("%PDF-1.7\n" + strings.Repeat("not a pdf object at all ", 32))
@@ -281,15 +339,26 @@ func TestReadFile_PDFWithNoExtractableTextErrors(t *testing.T) {
 		tool := NewReadFileTool(ws, false, MaxReadFileSize)
 		res := tool.Execute(context.Background(), map[string]any{"path": path})
 
-		if !res.IsError {
-			t.Fatalf("expected corrupt PDF to error, got ordinary output:\n%s", res.ForLLM)
+		if res.IsError {
+			t.Fatalf("a PDF that cannot be read locally must return a notice, not an error: %s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "could not extract document text") {
-			t.Fatalf("expected extraction-failure message, got: %s", res.ForLLM)
+		want := "[document: corrupt.pdf | could not be read locally (malformed) | sent as is to PDF-capable models]\n" + pdfNativeNoticeR1
+		if res.ForLLM != want {
+			t.Fatalf("expected exactly N3 then R1:\n%q\ngot:\n%q", want, res.ForLLM)
 		}
 		if strings.Contains(res.ForLLM, "not a pdf object at all") {
-			t.Fatalf("raw file content echoed back in the error:\n%s", res.ForLLM)
+			t.Fatalf("raw file content echoed back:\n%s", res.ForLLM)
 		}
+		assertOneNativePDFItem(t, res, "corrupt.pdf", garbage, false)
+
+		paged := tool.Execute(context.Background(), map[string]any{"path": path, "offset": float64(0), "length": float64(10)})
+		if !paged.IsError || !strings.Contains(paged.ForLLM, "corrupt.pdf") || !strings.Contains(paged.ForLLM, "malformed") {
+			t.Fatalf("E2: expected an error naming the file and the reason, got IsError=%v: %s", paged.IsError, paged.ForLLM)
+		}
+		if len(paged.InspectionPDFs) != 0 {
+			t.Fatalf("E2 must attach no PDF item, got %d", len(paged.InspectionPDFs))
+		}
+		assertNoRawPDFBytes(t, paged.ForLLM)
 	})
 
 	t.Run("valid structure but empty text stream", func(t *testing.T) {
@@ -301,17 +370,24 @@ func TestReadFile_PDFWithNoExtractableTextErrors(t *testing.T) {
 		tool := NewReadFileTool(ws, false, MaxReadFileSize)
 		res := tool.Execute(context.Background(), map[string]any{"path": path})
 
-		if !res.IsError {
-			t.Fatalf("expected text-less PDF to error, got ordinary output:\n%s", res.ForLLM)
+		if res.IsError {
+			t.Fatalf("a text-less PDF must return a notice, not an error: %s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "could not extract document text") {
-			t.Fatalf("expected extraction-failure message, got: %s", res.ForLLM)
+		want := "[document: empty-text.pdf | no extractable text (likely scanned) | readable natively by PDF-capable models; otherwise convert pages to PNG/JPEG]\n" + pdfNativeNoticeR1
+		if res.ForLLM != want {
+			t.Fatalf("expected exactly N1 then R1:\n%q\ngot:\n%q", want, res.ForLLM)
 		}
-		for _, banned := range []string{"%PDF-", "stream", "endobj", "FlateDecode"} {
-			if strings.Contains(res.ForLLM, banned) {
-				t.Fatalf("raw PDF syntax leaked into output (%q found):\n%s", banned, res.ForLLM)
-			}
+		assertNoRawPDFBytes(t, res.ForLLM)
+		assertOneNativePDFItem(t, res, "empty-text.pdf", pdf, false)
+
+		paged := tool.Execute(context.Background(), map[string]any{"path": path, "offset": float64(0), "length": float64(10)})
+		if !paged.IsError || !strings.Contains(paged.ForLLM, "empty-text.pdf") || !strings.Contains(paged.ForLLM, "no extractable text") {
+			t.Fatalf("E3: expected an error naming the file and the missing text, got IsError=%v: %s", paged.IsError, paged.ForLLM)
 		}
+		if len(paged.InspectionPDFs) != 0 {
+			t.Fatalf("E3 must attach no PDF item, got %d", len(paged.InspectionPDFs))
+		}
+		assertNoRawPDFBytes(t, paged.ForLLM)
 	})
 }
 
@@ -358,38 +434,47 @@ func TestReadFile_PDFExtensionWithPlainTextErrors(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("extension says PDF and extraction failed: expected a structured error, got ordinary output:\n%s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "could not extract document text") {
-		t.Fatalf("expected extraction-failure message, got: %s", res.ForLLM)
+	// #1968 FR-5/FR-7: a .pdf name without the %PDF- magic is not a PDF, so
+	// there is nothing to send natively; the error names the file and the
+	// missing header (wording is the implementer's, spec section 5.6).
+	if !strings.Contains(res.ForLLM, "x.pdf") || !strings.Contains(res.ForLLM, "%PDF-") {
+		t.Fatalf("expected an error naming x.pdf and the missing %%PDF- header, got: %s", res.ForLLM)
+	}
+	if len(res.InspectionPDFs) != 0 {
+		t.Fatalf("a non-PDF must attach no PDF item, got %d", len(res.InspectionPDFs))
 	}
 	if strings.Contains(res.ForLLM, "not a pdf\n") {
 		t.Fatalf("raw file content leaked back as text instead of the structured error:\n%s", res.ForLLM)
 	}
 }
 
-// TestReadFile_TextFileStartingWithPDFSignatureErrors — issue #1959 item 8
-// (decided behaviour): a plain text file whose content merely STARTS with
-// "%PDF-" but has no PDF objects is NOT returned as raw text and is not lost
-// silently: it returns a structured error saying the text could not be
-// extracted, without echoing the file's raw lines. Fails today: no NUL byte,
-// so the plain-text path returns the content verbatim.
-func TestReadFile_TextFileStartingWithPDFSignatureErrors(t *testing.T) {
+// TestReadFile_TextFileStartingWithPDFSignatureReturnsLocalFailureNotice -
+// #1968 FR-5/FR-7 (supersedes the #1959 item-8 error): a text file whose
+// content STARTS with "%PDF-" has the PDF magic, so it takes the PDF path; the
+// local parser cannot read it, so the result is notice N3 (malformed) plus R1
+// and one native item with the exact bytes. Kept from #1959: its raw lines are
+// never echoed back into the result.
+func TestReadFile_TextFileStartingWithPDFSignatureReturnsLocalFailureNotice(t *testing.T) {
 	ws := t.TempDir()
-	path := writeWorkspaceFile(t, ws, "notes.txt", []byte("%PDF- notes for tomorrow\nbuy milk\n"))
+	content := []byte("%PDF- notes for tomorrow\nbuy milk\n")
+	path := writeWorkspaceFile(t, ws, "notes.txt", content)
 
 	tool := NewReadFileTool(ws, false, MaxReadFileSize)
 	res := tool.Execute(context.Background(), map[string]any{"path": path})
 
-	if !res.IsError {
-		t.Fatalf("expected a structured error for signature-prefixed non-PDF text, got ordinary output:\n%s", res.ForLLM)
+	if res.IsError {
+		t.Fatalf("expected the N3 notice, got error: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "could not extract document text") {
-		t.Fatalf("expected extraction-failure message, got: %s", res.ForLLM)
+	want := "[document: notes.txt | could not be read locally (malformed) | sent as is to PDF-capable models]\n" + pdfNativeNoticeR1
+	if res.ForLLM != want {
+		t.Fatalf("expected exactly N3 then R1:\n%q\ngot:\n%q", want, res.ForLLM)
 	}
 	for _, raw := range []string{"buy milk", "notes for tomorrow"} {
 		if strings.Contains(res.ForLLM, raw) {
-			t.Fatalf("raw file line %q echoed back instead of a clean structured error:\n%s", raw, res.ForLLM)
+			t.Fatalf("raw file line %q echoed back into the result:\n%s", raw, res.ForLLM)
 		}
 	}
+	assertOneNativePDFItem(t, res, "notes.txt", content, false)
 }
 
 // TestReadFile_PDFPaginationCountsCharactersNotBytesForNonASCII pins that the
@@ -409,7 +494,10 @@ func TestReadFile_PDFPaginationCountsCharactersNotBytesForNonASCII(t *testing.T)
 	if res.IsError {
 		t.Fatalf("unicode page errored: %s", res.ForLLM)
 	}
-	assertExtractedPDFPage(t, res.ForLLM, "unicode.pdf", "chars 5-11 of 19", "Zürich")
+	assertExtractedPDFPage(t, res.ForLLM, "unicode.pdf", "chars 5-10 of 19", "Zürich", "")
+	if !strings.Contains(res.ForLLM, "offset=11") {
+		t.Fatalf("continue offset must be the character offset 11, not a byte offset, got:\n%s", res.ForLLM)
+	}
 }
 
 // trailingPDFSuffixes are the boundary suffixes the trailing-whitespace
@@ -458,14 +546,16 @@ func assertNoRawPDFBytes(t *testing.T, out string) {
 	}
 }
 
-// TestReadFile_PDFTrailingWhitespaceRunMustNotPanic — tools-level twin of the
+// TestReadFile_PDFTrailingWhitespaceRunMustNotPanic - tools-level twin of the
 // docextract trailing-whitespace regression: read_file on the venue PDF with a
-// trailing whitespace run must return a ToolResult — either the extracted page
-// (chars 0-38 of 38, full text, no raw syntax) or the structured
-// "binary file detected: could not extract document text (...)" error, never
-// raw %PDF-/stream bytes and never a panic ("index out of range [-1]" at
-// exactly 100 trailing LF bytes). The deferred recover does NOT hide the
-// panic: it converts it into a test failure carrying the panic value.
+// trailing whitespace run must return a ToolResult - the extracted page
+// (chars 0-37 of 38, full text, R1, one native item, no raw syntax) or notice
+// N3 (malformed) plus R1 and the native item - and never panic ("index out of
+// range [-1]" at exactly 100 trailing LF bytes). Under #1968 it is never an
+// error (the #1959 error branch is gone). NOTE: the ported parser currently
+// returns N3 for all four suffixes (even 99 LF); see the test round report.
+// The deferred recover does NOT hide the panic: it converts it into a test
+// failure carrying the panic value.
 func TestReadFile_PDFTrailingWhitespaceRunMustNotPanic(t *testing.T) {
 	for _, tc := range trailingPDFSuffixes {
 		t.Run(tc.name, func(t *testing.T) {
@@ -483,13 +573,18 @@ func TestReadFile_PDFTrailingWhitespaceRunMustNotPanic(t *testing.T) {
 			res := tool.Execute(context.Background(), map[string]any{"path": path})
 
 			if res.IsError {
-				if !strings.Contains(res.ForLLM, "binary file detected: could not extract document text (") {
-					t.Fatalf("expected the structured extraction error, got: %s", res.ForLLM)
-				}
-				assertNoRawPDFBytes(t, res.ForLLM)
+				t.Fatalf("a %%PDF- file must never error without offset/length (spec FR-7): %s", res.ForLLM)
+			}
+			// Two definitive outcomes, as in the #1959 original: the full
+			// extracted page, or notice N3 (malformed) - both with R1 and one
+			// native item carrying the exact bytes.
+			n3 := "[document: trailing-whitespace.pdf | could not be read locally (malformed) | sent as is to PDF-capable models]\n" + pdfNativeNoticeR1
+			if res.ForLLM == n3 {
+				assertOneNativePDFItem(t, res, "trailing-whitespace.pdf", pdf, false)
 				return
 			}
-			assertExtractedPDFPage(t, res.ForLLM, "trailing-whitespace.pdf", "chars 0-38 of 38", venuePDFText)
+			assertExtractedPDFPage(t, res.ForLLM, "trailing-whitespace.pdf", "chars 0-37 of 38", venuePDFText, pdfNativeNoticeR1)
+			assertOneNativePDFItem(t, res, "trailing-whitespace.pdf", pdf, true)
 		})
 	}
 }
@@ -533,25 +628,21 @@ func makeCyclicPageTreePDF(t *testing.T) []byte {
 	return pdf
 }
 
-// TestReadFile_PDFCyclicPageTreeReturnsStructuredErrorNotHang — tools-level
-// guard for the cyclic page-tree hang: read_file must return a ToolResult —
-// the structured "could not extract document text" error (or, if the parser
-// is ever taught to tolerate the cycle, the extracted page) — and must never
-// hang forever.
-//
-// This test drives the DEFAULT pdfExtractTimeout (15s) because package tools
-// cannot reach docextract's unexported budget, so passing runs can take up to
-// that budget; the 25s watch-dog below only fires on a true hang (the parser
-// loop, which no clean timeout would end). Skipped under -short for the same
-// reason.
+// TestReadFile_PDFCyclicPageTreeReturnsStructuredErrorNotHang - tools-level
+// guard for the cyclic page-tree hang. Under #1968 the bounded parser rejects
+// the cycle at once ("page tree deeper than 256", asserted in the docextract
+// tests), so read_file must return promptly with notice N3 (malformed) plus R1
+// and one native item with the exact bytes: not an error, not extracted text,
+// never a hang. The 25s watch-dog fires only on a true hang; a passing run
+// takes milliseconds, so the former default-budget wait and -short skip are
+// gone.
 func TestReadFile_PDFCyclicPageTreeReturnsStructuredErrorNotHang(t *testing.T) {
-	if testing.Short() {
-		t.Skip("default-budget wait (up to 15s) — skipped under -short")
-	}
 	ws := t.TempDir()
-	path := writeWorkspaceFile(t, ws, "cyclic-pages.pdf", makeCyclicPageTreePDF(t))
+	pdf := makeCyclicPageTreePDF(t)
+	path := writeWorkspaceFile(t, ws, "cyclic-pages.pdf", pdf)
 	tool := NewReadFileTool(ws, false, MaxReadFileSize)
 
+	start := time.Now()
 	done := make(chan *ToolResult, 1)
 	go func() { done <- tool.Execute(context.Background(), map[string]any{"path": path}) }()
 
@@ -559,15 +650,22 @@ func TestReadFile_PDFCyclicPageTreeReturnsStructuredErrorNotHang(t *testing.T) {
 	select {
 	case res = <-done:
 	case <-time.After(25 * time.Second):
-		t.Fatalf("read_file did not return within 25s — page-tree walk stuck in an infinite loop")
+		t.Fatalf("read_file did not return within 25s - page-tree walk stuck in an infinite loop")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("cyclic page tree must be rejected fast by the bounded parser, took %v", d)
 	}
 
 	if res.IsError {
-		if !strings.Contains(res.ForLLM, "could not extract document text") {
-			t.Fatalf("expected the structured extraction error, got: %s", res.ForLLM)
-		}
-		assertNoRawPDFBytes(t, res.ForLLM)
-		return
+		t.Fatalf("a PDF the parser rejects must return the N3 notice, not an error: %s", res.ForLLM)
 	}
-	assertExtractedPDFPage(t, res.ForLLM, "cyclic-pages.pdf", "chars 0-21 of 21", "Cyclic page tree text")
+	want := "[document: cyclic-pages.pdf | could not be read locally (malformed) | sent as is to PDF-capable models]\n" + pdfNativeNoticeR1
+	if res.ForLLM != want {
+		t.Fatalf("expected exactly N3 then R1:\n%q\ngot:\n%q", want, res.ForLLM)
+	}
+	if strings.Contains(res.ForLLM, "Cyclic page tree text") {
+		t.Fatalf("cyclic-tree text must not be extracted:\n%s", res.ForLLM)
+	}
+	assertNoRawPDFBytes(t, res.ForLLM)
+	assertOneNativePDFItem(t, res, "cyclic-pages.pdf", pdf, false)
 }

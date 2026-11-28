@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -61,8 +62,11 @@ func TestOfficePreview_PDFModality_CatalogAloneDecides(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loading test catalog fixture failed: %v", err)
 			}
-			if got := modelSupportsPDF(cat, provider, model); got != tc.wantPDF {
-				t.Errorf("modelSupportsPDF(%s/%s) = %v, want %v for catalog modalities %v (AD-11)", provider, model, got, tc.wantPDF, tc.modalities)
+			// Rewritten 2026-11-28 (one PDF mechanism): the PDF yes/no is
+			// pdfNativeSupported, the #1968 decision every PDF source takes;
+			// with no inline_pdf stated in config the catalogue alone decides.
+			if got := pdfNativeSupported(cat.Resolve(provider, model), config.PDFLimits{}); got != tc.wantPDF {
+				t.Errorf("pdfNativeSupported(%s/%s) = %v, want %v for catalog modalities %v (AD-11)", provider, model, got, tc.wantPDF, tc.modalities)
 			}
 			if got := modelSupportsImage(cat, provider, model); got != tc.wantImage {
 				t.Errorf("modelSupportsImage(%s/%s) = %v, want %v for catalog modalities %v (§4.1)", provider, model, got, tc.wantImage, tc.modalities)
@@ -71,11 +75,26 @@ func TestOfficePreview_PDFModality_CatalogAloneDecides(t *testing.T) {
 	}
 }
 
-// TestOfficePreview_CatalogOnlyGateStillDecides (regression guard, green by
-// contract): modelSupportsPDF reads only the catalog — nil catalog stays
-// optimistic, a miss stays pessimistic (FR-004 posture the spec keeps).
+// TestOfficePreview_CatalogOnlyGateStillDecides (regression guard): the PDF
+// gate reads only the catalogue's PDF yes/no. Rewritten 2026-11-28 (one PDF
+// mechanism, founder decision): the base asserted that a nil catalogue is
+// optimistic (modelSupportsPDF true). The one mechanism is issue #1968's
+// pdfNativeSupported, whose FR-3 refuses a native PDF when the catalogue has
+// no entry for the exact provider/model — an unloaded catalogue included —
+// so the PDF goes as its text. The guard now pins that the catalogue alone
+// decides: an entry with pdf is native, a miss (or no catalogue) is not.
 func TestOfficePreview_CatalogOnlyGateStillDecides(t *testing.T) {
-	if !modelSupportsPDF(nil, "openrouter", "anything/model") {
-		t.Fatalf("nil catalog must stay optimistic for the PDF gate (media_present.go contract kept by AD-11)")
+	if pdfNativeSupported(catalog.Handle{}, config.PDFLimits{}) {
+		t.Fatalf("no catalogue entry must not send a native PDF (issue #1968 FR-3, the one PDF decision)")
+	}
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "openrouter", "anything/model", "text", "pdf"))
+	if err != nil {
+		t.Fatalf("loading test catalog fixture failed: %v", err)
+	}
+	if !pdfNativeSupported(cat.Resolve("openrouter", "anything/model"), config.PDFLimits{}) {
+		t.Fatalf("a catalogue entry with pdf must be native when config states no inline_pdf")
+	}
+	if pdfNativeSupported(cat.Resolve("openrouter", "other/model"), config.PDFLimits{}) {
+		t.Fatalf("a catalogue miss must stay pessimistic")
 	}
 }

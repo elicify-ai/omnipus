@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
@@ -102,18 +103,17 @@ func modelSupportsImage(cat *catalog.Catalog, provider, model string) bool {
 	return cat.Resolve(provider, model).Supports(catalog.ModalityImage)
 }
 
-// modelSupportsPDF is the step-1 capability gate for the PDF modality —
-// symmetric to modelSupportsImage in wiring, NOT in miss semantics. A nil
-// catalog is optimistic (assume PDF-capable). A catalog MISS is not: FR-004
-// makes the optimistic modality set text+image only, so an unknown model
-// routes PDFs to step-5 offload rather than sending a document block the
-// provider will reject. That is the same posture the pre-ADR-067 catalog
-// had for an unknown model, whose optimistic default was also text+image.
-func modelSupportsPDF(cat *catalog.Catalog, provider, model string) bool {
-	if cat == nil {
-		return true
+// pdfNativeSupported is the only PDF capability check in pkg/agent (issue
+// #1968 FR-1, spec §2.3): the exact (provider, model) catalogue row lists
+// the pdf modality AND engine configuration permits the inline PDF route.
+// The catalogue supplies no PDF limits. A catalogue miss is
+// not capable: the handle carries no row. Evaluated per provider attempt.
+func pdfNativeSupported(h catalog.Handle, limits config.PDFLimits) bool {
+	if !h.Found() || !h.Supports(catalog.ModalityPDF) {
+		return false
 	}
-	return cat.Resolve(provider, model).Supports(catalog.ModalityPDF)
+	inline, stated := limits.InlinePDF()
+	return !stated || inline
 }
 
 // incrementWorkspaceRef parses a media://workspace/<ws>/<id> ref and

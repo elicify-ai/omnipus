@@ -1943,6 +1943,12 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
 	}
+	if len(ex.toolResult.InspectionPDFs) > 0 {
+		if ex.rx.rr.rq.ri.rf.rt.inspectionPDFs == nil {
+			ex.rx.rr.rq.ri.rf.rt.inspectionPDFs = make(map[string][]tools.InspectionPDF)
+		}
+		ex.rx.rr.rq.ri.rf.rt.inspectionPDFs[ex.toolCallID] = ex.toolResult.InspectionPDFs
+	}
 	if ex.toolResult.DocumentPreview != nil {
 		ex.rx.rr.rq.ri.rf.rt.documentPreviews.add(ex.toolCallID, ex.toolResult.DocumentPreview)
 	}

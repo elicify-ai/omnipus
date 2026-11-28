@@ -93,6 +93,9 @@ const ALL_CODES: LLMErrorCode[] = [
   'external_cli_invalid_config',
   // R4 D3 / W14: a lost external conversation is a distinct refusal.
   'delegation_not_resumable',
+  // Issue #1968 FR-3: a request holding a PDF while no model list (catalogue
+  // document) is loaded ends the turn before any provider call (notice C1).
+  'model_list_unavailable',
   'unknown',
 ]
 
@@ -412,9 +415,10 @@ describe('llm-error — sanitizeLegacyErrorMessage (D5)', () => {
 //     provider_message subtype flag — never keyed on error code alone.
 //     Own-limiter rate_limited rows never carry the flag, so their replay
 //     string stays byte-identical catalogue copy (RG-2/MIN-007 oracle).
-//   - Row 12 (RG-3), extended by issue #1340: the templated codes
+//   - Row 12 (RG-3), extended by issue #1340 and #1968: the templated codes
 //     (provider_auth_failed, rate_limited, quota_billing, model_retired,
-//     bad_model, provider_request_rejected, model_route_unavailable) render
+//     bad_model, provider_request_rejected, model_route_unavailable,
+//     model_list_unavailable) render
 //     le.message WHEN FLAGGED; every non-flagged code keeps catalogue copy.
 //   - MAJ-104/C-17: the flag rides the replay carrier (LLMErrorReplay), so
 //     the frame readers must propagate it — live (readLLMErrorFromFrame) and
@@ -432,7 +436,7 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
   const TEMPLATED = Object.keys(llmErrorProviderMessages) as LLMErrorCode[]
 
   it('row 12/RG-3: a flagged entry renders le.message for every templated code', () => {
-    expect(TEMPLATED.length).toBe(7) // #1340 contract: the template map must not silently shrink
+    expect(TEMPLATED.length).toBe(8) // #1340 seven plus #1968 model_list_unavailable: the template map must not silently shrink
     for (const code of TEMPLATED) {
       const assembled = `PROBE-ASSEMBLED-SENTENCE-${code}`
       const le: LLMError = {
@@ -530,8 +534,8 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
 // LLMError contract:
 //   - Bijection (C-3/C-4): the codes carrying a provider_message variant are
 //     exactly provider_auth_failed, rate_limited, quota_billing, model_retired,
-//     bad_model, provider_request_rejected, model_route_unavailable — both
-//     directions.
+//     bad_model, provider_request_rejected, model_route_unavailable, plus
+//     #1968's model_list_unavailable — both directions.
 //   - Closed-slot token check (OBS-002): every template's slots come from the
 //     contract's closed set {provider}, {model}, {attempt}, {max}, {countdown},
 //     {answered_model}, {unavailable_model}.
@@ -549,13 +553,25 @@ describe('provider-messages — row 6 TS half: provider_message catalogue biject
     'bad_model',
     'provider_request_rejected',
     'model_route_unavailable',
+    // Issue #1968 (contracts/components/schemas/LLMError.yaml): the PDF
+    // model-list notice C1 is the eighth provider-specific message.
+    'model_list_unavailable',
   ]
   const CLOSED_SLOTS = ['provider', 'model', 'attempt', 'max', 'countdown', 'answered_model', 'unavailable_model']
 
   it('C-3/C-4 bijection: exactly the §6 templated codes carry a provider_message variant, both directions', () => {
     const keys = Object.keys(llmErrorProviderMessages).sort()
     expect(keys).toEqual([...SPEC_TEMPLATED].sort())
-    expect(keys.length).toBe(7) // #1340 contract: exactly seven provider-message variants
+    expect(keys.length).toBe(8) // #1340 seven plus #1968 model_list_unavailable: exactly eight provider-message variants
+  })
+
+  it('#1968 C1: the model_list_unavailable provider-message variant is the spec notice with a {model} slot', () => {
+    // Oracle: docs/specs/read-file-native-pdf.md section 5.6 C1, with the
+    // contract's {model} slot in place of the spec's <model>.
+    const variants: Record<string, string | undefined> = llmErrorProviderMessages
+    const c1 =
+      'PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
+    expect(variants['model_list_unavailable']).toBe(c1)
   })
 
   it('OBS-002 closed-slot check: every template uses only the closed slot vocabulary', () => {
@@ -566,5 +582,55 @@ describe('provider-messages — row 6 TS half: provider_message catalogue biject
         expect(CLOSED_SLOTS, `slot {${slot}} in ${code} must be in the closed set`).toContain(slot)
       }
     }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1968 T27 (FR-3, S8): a turn that holds a PDF while no model list is
+// loaded ends with code `model_list_unavailable` and notice C1. Oracle: spec
+// docs/specs/read-file-native-pdf.md §5.6 C1 ("PDF not sent: the model list is
+// not loaded, so Omnipus cannot check whether <model> reads PDFs. Restart
+// Omnipus; if this persists, check the "catalog" error in the log.") — the
+// fixed content, checked by its fragments, never read off the catalogue.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('issue #1968 T27 — model_list_unavailable renders notice C1', () => {
+  const C1_FRAGMENTS = [
+    'PDF not sent: the model list is not loaded',
+    'cannot check whether',
+    'reads PDFs',
+    'Restart Omnipus',
+    'check the "catalog" error in the log',
+  ]
+
+  function expectC1(text: string): void {
+    for (const fragment of C1_FRAGMENTS) {
+      expect(text, `C1 fragment "${fragment}" must be visible`).toContain(fragment)
+    }
+  }
+
+  it('the display copy for the code carries the C1 content', () => {
+    expectC1(codeToMessage('model_list_unavailable'))
+  })
+
+  it('a live error frame with the code displays C1, not the unknown fallback', () => {
+    const le = readLLMErrorFromFrame({
+      type: 'error',
+      payload: { llm_error: { code: 'model_list_unavailable', message: 'catalog: no document loaded', retryable: false } },
+    })
+    expect(le?.code).toBe('model_list_unavailable')
+    const display = getLLMErrorDisplay(le!, false)
+    expectC1(display.message)
+    expect(display.message).not.toBe(codeToDisplay.unknown)
+  })
+
+  it('a replay error frame with the code displays C1, not the unknown fallback', () => {
+    const le = readLLMErrorFromReplayFrame({
+      type: 'replay_error',
+      payload: { llm_error: { code: 'model_list_unavailable', message: 'catalog: no document loaded', retryable: false } },
+    })
+    expect(le?.code).toBe('model_list_unavailable')
+    const display = getLLMErrorDisplay(le!, false)
+    expectC1(display.message)
+    expect(display.message).not.toBe(codeToDisplay.unknown)
   })
 })

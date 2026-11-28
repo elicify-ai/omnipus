@@ -513,21 +513,34 @@ const readerImageInspectionParagraph = "Direct SVG reads return text; render SVG
 // readerOffsetParamDesc / readerLengthParamDesc state the actual units
 // readOpenFile and extractDocument use. Plain text seeks bytes; extracted
 // documents page by rune; PNG/JPEG reject any supplied offset or length.
-const readerOffsetParamDesc = "Start position. Plain text: byte offset. Word/PowerPoint/Excel/PDF: character offset into extracted text. Omit for PNG/JPEG — image inspection rejects offset and length."
-const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently capped at the server-side max). Word/PowerPoint/Excel/PDF: characters of extracted text (also capped). Omit for PNG/JPEG — image inspection rejects offset and length."
+const readerOffsetParamDesc = "Start position. Plain text: byte offset. Word/PowerPoint/Excel/PDF: character offset into extracted text. A PDF read with offset or length returns text only and is not sent natively; a PDF with no extractable text (scanned) or one that cannot be read locally errors instead. Omit for PNG/JPEG — image inspection rejects offset and length."
+const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently capped at the server-side max). Word/PowerPoint/Excel/PDF: characters of extracted text (also capped). A PDF with no extractable text (scanned) errors when offset or length is given. Omit for PNG/JPEG — image inspection rejects offset and length."
+
+// readerPDFParagraph is the #1968 FR-9 model-facing PDF contract, shared
+// with library_read (same inner reader).
+const readerPDFParagraph = "PDF (a .pdf name, or a file starting with %PDF- whose name is not an image name such as .png, .jpg, .jpeg, .heic or .heif, which are handled as images first): read without offset/length, the PDF can be sent natively, this turn only, to models that support PDFs (PDF-capable models), within the 25 MiB file-read cap, the model's document limits and the media size limit; " +
+	"other models, and later turns, see the extracted text shown in the result. " +
+	"Once the turn's one PDF-to-text recovery after a provider rejection has been used, every later PDF in that turn, including a newly read file, stays non-native. " +
+	"A PDF with no extractable text (likely scanned) returns a notice instead of text: its content is available only if it is actually sent natively to a PDF-capable model; otherwise it is unavailable. " +
+	"To get a PDF's text again, or page through long text by `offset` and `length` in characters, re-read it. "
 
 func (t *ReadFileTool) Description() string {
 	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
 		"`path` may be workspace-relative or absolute. " +
 		readerImageInspectionParagraph +
 		"Text supports pagination via `offset` and `length` as bytes. " +
-		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
-		"automatically decoded to plain text; for these, `offset` and `length` count " +
-		"characters of extracted text rather than raw bytes. A file that starts with `%PDF-` or is " +
-		"named `.pdf` is read as a PDF even without null bytes (unless its name marks it as an image); if its text " +
-		"cannot be extracted (scanned or image-only, damaged, encrypted, or not really a PDF) the call returns an " +
-		"error, never the raw bytes. Other binary files (containing " +
-		"null bytes and not one of those document or image formats) are rejected outright. `length` above the server-side max " +
+		"Word (.docx), PowerPoint (.pptx) and Excel (.xlsx) documents are " +
+		"decoded to plain text; for these and PDFs, `offset` and `length` count " +
+		"characters of extracted text rather than raw bytes. " +
+		"Extracted text cut by an extraction limit is marked with a `…[truncated]` or `[truncated: <reason>]` notice. " +
+		"If some sheets or slides cannot be read, the others are returned and the extracted text ends with an " +
+		"`[incomplete: <count> sheet(s) could not be read and are missing; first: <name>: <error>]` notice " +
+		"(`slide(s)` for a presentation; with pagination it is on the last page): the text is then not the whole file; " +
+		"if no text is kept and a sheet or slide failed, the read fails: the reason contains `no sheet could be read` or `no slide could be read`, unless the decompression budget was exhausted, in which case it names the budget first and then lists the earlier failures. " +
+		readerPDFParagraph +
+		"ZIP and TAR archives return a listing of their entries; gzip files return their extracted UTF-8 text or, for a compressed TAR, a listing. " +
+		"Other binary files (containing " +
+		"null bytes and not one of those document, image or archive formats) are rejected. `length` above the server-side max " +
 		"is silently capped, not rejected — check the returned header's total size if you need " +
 		"to know how much was actually read."
 }
@@ -700,9 +713,6 @@ func (t *ReadFileTool) readOpenFile(
 	if result, handled := inspectionImageResult(ctx, file, sourceIdentity, sniff[:sniffN], paginationSupplied, t.maxInspectionImageBytes, reauthorize); handled {
 		return result
 	}
-	if !paginationSupplied && isPDFSource(sniff[:sniffN]) {
-		return t.pdfDocumentResult(ctx, policy, handle, path, sourceIdentity, length, reauthorize)
-	}
 	if offset < 0 {
 		return ErrorResult("offset must be >= 0")
 	}
@@ -710,12 +720,22 @@ func (t *ReadFileTool) readOpenFile(
 		return ErrorResult("length must be > 0")
 	}
 
-	// Reject binary files: null bytes are a reliable binary indicator. A PDF
-	// is also routed to extraction by its signature or extension, because its
-	// first 512 bytes can be plain ASCII with no null byte (#1959); a PDF that
-	// then fails to extract returns the structured error below, never its raw
-	// bytes as text.
-	if bytes.Contains(sniff[:sniffN], []byte{0}) || docextract.LooksLikePDF(sniff[:sniffN], filepath.Base(path)) {
+	// FR-5 (#1968): a .pdf name or a %PDF- magic takes the PDF path before
+	// the NUL check, so an ASCII PDF is never returned as raw syntax.
+	if isPDFRead(path, sniff[:sniffN]) {
+		result := t.readPDF(file, sniff[:sniffN], path, offset, length, paginationSupplied, reauthorize)
+		// A PDF that is not sent natively on an attempt whose model sees
+		// images goes as page images 1-10 (office-preview spec §4.1),
+		// rendered on first need through the shared preview service.
+		for i := range result.InspectionPDFs {
+			item := &result.InspectionPDFs[i]
+			item.RenderPages = t.pdfPageRenderer(policy, item.Name, sourceIdentity, item.Bytes)
+		}
+		return result
+	}
+
+	// Reject binary files: null bytes are a reliable binary indicator.
+	if bytes.Contains(sniff[:sniffN], []byte{0}) {
 		// Before rejecting, check whether this opaque binary is actually a
 		// readable document (Word/PowerPoint/Excel/PDF). If so, return its
 		// extracted plain text instead. Extraction reads through the SAME

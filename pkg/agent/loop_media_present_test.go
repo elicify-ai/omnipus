@@ -354,22 +354,6 @@ func TestModelSupportsImage_CatalogGates(t *testing.T) {
 		"right model id, wrong provider → miss → optimistic, never the text-only row")
 }
 
-// TestModelSupportsPDF_MissIsNotOptimistic pins the asymmetry FR-004
-// deliberately creates: a nil catalog is optimistic for every modality, but a
-// catalog MISS is optimistic for text and image only. An unknown model must
-// therefore route a PDF to offload rather than send a document block the
-// provider would reject.
-func TestModelSupportsPDF_MissIsNotOptimistic(t *testing.T) {
-	assert.True(t, modelSupportsPDF(nil, "acme", "any-model"),
-		"nil catalog → optimistic for every modality")
-
-	loaded := mustCatalog(t, catalogDocJSON(t, "acme", "doc-model", "text", "image", "pdf"))
-	assert.True(t, modelSupportsPDF(loaded, "acme", "doc-model"),
-		"catalog says model has pdf → gate passes")
-	assert.False(t, modelSupportsPDF(loaded, "acme", "unknown-model"),
-		"catalog miss → optimistic set is text+image only → pdf gate blocks")
-}
-
 // TestResizeBudgetForModel_HitMissAndNilCatalog pins the FR-004 budget
 // contract the media pipeline depends on: a hit carries the provider's own
 // resize_limits, a miss carries the document default, and no catalog at all

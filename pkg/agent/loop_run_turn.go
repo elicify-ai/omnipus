@@ -654,10 +654,10 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
 	turnSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
-	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
+	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsForTurn(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
 		turnSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
-		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
+		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rp.rc.rx.rr.rq.ri.rf.rt.turnChatPDFs(),
 	)
 	rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = turnSink.turnMedia
 
@@ -813,10 +813,10 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			)
 			trimProvider, trimModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
 			trimSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
-			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
+			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsForTurn(
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
 				trimSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
-				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
+				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rp.rc.rx.rr.rq.ri.rf.rt.turnChatPDFs(),
 			)
 			rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = trimSink.turnMedia
 		}
@@ -1376,11 +1376,11 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 
 	// Inject pending steering messages
 	if len(ri.pendingMessages) > 0 {
-		resolvedPending := resolveMediaRefsWithOffload(
+		resolvedPending := resolveMediaRefsForTurn(
 			ri.pendingMessages, ri.turnMediaStore, ri.maxMediaSize,
 			candidateProvider(ri.rf.rt.activeCandidates), ri.activeModel,
-			&offloadSink{workDir: ri.wsDir, ctx: ri.rf.rt.turnCtx}, ri.turnCatalog, ri.turnRefcounter,
-			ri.rf.rt.ts.opts.WorkspaceID,
+			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
+			ri.rf.rt.ts.opts.WorkspaceID, ri.rf.rt.turnChatPDFs(),
 		)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
@@ -1448,29 +1448,34 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 	return agentLoopRunTurnIterationNext
 }
 
-// tryPDFTextFallback retries a rejected native PDF request after converting its media to text.
-func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() bool {
-	if permanentModelFailure(rf.err) {
+// tryPDFTextFallback is the one PDF recovery of a loop turn (issue #1968
+// FR-16/FR-17). It fires only when the turn's PDF budget is unused and an
+// attempt of the failed round sent a native PDF and failed with its own
+// qualifying error. It spends the budget and calls the provider once more
+// with the unchanged messages: every attempt's presenter then shows each PDF
+// as text with P1/P2. fired reports whether the retry ran; the retry's
+// result replaces response/err.
+func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() (fired bool) {
+	if rf.rt.ts.mediaRetryDone.Load() || permanentModelFailure(rf.err) {
 		return false
 	}
-	// A tool preview's PDF rides only on the request (B-10): the rejected
-	// request's record covers it; downgrading callMessages covers uploads.
-	toolPDF := rf.rt.ts.lastRequestCarriedPDF.Load()
-	if !downgradePDFMediaToText(rf.callMessages) && !toolPDF {
+	culprit, ok := rf.rt.qualifyingPDFAttempt()
+	if !ok {
 		return false
 	}
-	rf.rt.ts.pdfRejected.Store(true)
+	rf.rt.ts.mediaRetryDone.Store(true)
 	logger.WarnCF(
 		"agent",
-		"provider rejected request carrying a native PDF block — retrying with extracted text",
+		"provider rejected a request carrying a native PDF — retrying once with extracted text",
 		map[string]any{
 			"agent_id": rf.rt.ts.agent.ID,
-			"model":    rf.rt.llmModel,
-			"error":    rf.err.Error(),
+			"provider": culprit.provider,
+			"model":    culprit.model,
+			"error":    culprit.err.Error(),
 		},
 	)
 	rf.response, rf.err = rf.callLLM(rf.callMessages, rf.providerToolDefs)
-	return rf.err == nil
+	return true
 }
 
 // ModelSyntheticImageRejection is the transcript-stamp value the loop sets on
@@ -1569,6 +1574,13 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if cwErr := rt.ts.validateWindowControls(messagesForCall); cwErr != nil {
 		return nil, cwErr
 	}
+	// Issue #1968: the round's attempt records start empty (FR-16), and a
+	// request holding a PDF is refused before any provider call when no model
+	// list is loaded to decide whether a model reads PDFs (FR-3).
+	rt.pdfAttempts = nil
+	if refusal := rt.refuseUncheckablePDFs(messagesForCall); refusal != nil {
+		return nil, refusal
+	}
 	defer func() {
 		if err == nil {
 			rt.ts.completeWindowRequest()
@@ -1656,7 +1668,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// recheck per call (the inspection-media boundary test pins
 		// 2 candidates → 2 rechecks, not 4). Scope: THIS provider round
 		// only; every new round (new callProviderOnce) attaches fresh.
-		rt.providerCallAttachCache = make(map[string][]providers.Message)
+		rt.providerCallAttachCache = make(map[string]attemptStage)
 		chain := rt.al.fallback
 		if len(rt.activeCandidates) == 1 {
 			// F1: single-candidate root turns run on a throwaway tracker so a

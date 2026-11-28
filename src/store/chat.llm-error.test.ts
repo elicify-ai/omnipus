@@ -541,3 +541,68 @@ describe("ADR-051 — cancel-ack sub-path unchanged", () => {
     expect(m.errorCode).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Issue #1968 T27 (FR-3, S8): `model_list_unavailable` ends a PDF turn when
+// no model list is loaded. Its bubble must show notice C1 live AND after a
+// reload (replay). Oracle: spec docs/specs/read-file-native-pdf.md §5.6 C1,
+// checked by its fixed fragments, never read off the generated catalogue.
+// ---------------------------------------------------------------------------
+
+describe('issue #1968 T27 — model_list_unavailable bubble shows C1 live and on replay', () => {
+  const C1_FRAGMENTS = [
+    'PDF not sent: the model list is not loaded',
+    'reads PDFs',
+    'Restart Omnipus',
+    'check the "catalog" error in the log',
+  ]
+  const RAW = 'catalog: no document loaded for model fx/doc-reader-9'
+
+  function expectC1Bubble(bubble: ChatMessage | undefined): void {
+    expect(bubble).toBeDefined()
+    expect(bubble!.status).toBe('error')
+    expect(bubble!.errorCode).toBe('model_list_unavailable')
+    for (const fragment of C1_FRAGMENTS) {
+      expect(bubble!.content, `C1 fragment "${fragment}" must be visible`).toContain(fragment)
+    }
+    // Never the raw wire text, never the unknown-code fallback.
+    expect(bubble!.content).not.toContain(RAW)
+    expect(bubble!.content).not.toBe(codeToDisplay.unknown)
+  }
+
+  it('live error frame renders C1', () => {
+    seedEmptyBucket({ isStreaming: true })
+    act(() => {
+      useChatStore.getState().handleFrame(
+        liveErrorFrame({
+          sessionId: SID,
+          message: RAW,
+          entryId: 'entry-c1',
+          llmError: { code: 'model_list_unavailable', message: RAW, retryable: false },
+        }),
+      )
+    })
+    const msgs = bucketMessages()
+    expect(msgs).toHaveLength(1)
+    expectC1Bubble(msgs[0])
+  })
+
+  it('replay_error frame renders C1 after reload', () => {
+    seedEmptyBucket({ isReplaying: true })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_error',
+        session_id: SID,
+        entry_id: 'entry-c1',
+        timestamp: '2026-11-22T00:00:00Z',
+        kind: 'error',
+        message: RAW,
+        payload: { llm_error: { code: 'model_list_unavailable', message: RAW, retryable: false } },
+      } as unknown as ServerFrame)
+    })
+    const msgs = bucketMessages()
+    expect(msgs).toHaveLength(1)
+    expectC1Bubble(msgs[0])
+    expect(msgs[0].errorEntryId).toBe('entry-c1')
+  })
+})

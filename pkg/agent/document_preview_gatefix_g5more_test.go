@@ -5,7 +5,6 @@ package agent
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,68 +170,69 @@ func TestOfficePreview_CountSuppressesToolPDFWhenBytesFit(t *testing.T) {
 }
 
 // (e) Several uploaded PDFs in this turn share one allowance: at most 20
-// page images and 32 MiB, newest upload first. The real renderer and
-// renderUploadPageJobs / uploadPDFPageImagesWithin decide which pages.
+// page images and 32 MiB, newest upload first. The real renderer decides
+// which pages. Rewritten 2026-11-28 (one PDF mechanism): the attempt stage
+// (attachUploadPageImages) renders the pages for a model that sees images
+// but does not read PDFs, instead of resolution-time page jobs.
 func TestOfficePreview_UploadPageImagesShareTwentyPagesNewestFirst(t *testing.T) {
 	previous := preview.Shared()
 	t.Cleanup(func() { preview.SetShared(previous) })
 	preview.SetShared(officepreview.Service(t, false, true))
 	limits := catalog.ResizeLimits{LongEdgePx: 2000, MaxBytes: 4 << 20}
-	dir := t.TempDir()
-	paths := make([]string, 3)
-	for i, name := range []string{"oldest.pdf", "middle.pdf", "newest.pdf"} {
-		paths[i] = filepath.Join(dir, name)
-		require.NoError(t, os.WriteFile(paths[i], officepreview.PDF(10), 0o600))
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "image"))
+	require.NoError(t, err)
+	rt := officeUnifiedTurn(t, cat, "gatefix-provider", nil)
+	messages := make([]providers.Message, 0, 3)
+	for _, name := range []string{"oldest", "middle", "newest"} {
+		messages = append(messages, providers.Message{
+			Role: "user", Content: name, Media: []string{gatefixDataURL("application/pdf", officepreview.PDF(10))},
+		})
 	}
-	media := [][]string{{}, {}, {}}
-	injections := [][]string{{""}, {""}, {""}}
-	jobs := make([]uploadPageJob, 3)
-	for i := range jobs {
-		jobs[i] = uploadPageJob{
-			msg: i, mediaAt: 0, injAt: 0, noteAt: 0,
-			localPath: paths[i], name: filepath.Base(paths[i]), dest: paths[i],
-			limits: limits,
-		}
-	}
-	renderUploadPageJobs(context.Background(), jobs, media, injections)
-	require.Len(t, media[2], 10, "the newest upload's 10 pages are rendered first")
-	require.Len(t, media[1], 10, "the next newest upload takes the rest of the 20 page allowance")
-	require.Empty(t, media[0], "the oldest upload is not rendered once the newer uploads have used the 20 pages")
-	require.Contains(t, injections[0][0], "newer uploads used this request's 20 page images")
+	got, _ := rt.attachUploadPageImages(context.Background(), messages, cat, "gatefix-provider", "gatefix-model", limits)
+	require.Len(t, got[2].Media, 1+10, "the newest upload's 10 pages are rendered first")
+	require.Len(t, got[1].Media, 1+10, "the next newest upload takes the rest of the 20 page allowance")
+	require.Len(t, got[0].Media, 1, "the oldest upload is not rendered once the newer uploads have used the 20 pages")
+	require.Contains(t, got[0].Content, "newer uploads used this request's 20 page images")
 	decoded := 0
-	for _, refs := range media {
-		decoded += gatefixDecodedImages(t, refs)
+	for _, m := range got {
+		decoded += gatefixDecodedImages(t, m.Media[1:])
 	}
 	require.LessOrEqual(t, decoded, previewRequestBudget, "automatic upload page images stay within the 32 MiB request budget")
 }
 
-// (f) This turn's uploads alone over 32 MiB. The assembled request's document
-// media stays at most 32 MiB: the oversized native PDF falls back to text,
-// rather than staying a document while previews are merely clamped to zero.
+// (f) An uploaded PDF over the model's size limit falls back to text with
+// a note naming it, never a silent drop. Rewritten 2026-11-28 (one PDF
+// mechanism): base asserted that this turn's native uploads share the
+// 32 MiB media budget, so a 32 MiB + 1 upload became text even under a
+// 50 MiB model limit. Under the founder's design a native PDF is bounded
+// only by config.json pdf_limits (shipped 50,000,000 bytes per file); the
+// 32 MiB budget stays for page images and preview forms. The test now
+// states the size limit in config (32 MiB) and pins the text fallback, and
+// a control pins that the same upload stays native under a 50 MiB limit.
 func TestOfficePreview_UploadOverRequestBudgetFallsBackToText(t *testing.T) {
-	var doc map[string]any
-	require.NoError(t, json.Unmarshal(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"), &doc))
-	rows, ok := doc["providers"].([]any)
-	require.True(t, ok && len(rows) > 0, "catalog providers must be a non-empty list, got %T", doc["providers"])
-	row, ok := rows[0].(map[string]any)
-	require.True(t, ok, "catalog provider row must be an object, got %T", rows[0])
-	row["pdf_limits"] = map[string]any{"max_document_bytes": 50 << 20, "max_documents_per_request": 8}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	cat, err := catalog.NewCatalog(raw)
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"))
 	require.NoError(t, err)
 	data := bytesRepeat(previewRequestBudget+1, 0x33)
 	copy(data, officepreview.PDF(1))
-	store := mediatest.NewFileMediaStore(t)
-	ref := officeUpload(t, data, "over-budget.pdf", store)
-	got := resolveMediaRefsWithOffload(
-		[]providers.Message{{Role: "user", Content: gatefixCurrentTurn, Media: []string{ref}}},
-		store, 50<<20, "gatefix-provider", "gatefix-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "",
-	)
+	send := func(maxFile int) []providers.Message {
+		rt := officeUnifiedTurn(t, cat, "gatefix-provider", map[string]any{"max_file_bytes": maxFile, "max_documents_per_request": 8})
+		store := mediatest.NewFileMediaStore(t)
+		ref := officeUpload(t, data, "over-budget.pdf", store)
+		resolved := resolveMediaRefsForTurn(
+			[]providers.Message{{Role: "user", Content: gatefixCurrentTurn, Media: []string{ref}}},
+			store, 50<<20, "gatefix-provider", "gatefix-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "", rt.chatPDFs,
+		)
+		return officeUnifiedSend(t, rt, "gatefix-provider", "gatefix-model", resolved)
+	}
+	got := send(previewRequestBudget)
 	count, decoded := gatefixNativePDFTotals(t, got)
-	require.LessOrEqual(t, decoded, previewRequestBudget, "this turn's uploads alone must not put more than 32 MiB of document media in the request")
-	require.Equal(t, 0, count, "an uploaded native PDF over the 32 MiB request budget falls back to text, even when the model's own limit is 50 MiB")
-	require.Contains(t, got[0].Content, "[Attached file", "the text fallback is the attached-file text, not a silent drop")
+	require.Zero(t, decoded, "an upload over the configured size limit sends no document bytes")
+	require.Equal(t, 0, count, "an uploaded native PDF over the configured size limit falls back to text")
+	require.Contains(t, got[0].Content, "over-budget.pdf", "the text fallback names the upload, not a silent drop")
+	require.Contains(t, got[0].Content, "file size limit of 33554432 bytes", "the fallback note names the limit that applied")
+	control := send(50 << 20)
+	count, _ = gatefixNativePDFTotals(t, control)
+	require.Equal(t, 1, count, "control: under a 50 MiB configured limit the same upload stays native")
 }
 
 // Amended G5.2 (spec object 714e9b99f): "this turn" starts at the turn's own
@@ -374,22 +374,19 @@ func TestOfficePreview_RecordedUploadFigureKeepsCrowdingTheNewestPreview(t *test
 	require.Equal(t, pageImages, got[0].Media, "the turn's upload page images stay in the request")
 }
 
-// Amended G5.3: this turn's uploads share the 32 MiB newest first. Two
-// 20 MiB uploads cannot both stay native: the newest keeps the budget and
-// the older one goes as its extracted text with the reason. An oldest-first
-// allocation would keep the older PDF native and drop the newest instead.
+// Amended G5.3: this turn's uploads share the request's byte limit newest
+// first. Two 20 MiB uploads cannot both stay native: the newest keeps the
+// budget and the older one goes as its text with the reason. An
+// oldest-first allocation would keep the older PDF native and drop the
+// newest instead. Rewritten 2026-11-28 (one PDF mechanism): the shared byte
+// limit is config.json max_total_file_bytes (here 32 MiB, the value the base
+// budget had), applied by the per-attempt presenter.
 func TestOfficePreview_ThisTurnsNewestUploadStaysNativeWhenBytesOverflow(t *testing.T) {
-	var doc map[string]any
-	require.NoError(t, json.Unmarshal(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"), &doc))
-	rows, ok := doc["providers"].([]any)
-	require.True(t, ok && len(rows) > 0, "catalog providers must be a non-empty list, got %T", doc["providers"])
-	row, ok := rows[0].(map[string]any)
-	require.True(t, ok, "catalog provider row must be an object, got %T", rows[0])
-	row["pdf_limits"] = map[string]any{"max_document_bytes": 50 << 20, "max_documents_per_request": 8}
-	raw, err := json.Marshal(doc)
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "gatefix-provider", "gatefix-model", "text", "pdf"))
 	require.NoError(t, err)
-	cat, err := catalog.NewCatalog(raw)
-	require.NoError(t, err)
+	rt := officeUnifiedTurn(t, cat, "gatefix-provider", map[string]any{
+		"max_file_bytes": 50 << 20, "max_total_file_bytes": previewRequestBudget, "max_documents_per_request": 8,
+	})
 	older := bytesRepeat(20<<20, 0x75)
 	newer := bytesRepeat(20<<20, 0x76)
 	copy(older, officepreview.PDF(1))
@@ -398,17 +395,18 @@ func TestOfficePreview_ThisTurnsNewestUploadStaysNativeWhenBytesOverflow(t *test
 	store := mediatest.NewFileMediaStore(t)
 	olderRef := officeUpload(t, older, "gatefix-older.pdf", store)
 	newerRef := officeUpload(t, newer, "gatefix-newer.pdf", store)
-	got := resolveMediaRefsWithOffload(
+	resolved := resolveMediaRefsForTurn(
 		[]providers.Message{{Role: "user", Content: gatefixCurrentTurn, Media: []string{olderRef, newerRef}}},
-		store, 50<<20, "gatefix-provider", "gatefix-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "",
+		store, 50<<20, "gatefix-provider", "gatefix-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "", rt.chatPDFs,
 	)
+	got := officeUnifiedSend(t, rt, "gatefix-provider", "gatefix-model", resolved)
 	count, decoded := gatefixNativePDFTotals(t, got)
-	require.Equal(t, 1, count, "G5.3: 20 MiB + 20 MiB overflows the 32 MiB request budget, so exactly one upload stays native")
+	require.Equal(t, 1, count, "G5.3: 20 MiB + 20 MiB overflows the 32 MiB total, so exactly one upload stays native")
 	require.Equal(t, 20<<20, decoded, "only the newest upload's 20 MiB stay native")
 	require.True(t, gatefixMessageHasPDF(got, newer), "G5.3: the newest upload keeps the byte budget; an oldest-first allocation would keep the older one instead")
 	require.False(t, gatefixMessageHasPDF(got, older), "the older upload falls back to text once the newest has taken the budget")
 	require.Contains(t, got[0].Content, "gatefix-older.pdf", "the older upload's text fallback names it")
-	require.Contains(t, got[0].Content, "32 MiB", "the fallback note names the request budget that overflowed")
+	require.Contains(t, got[0].Content, "total file size limit of 33554432 bytes", "the fallback note names the byte limit that overflowed")
 }
 
 // Amended G5.5: the newest preview with no media left gets its text with the
@@ -496,14 +494,11 @@ func TestOfficePreview_UploadRenderStopsWhenTheTurnIsCancelled(t *testing.T) {
 	turnCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	done := make(chan struct{})
+	data, err := os.ReadFile(pdfPath)
+	require.NoError(t, err)
 	go func() {
 		defer close(done)
-		media := [][]string{{}}
-		injections := [][]string{{""}}
-		renderUploadPageJobs(turnCtx, []uploadPageJob{{
-			localPath: pdfPath, name: "upload.pdf",
-			limits: catalog.ResizeLimits{LongEdgePx: 2000, MaxBytes: 4 << 20},
-		}}, media, injections)
+		uploadPDFPageImagesFrom(turnCtx, data, "upload.pdf", catalog.ResizeLimits{LongEdgePx: 2000, MaxBytes: 4 << 20})
 	}()
 	time.Sleep(300 * time.Millisecond)
 	stopped := time.Now()

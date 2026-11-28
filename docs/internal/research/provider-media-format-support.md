@@ -51,7 +51,7 @@ Scope: **image input to chat/vision endpoints** across the providers Omnipus rou
 | AVIF | D2 passthrough `data:image/avif` | **No provider accepts it** → RD2 strip+retry fires every time | 🔴 passthrough is dead weight; RD2 is the real path |
 | HEIC/HEIF | D2 passthrough | Gemini ✅; everyone else ❌ → RD2 | 🟡 works on Gemini only |
 | ICO | D2 passthrough | xAI maybe (undocumented); everyone else ❌ → RD2 | 🔴 near-universal RD2 |
-| PDF | Native block for `pdfCapableModel` allow-list; else text extraction | Model-dependent | 🟡 allow-list conservatism by design |
+| PDF | Issue #1968: decided per provider attempt (`pkg/agent/pdf_present.go`). Native document when the attempt's catalogue row lists `pdf` and engine configuration's effective `inline_pdf` is not false, within `pdf_limits` (embedded default and researched overrides, overlaid by operator config; newest PDF first; over a limit → text + note). All four wire formats send it inline (Anthropic document block, Chat Completions `file` part, Responses `input_file`, Bedrock `document`). A native attempt rejected for media, format, size (413) or context overflow gets one text retry per turn. The `pdfCapableModel` allow-list is deleted | Catalogue capability + engine-configured limits per (provider, model) | 🟡 provider rejections still get only one text retry |
 
 ## 4. Stress-test implications for ADR-051
 

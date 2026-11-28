@@ -656,6 +656,14 @@ type turnState struct {
 	// downgrade-retry". Initialized to false (zero value of atomic.Bool).
 	mediaRetryDone atomic.Bool
 
+	// pdfRecoveryByAttempt is set for every loop turn (newTurnState): the
+	// PDF retry is then attributed per provider attempt (issue #1968 FR-16,
+	// tryPDFTextFallback) and TryMediaDowngrade leaves PDFs alone, so one
+	// rejection can never spend the PDF budget twice or demote a PDF that
+	// no attempt sent natively. A bare turnState (helper-level callers)
+	// keeps the legacy PDF downgrade.
+	pdfRecoveryByAttempt atomic.Bool
+
 	// imageRetryDone is the guard for IMAGE-only downgrades. The pass-2
 	// media-downgrade fix split the guard into image-class and pdf-class,
 	// so a PDF rejection in a turn with both media types cannot consume the
@@ -666,18 +674,6 @@ type turnState struct {
 	// strippable again instead of failing every remaining iteration once
 	// the single per-turn strip was spent.
 	imageRetryDone atomic.Bool
-
-	// pdfRejected records that a provider rejected a request carrying a
-	// native PDF in this turn (office-preview B-10): from then on no request
-	// of the turn carries a native PDF — uploads go as their extracted text
-	// and preview_document / read_file results as page images or text.
-	pdfRejected atomic.Bool
-
-	// lastRequestCarriedPDF reports whether the most recent provider request
-	// carried a native PDF. Tool previews add their PDF per request (not to
-	// the loop's callMessages), so the downgrade paths read this to know a
-	// rejected request had a PDF they cannot see.
-	lastRequestCarriedPDF atomic.Bool
 
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
@@ -999,6 +995,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	if agent != nil {
 		ts.agentID = agent.ID
 	}
+	ts.pdfRecoveryByAttempt.Store(true)
 
 	// Capture the actual transaction state once, before any turn append/slide.
 	if agent != nil && agent.Sessions != nil {

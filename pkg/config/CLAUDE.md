@@ -58,12 +58,13 @@ caught loudly at boot by the coverage validator.
 
 ## Load is lenient; strictness is opt-in per site
 
-The config-load path has NO DisallowUnknownFields — unknown keys are
-silently ignored (pinned by TestLoadConfig_LegacySandboxProfileFields_
-Ignored). `config_unmarshal.go` is flexible-TYPE coercion
-(FlexibleStringSlice accepts string/number/array, splits on ASCII and
-full-width `，` commas), strict in exactly one place: a mixed
-legacy/nested mailbox entry is a hard error, never silently folded.
+The config-load path has no global DisallowUnknownFields — other unknown
+keys keep their existing lenient handling (pinned by
+TestLoadConfig_LegacySandboxProfileFields_Ignored). Strictness is local:
+`pdf_limits.go` rejects unknown PDF-limit fields; a mixed legacy/nested
+mailbox entry is also a hard error. `config_unmarshal.go` otherwise handles
+flexible TYPE coercion (FlexibleStringSlice accepts string/number/array,
+splitting on ASCII and full-width `，` commas).
 `cli_token_migration.go` still runs on every load (one-shot,
 raw-JSON-map patch — not SaveConfig, which drops explicit zero values
 under omitempty).
@@ -80,3 +81,25 @@ containerized, and honours the `OMNIPUS_CONTAINERIZED` override.
 `security.go::RegisterSensitiveValues` is replace-not-append: every call
 must pass the complete current set, or rotated secrets stop being
 scrubbed. It lives on `config.Config`, not in pkg/credentials.
+
+## PDF limits — engine configuration, not catalogue data (#1968)
+
+`config.go::Config.PDFLimits` is a sparse optional overlay. Nil uses the one
+embedded `data/pdf_limits.yaml` table, including its researched override rows
+and `[ASSUMED]` comments; never duplicate these quantities in Go defaults.
+`pdf_limits.go::Config.ResolvePDFLimits` is the only resolver. Per field it
+uses exact model > matching prefixes (longest first) > provider > default;
+operator fields beat shipped fields at the same key. Explicit zero is
+unlimited, false selects text, absence inherits. Returned `PDFLimits` is an
+immutable value; resolution does not modify the config or shipped data.
+
+`PDFLimitsConfig.UnmarshalJSON` strictly decodes only this section and calls
+`Validate`: unknown fields, negatives, empty providers, duplicate keys and
+bad model patterns name their row/field in a hard error. Other sections
+remain lenient. Pointers retain zero/false/absence through SaveConfig and
+Clone. Do not materialize shipped rows into the operator overlay on load.
+
+No tombstone: neutralize a shipped row at the same key with explicit desired
+values (0 for unlimited, true for inline), or delete the operator row to
+restore shipped behavior. A provider override never replaces a more-specific
+model row. User reference: [PDF limits](../../docs/operations/configuration.md#pdf-delivery-limits-pdf_limits).

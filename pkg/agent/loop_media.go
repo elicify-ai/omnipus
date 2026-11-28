@@ -8,7 +8,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -58,6 +57,25 @@ func resolveMediaRefsWithOffload(
 	rc workspaceRefcounter,
 	callerWorkspace string,
 ) []providers.Message {
+	return resolveMediaRefsForTurn(messages, store, maxSize, provider, model, sink, cat, rc, callerWorkspace, nil)
+}
+
+// resolveMediaRefsForTurn is resolveMediaRefsWithOffload with the turn's
+// chat PDF registry (issue #1968 FR-15): a PDF within max_media_size becomes
+// a data URL whose file name pdfs records for the per-attempt presenter,
+// which alone decides native or text. A nil registry names such PDFs with
+// the fallback name.
+func resolveMediaRefsForTurn(
+	messages []providers.Message,
+	store media.MediaStore,
+	maxSize int,
+	provider, model string,
+	sink *offloadSink,
+	cat *catalog.Catalog,
+	rc workspaceRefcounter,
+	callerWorkspace string,
+	pdfs *chatPDFRegistry,
+) []providers.Message {
 	if store == nil {
 		return messages
 	}
@@ -69,14 +87,12 @@ func resolveMediaRefsWithOffload(
 
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
-	var nativePDFs []nativePDFPart
-	// Per message: the resolved media and content injections, finished
-	// after the upload page images are rendered (newest uploads first).
+	// turnPDFBytes is the decoded size of this turn's own uploaded PDFs the
+	// presenter may send natively (the 32 MiB request budget, architect
+	// rule G5); recorded here because "this turn" is fixed when the request
+	// is resolved.
 	turnIdx := turnUserMessageIndex(result)
-	outMedia := make([][]string, len(result))
-	outInj := make([][]string, len(result))
-	touched := make([]bool, len(result))
-	var uploadJobs []uploadPageJob
+	turnPDFBytes := 0
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -192,51 +208,23 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: the model catalog alone decides (office-preview spec AD-11,
-			// FR-018). A model whose catalog entry lists the pdf modality gets
-			// the native document; otherwise (step-1 gate) skip native send and
-			// route to step-5 offload with document-class guidance, falling
-			// back to step-6 text extraction (FR-022) and step-7 honest marker.
+			// PDF (issue #1968 FR-15): resolution no longer decides native
+			// versus text. A PDF within max_media_size is encoded for the
+			// per-attempt presenter (pdf_present.go), which decides per
+			// provider attempt from the catalogue's PDF yes/no and the limits
+			// config.json pdf_limits resolves; a larger one is shown as text
+			// with L1.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(cat, provider, model) {
-					// The provider's documented PDF size limit tightens the
-					// agent media limit (catalog pdf_limits, D2 A).
-					pdfLimit, _ := nativePDFLimits(cat, provider, model, maxSize)
-					dataURL := encodePDFToDataURL(localPath, info, pdfLimit)
-					if dataURL != "" {
-						resolved = append(resolved, dataURL)
-						nativePDFs = append(nativePDFs, nativePDFPart{
-							msg: i, part: len(resolved) - 1, path: localPath,
-							mime: mime, name: meta.Filename, size: info.Size(),
-							turn: i == turnIdx,
-						})
-					} else {
-						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-						contentInjections = append(contentInjections, inj)
+				dataURL, injection := encodeChatPDF(localPath, mime, meta.Filename, info.Size(), maxSize, pdfs)
+				if dataURL != "" {
+					resolved = append(resolved, dataURL)
+					pdfs.registerSource(dataURL, localPath, sink)
+					if i == turnIdx {
+						turnPDFBytes += int(info.Size())
 					}
-				} else {
-					// Step-1 gate: model without the pdf modality + PDF →
-					// offload with document-class guidance + text extraction
-					// (step 5 + 6); a model that sees images also gets pages
-					// 1–10 as images and a note naming the workspace copy
-					// for later pages (office-preview spec §4.1, FR-044).
-					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					dest, offErr := sink.offloadPath(localPath, meta.Filename)
-					offInj := ""
-					if offErr == nil {
-						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
-					}
-					if modelSupportsImage(cat, provider, model) {
-						// Pages are rendered after this pass, newest
-						// uploads first, within one request allowance.
-						uploadJobs = append(uploadJobs, uploadPageJob{
-							msg: i, mediaAt: len(resolved), injAt: len(contentInjections), noteAt: len(offInj),
-							localPath: localPath, name: meta.Filename, dest: dest, offErr: offErr,
-							limits: resizeBudgetForModel(cat, provider, model, maxSize),
-							turn:   i == turnIdx,
-						})
-					}
-					contentInjections = append(contentInjections, offInj+textInj)
+				}
+				if injection != "" {
+					contentInjections = append(contentInjections, injection)
 				}
 				continue
 			}
@@ -246,24 +234,14 @@ func resolveMediaRefsWithOffload(
 			contentInjections = append(contentInjections, inj)
 		}
 
-		outMedia[i], outInj[i], touched[i] = resolved, contentInjections, true
-	}
-
-	turnPages := renderUploadPageJobs(sink.turnContext(), uploadJobs, outMedia, outInj)
-	for i := range result {
-		if !touched[i] {
-			continue
-		}
-		result[i].Media = outMedia[i]
-		if len(outInj[i]) > 0 {
-			result[i].Content = injectDocumentContent(result[i].Content, outInj[i])
+		result[i].Media = resolved
+		if len(contentInjections) > 0 {
+			result[i].Content = injectDocumentContent(result[i].Content, contentInjections)
 		}
 	}
 
-	_, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
-	turnPDFs := limitNativePDFParts(result, nativePDFs, maxDocs)
 	if sink != nil {
-		sink.turnMedia = turnUploadMedia{nativePDFBytes: turnPDFs, pageImageBytes: turnPages}
+		sink.turnMedia = turnUploadMedia{nativePDFBytes: turnPDFBytes}
 	}
 	return result
 }
@@ -439,48 +417,6 @@ func isPDF(mime, filename string) bool {
 		return true
 	}
 	return strings.HasSuffix(strings.ToLower(filename), ".pdf")
-}
-
-// encodePDFToDataURL base64-encodes a PDF file as a data:application/pdf;base64,…
-// data URL for native document blocks. Returns empty string if the file exceeds
-// maxSize or cannot be read.
-func encodePDFToDataURL(localPath string, info os.FileInfo, maxSize int) string {
-	if info.Size() > int64(maxSize) {
-		logger.WarnCF("agent", "PDF file too large for native block, falling back to text extraction", map[string]any{
-			"path":     localPath,
-			"size":     info.Size(),
-			"max_size": maxSize,
-		})
-		return ""
-	}
-
-	f, err := os.Open(localPath)
-	if err != nil {
-		logger.WarnCF("agent", "Failed to open PDF file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
-		})
-		return ""
-	}
-	defer f.Close()
-
-	prefix := "data:application/pdf;base64,"
-	encodedLen := base64.StdEncoding.EncodedLen(int(info.Size()))
-	var buf bytes.Buffer
-	buf.Grow(len(prefix) + encodedLen)
-	buf.WriteString(prefix)
-
-	encoder := base64.NewEncoder(base64.StdEncoding, &buf)
-	if _, err := io.Copy(encoder, f); err != nil {
-		logger.WarnCF("agent", "Failed to encode PDF file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
-		})
-		return ""
-	}
-	encoder.Close()
-
-	return buf.String()
 }
 
 // buildDocumentInjection extracts text from a document file and returns a
@@ -1322,18 +1258,14 @@ func fallbackName(filename, alt string) string {
 // failing the turn.
 type offloadSink struct {
 	workDir string
-	// ctx is the turn's context: work the resolver starts for an upload
-	// (PDF page rendering) ends on Stop. Nil means no turn (background).
-	ctx context.Context
 	// turnMedia is filled by the resolver: the decoded document media of
 	// this turn's uploads in the request it returned.
 	turnMedia turnUploadMedia
 }
 
-// turnOffloadSink is the resolver sink of this turn: its work folder and
-// its Stop.
+// turnOffloadSink is the resolver sink of this turn: its work folder.
 func (rt *agentLoopRunTurn) turnOffloadSink(workDir string) *offloadSink {
-	return &offloadSink{workDir: workDir, ctx: rt.turnCtx}
+	return &offloadSink{workDir: workDir}
 }
 
 // turnUserMessageIndex is the index of the turn's own user message: the
@@ -1351,19 +1283,13 @@ func turnUserMessageIndex(messages []providers.Message) int {
 	return -1
 }
 
-// turnUploadMedia is the decoded document media of a turn's own uploads in
-// one resolved request (AD-6, architect rule G5): native PDFs, and page
-// images rendered from uploaded PDFs.
+// turnUploadMedia is the decoded document media of a turn's own uploads
+// (AD-6, architect rule G5): the PDFs the resolver encoded for the
+// presenter (recorded when the request is resolved), and the page images
+// the request assembly rendered from uploaded PDFs for a model that does
+// not read PDFs natively.
 type turnUploadMedia struct {
 	nativePDFBytes, pageImageBytes int
-}
-
-// turnContext is the sink's turn context, or Background without one.
-func (s *offloadSink) turnContext() context.Context {
-	if s == nil || s.ctx == nil {
-		return context.Background()
-	}
-	return s.ctx
 }
 
 // offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the

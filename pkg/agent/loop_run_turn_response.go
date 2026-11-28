@@ -79,16 +79,13 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr.maxRetries = 2
 	cr.compactionAttemptedOnTimeout = false
 
-	// tryPDFTextFallback is the provider-agnostic safety net for native-PDF
-	// rejections. The model catalog cannot perfectly track OpenRouter's
-	// per-route capabilities (e.g. Claude Haiku routed via Amazon Bedrock
-	// 400s on PDF input), and each provider phrases the rejection
-	// differently, so instead of matching error strings it triggers on the
-	// STRUCTURAL signal: a terminal failure on a request that carried a
-	// native PDF document block. It downgrades the PDF to extracted text —
-	// which every model accepts — and retries once. The turn was going to
-	// fail anyway, so this can only improve the outcome. Returns true when
-	// the retry succeeded (response/err are updated in place).
+	// tryPDFTextFallback is the turn's one PDF recovery (issue #1968
+	// FR-16/FR-17): it fires only when an attempt of the failed round sent a
+	// native PDF and failed with its own qualifying error (a media, format or
+	// size rejection, HTTP 413 or a context overflow), spends the turn's PDF
+	// budget and retries once; every later request of the turn then shows the
+	// PDFs as text. Returns true when the retry ran (response/err are updated
+	// in place).
 	cr.tryPDFTextFallback = func() bool {
 		return cr.rr.rq.ri.rf.tryPDFTextFallback()
 	}
@@ -159,7 +156,9 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 	}
 	// Permanent route/model faults are not attachment failures. Refuse before
 	// synthesis, strip-retry, or PDF fallback can overwrite the original error.
-	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
+	// The FR-3 refusal (issue #1968) made no provider call: nothing to recover.
+	var modelList *pdfModelListUnavailableError
+	if permanentModelFailure(cr.rr.rq.ri.rf.err) || errors.As(cr.rr.rq.ri.rf.err, &modelList) {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
 	// ADR-087 D3/D9 (main call site): a tool call cut off at the
@@ -169,10 +168,18 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 		cr.rr.rq.ri.rf.callMessages = repaired
 		return agentLoopRunTurnResponseCallLLMWithRetriesContinue
 	}
+	// Issue #1968 FR-16/FR-17: a native PDF that an attempt of this round
+	// sent and the provider rejected gets the one text retry first. A failed
+	// retry continues below with its own error (a context overflow on it
+	// reaches compaction), never with the image synthesis.
+	pdfRecoveryFired := cr.tryPDFTextFallback()
+	if pdfRecoveryFired && cr.rr.rq.ri.rf.err == nil {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
 	// Preserve the friendly image-only synthesis before the generic media
 	// downgrade path. PDF and mixed-media failures deliberately fall through.
 	pe := errorToProviderError(cr.rr.rq.ri.rf.err)
-	if cr.synthesizeImageRejection(pe, cr.rr.rq.ri.rf.err) {
+	if !pdfRecoveryFired && cr.synthesizeImageRejection(pe, cr.rr.rq.ri.rf.err) {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
 	// Wave 1 (ADR-051 RD2): classifier-gated media downgrade-retry.
@@ -372,10 +379,6 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 			}
 			return agentLoopRunTurnResponseCallLLMWithRetriesContinue
 		}
-		// All candidates failed — if the request carried a native PDF
-		// block, every provider may have rejected it. Degrade to text
-		// and try once more across the chain before surfacing.
-		cr.tryPDFTextFallback()
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
 	return agentLoopRunTurnResponseCallLLMWithRetriesNext
@@ -403,11 +406,9 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) classifyFailure() agentLoo
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
 		// Non-retriable, non-timeout, non-context errors: break immediately.
-		// First, if the request carried a native PDF block, try the
-		// provider-agnostic PDF→text fallback once — a terminal error
-		// here is very likely a PDF-input rejection.
+		// (A native PDF rejection already had its one text retry in
+		// handleAttemptFailure, attributed per attempt — issue #1968 FR-16.)
 		if !cr.isTimeoutError && !cr.isContextError {
-			cr.tryPDFTextFallback()
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
 	} else {
@@ -531,6 +532,19 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 					// Site-3: post-timeout-trim assembly.
 					newHistory := cr.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(cr.rr.rq.ri.rf.rt.ts.sessionKey)
 					cr.rr.rq.ri.messages = cr.rr.rq.ri.rf.rt.al.assembleMessages(cr.rr.rq.ri.rf.rt.turnCtx, cr.rr.rq.ri.rf.rt.ts, newHistory, "", nil, activeSkillNames(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts))
+					// Resolve media references exactly like the initial and
+					// proactive-trim assembly sites: the rebuilt window holds the
+					// user's media:// references, and an unresolved chat PDF
+					// would reach the model as nothing at all (issue #1968,
+					// silent-failure finding SF-3). After the turn's PDF
+					// recovery is spent the presenter shows the resolved PDF
+					// as text, so the rebuilt request keeps that presentation.
+					retryProvider, retryModel := cr.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+					cr.rr.rq.ri.messages = resolveMediaRefsForTurn(
+						cr.rr.rq.ri.messages, cr.rr.rq.ri.turnMediaStore, cr.rr.rq.ri.maxMediaSize, retryProvider, retryModel,
+						&offloadSink{workDir: cr.rr.rq.ri.wsDir}, cr.rr.rq.ri.turnCatalog, cr.rr.rq.ri.turnRefcounter,
+						cr.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, cr.rr.rq.ri.rf.rt.turnChatPDFs(),
+					)
 					cr.rr.continuationChain = nil
 					if cr.rr.rq.ri.rf.rt.ts.continuationUnresolved() {
 						// ADR-087 D6.7: a history rebuild loses the D6

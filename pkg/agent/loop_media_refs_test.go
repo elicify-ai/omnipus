@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -224,31 +225,40 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	}
 }
 
-func TestResolveMediaRefs_PDFNonCapableModelInjectsContent(t *testing.T) {
+// FR-15: resolution encodes chat PDFs independently of model capability;
+// FR-10 makes the native/text decision per actual attempt. This reconciles
+// the former TestResolveMediaRefs_PDFNonCapableModelInjectsContent oracle.
+func TestResolveMediaRefs_PDFNonCapableModelDefersPresentation(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
 	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	pdfPath := filepath.Join(dir, "report.pdf")
-	// Invalid PDF — text extraction will fail gracefully.
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644)
-	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "check this", Media: []string{ref}},
+	pdfPath := filepath.Join(t.TempDir(), "report.pdf")
+	// Keep the original malformed fixture: resolution must preserve the
+	// bytes, not treat a local parse failure as a native-viewing decision.
+	pdfData := []byte("%PDF-1.4 test content")
+	if err := os.WriteFile(pdfPath, pdfData, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	cat := mustCatalog(t, textOnlyCatalogJSON(t, "fixture-provider", "fixture-model")) // AD-11: catalog, not a model-name list.
-	result := resolveMediaRefsWithOffload(messages, store, config.DefaultMaxMediaSize, "fixture-provider", "fixture-model", nil, cat, nil, "")
-
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media (non-image), got %d", len(result[0].Media))
+	ref, err := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Must NOT contain the local path.
+	messages := []providers.Message{{Role: "user", Content: "check this", Media: []string{ref}}}
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
+	if len(result) != 1 || len(result[0].Media) != 1 {
+		t.Fatalf("FR-15: expected one preserved PDF, got %#v", result)
+	}
+	want := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(pdfData)
+	if result[0].Media[0] != want {
+		t.Fatalf("FR-15: PDF resolution must preserve exact bytes: got %q, want %q", result[0].Media[0], want)
+	}
 	if strings.Contains(result[0].Content, pdfPath) {
 		t.Fatalf("content must not contain local path, got %q", result[0].Content)
 	}
-	// Must contain the file name and either extracted text or a failure notice.
-	if !strings.Contains(result[0].Content, "report.pdf") {
-		t.Fatalf("expected filename in content, got %q", result[0].Content)
+	if result[0].Content != "check this" {
+		t.Fatalf("FR-15/FR-10: resolution must defer PDF text/notices to the attempt, got %q", result[0].Content)
+	}
+	if messages[0].Content != "check this" || len(messages[0].Media) != 1 || messages[0].Media[0] != ref {
+		t.Fatalf("resolution mutated the original user message: %#v", messages)
 	}
 }
 
@@ -390,6 +400,9 @@ func TestResolveMediaRefs_InvalidDocxInjectsFailureNotice(t *testing.T) {
 }
 
 func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
+	// FR-15 keeps the PDF beside the image during resolution; only the
+	// per-attempt presenter (FR-10) may replace it with text and a notice.
+	t.Setenv(config.EnvHome, t.TempDir())
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
@@ -407,29 +420,46 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 		0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
 		0x82,
 	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
-	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
+	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	imgRef, err := store.Store(pngPath, media.MediaMeta{}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pdfPath := filepath.Join(dir, "report.pdf")
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644)
-	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
+	pdfData := []byte("%PDF-1.4 test")
+	if err = os.WriteFile(pdfPath, pdfData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileRef, err := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	messages := []providers.Message{
 		{Role: "user", Content: "check these", Media: []string{imgRef, fileRef}},
 	}
-	cat := mustCatalog(t, visionCatalogJSON(t, "fixture-provider", "fixture-model")) // AD-11: image modality, no pdf.
-	result := resolveMediaRefsWithOffload(messages, store, config.DefaultMaxMediaSize, "fixture-provider", "fixture-model", nil, cat, nil, "")
-	if len(result[0].Media) != 1 {
-		t.Fatalf("expected 1 media (image only), got %d", len(result[0].Media))
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
+
+	if len(result) != 1 || len(result[0].Media) != 2 {
+		t.Fatalf("FR-15: expected image and PDF in source order, got %#v", result)
 	}
 	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
-		t.Fatal("expected image to be base64 encoded")
+		t.Fatal("expected image to be base64 encoded first")
 	}
-	// PDF with invalid content → failure notice injected, no local path.
-	if strings.Contains(result[0].Content, pdfPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	wantPDF := "data:application/pdf;base64," + base64.StdEncoding.EncodeToString(pdfData)
+	if result[0].Media[1] != wantPDF {
+		t.Fatalf("FR-15: second media must be the exact PDF, got %q", result[0].Media[1])
 	}
-	if !strings.Contains(result[0].Content, "report.pdf") {
-		t.Fatalf("expected pdf filename in content, got %q", result[0].Content)
+	if strings.Contains(result[0].Content, pdfPath) || strings.Contains(result[0].Content, pngPath) {
+		t.Fatalf("content must not contain local paths, got %q", result[0].Content)
+	}
+	if result[0].Content != "check these" {
+		t.Fatalf("FR-15/FR-10: resolution must defer PDF text/notices, got %q", result[0].Content)
+	}
+	if messages[0].Content != "check these" || len(messages[0].Media) != 2 || messages[0].Media[0] != imgRef || messages[0].Media[1] != fileRef {
+		t.Fatalf("resolution mutated original mixed media: %#v", messages)
 	}
 }

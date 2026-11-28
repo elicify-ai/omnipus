@@ -49,8 +49,10 @@ func TestBuildParams_ToolMediaOmissionIsVisible(t *testing.T) {
 		ToolCallID: "call-warning",
 		Content:    "inspection completed",
 		Media: []string{
-			// §4.2/T-44 makes PDFs native document blocks; audio remains unsupported.
-			"data:audio/ogg;base64,T2dnUw==",
+			// FR-18: PDF is supported; images/other media retain their old
+			// behavior (§8). Keep a truly unsupported type beside the PDF.
+			"data:application/pdf;base64,JVBERi0xLjQ=",
+			"data:audio/wav;base64,UklGRg==",
 			"data:image/png;base64-without-comma",
 		},
 	}}, nil, "model", nil)
@@ -63,6 +65,18 @@ func TestBuildParams_ToolMediaOmissionIsVisible(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), warning) {
 		t.Fatalf("wire payload did not disclose omitted media; want %q in %s", warning, raw)
+	}
+	// FR-18: the valid PDF must not be counted as omitted or silently lost.
+	var body map[string]any
+	if decodeErr := json.Unmarshal(raw, &body); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	_, docs, ids := pdf1968WireAnthropicDocs(t, body)
+	if len(docs) != 1 || len(ids) != 1 || ids[0] != "call-warning" {
+		t.Fatalf("valid tool PDF/call correlation lost: docs=%v ids=%v", docs, ids)
+	}
+	if got := string(pdf1968WireDocData(t, docs[0])); got != "%PDF-1.4" {
+		t.Fatalf("valid tool PDF bytes=%q, want %%PDF-1.4", got)
 	}
 }
 

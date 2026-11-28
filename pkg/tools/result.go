@@ -58,6 +58,12 @@ type ToolResult struct {
 	// durable history retains only ForLLM's re-read marker.
 	InspectionImages []InspectionImage `json:"-"`
 
+	// InspectionPDFs contains private, live-turn PDF evidence produced by
+	// read tools (issue #1968, FR-7). Like InspectionImages it is never
+	// serialized: each provider attempt presents it natively or as the
+	// persisted text in ForLLM, and history never holds its bytes (FR-14).
+	InspectionPDFs []InspectionPDF `json:"-"`
+
 	// DocumentPreview is preview_document's output (office-preview spec
 	// §4.1, §5.1): the live-turn model forms, chosen per active model at
 	// request assembly and never persisted, and the display-only thumbnail
@@ -196,6 +202,30 @@ type InspectionImage struct {
 	// Reauthorize checks current access before an actual provider attempt.
 	// It never supplies or reopens the captured image bytes.
 	Reauthorize func(context.Context) error
+}
+
+// InspectionPDF carries a PDF read by read_file or library_read for the
+// current turn only (issue #1968, FR-7). Bytes are the exact file bytes;
+// Pages is the page count the page tree states (0 = unknown or not
+// parseable locally); SHA256 is the hex digest of Bytes; HasText reports
+// whether text was extracted locally. LocalFailure is non-empty only when
+// the file was not inspected because the shared PDF parser was busy or
+// timed out (PDFTemporaryFailureReason); HasText is then false without
+// meaning the file has no text. Reauthorize checks current access before
+// each provider attempt that would present the bytes natively.
+type InspectionPDF struct {
+	Bytes        []byte
+	Name         string
+	Pages        int
+	SHA256       string
+	HasText      bool
+	LocalFailure string
+	Reauthorize  func(context.Context) error
+	// RenderPages renders pages 1-10 as images on first need: an attempt
+	// whose model sees images but does not receive this PDF natively gets
+	// them (office-preview spec §4.1). It returns the pages, else why they
+	// are unavailable, and a note for the model. Nil means no page images.
+	RenderPages func(context.Context) (pages []DocumentPreviewPage, unavailable, note string)
 }
 
 // ToolDeferral is the structural discriminator a control-gated tool result

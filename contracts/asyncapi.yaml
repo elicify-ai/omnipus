@@ -4088,6 +4088,12 @@ components:
             no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
           neutral_variants:
             no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+        model_list_unavailable:
+          # Issue #1968 FR-3: no catalogue document is loaded and the request holds a
+          # PDF, so the turn ends before any provider call (message C1).
+          message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
+          attribution: product
+          provider_message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
         delegation_not_resumable:
           # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W14 form 1 (B16a resume unavailable, selected by errExternalResumeUnavailable's identity; ARCHITECT-RULING-R4 D3); variant no_cli W14's no-fact form (no CLI display name known). The no_cli neutral twin applies W14's clause drop to the neutral form (the spec defines the no-fact chat form only).
           message: "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation."
@@ -4149,6 +4155,7 @@ components:
             - goal_state_unavailable
             - external_cli_not_found
             - external_cli_invalid_config
+            - model_list_unavailable
             - delegation_not_resumable
             - unknown
         message:
@@ -4466,6 +4473,12 @@ components:
             no_program: "I couldn't start the coding program: its settings for this agent are missing or invalid. Check the agent's coding program settings."
           neutral_variants:
             no_program: "The coding program could not start: its settings for this agent are missing or invalid. Check the agent's coding program settings."
+        model_list_unavailable:
+          # Issue #1968 FR-3: no catalogue document is loaded and the request holds a
+          # PDF, so the turn ends before any provider call (message C1).
+          message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether this model reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
+          attribution: product
+          provider_message: 'PDF not sent: the model list is not loaded, so Omnipus cannot check whether {model} reads PDFs. Restart Omnipus; if this persists, check the "catalog" error in the log.'
         delegation_not_resumable:
           # #1857 (§13.8): founder-approved 2026-11-18 — see docs/internal/specs/notifications-1857-pending-wording.md. W14 form 1 (B16a resume unavailable, selected by errExternalResumeUnavailable's identity; ARCHITECT-RULING-R4 D3); variant no_cli W14's no-fact form (no CLI display name known). The no_cli neutral twin applies W14's clause drop to the neutral form (the spec defines the no-fact chat form only).
           message: "I couldn't continue this delegation in {cli}: its previous conversation can't be resumed. Start a new delegation."
@@ -4527,6 +4540,7 @@ components:
             - goal_state_unavailable
             - external_cli_not_found
             - external_cli_invalid_config
+            - model_list_unavailable
             - delegation_not_resumable
             - unknown
         message:

@@ -21,3 +21,16 @@ Scope, so the rule is not over-applied: the OpenAI device-code/OAuth login is
 RESTORED (ADR-068 §8b, 2026-08-23) and its symbols are legal. Branches cut
 before a deletion re-add the deleted surface as an ordinary conflict-free
 addition — resolve by keeping the deletion.
+
+## PDF capability is catalogue data; PDF limits are not (#1968)
+
+`catalog.Handle.Supports(catalog.ModalityPDF)` reads only the exact model's
+`pdf` input modality; a miss is not capable. The catalogue parser ignores
+legacy `document_limits` / `default_document_limits` members like any other
+unknown member, regardless of their value shape. No parse, domain, Handle,
+served projection or generated catalogue contract holds PDF limits.
+
+All numeric PDF settings and the inline-route switch come from
+`config.Config.ResolvePDFLimits`, backed by engine-owned embedded data and
+operator config. Keep this separate from `catalog.Catalog.Resolve`'s
+zero-allocation lookup path. Resize limits are unrelated and stay here.

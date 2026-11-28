@@ -38,6 +38,10 @@ const (
 	CodeProviderRequestRejected LLMErrorCode = "provider_request_rejected"
 	// CodeModelRouteUnavailable is a pre-request named-client refusal.
 	CodeModelRouteUnavailable LLMErrorCode = "model_route_unavailable"
+	// CodeModelListUnavailable ends a turn whose request holds a PDF while no
+	// catalogue document is loaded (issue #1968 FR-3): the PDF capability of
+	// the model cannot be checked, so no provider call is made.
+	CodeModelListUnavailable LLMErrorCode = "model_list_unavailable"
 )
 
 // #1857 (notifications spec §13.8): failure kinds the server knows a safe
@@ -1021,6 +1025,10 @@ func TranslateTurnError(err error) LLMError {
 	if errors.As(err, &route) {
 		return translateModelRouteUnavailable(route)
 	}
+	var modelList *pdfModelListUnavailableError
+	if errors.As(err, &modelList) {
+		return modelList.llmError()
+	}
 	// Founder decision 2026-09-14: a streaming call aborted for total
 	// silence (common.ErrStreamStalled) is its own typed code, before any
 	// substring classifier can misread the sentinel's wording. Checked early
@@ -1678,6 +1686,13 @@ func providerErrorFromChain(err error) *ProviderError {
 	var route *providers.ModelRouteUnavailableError
 	if errors.As(err, &route) {
 		return &ProviderError{Provider: route.Provider, Model: route.Model, Err: route}
+	}
+	// Issue #1968 FR-3: the C1 refusal made no provider call, but it names
+	// the attempt it refused, so the wire facts and the provider_message
+	// flag carry its model (code-review finding M1).
+	var modelList *pdfModelListUnavailableError
+	if errors.As(err, &modelList) {
+		return &ProviderError{Provider: modelList.Provider, Model: modelList.Model, Err: modelList}
 	}
 	// Prefer the most-specific pe — it carries the Body bytes that the
 	// classifier substring-matches on. errors.As will walk the Unwrap

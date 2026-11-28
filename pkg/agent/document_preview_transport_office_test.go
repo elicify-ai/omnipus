@@ -107,9 +107,13 @@ func TestOfficePDFTransport_AllAdaptersAndEntryPoints(t *testing.T) {
 						}
 						require.False(t, result.IsError, "%s", result.ForLLM)
 						h, rr, _ := officeRecordResult(t, result, entry)
-						forms := rr.rq.ri.rf.rt.previewForms(cat, "office-provider", "office-model", catalog.ResizeLimits{LongEdgePx: 2000, MaxBytes: 4 << 20})
-						messages, err = attachTurnDocumentPreviews(context.Background(), h.store.GetHistory(h.key), rr.rq.ri.rf.rt.documentPreviews, forms)
-						require.NoError(t, err)
+						// Rewritten 2026-11-28 (one PDF mechanism): read_file's PDF
+						// is a turn-private InspectionPDF and a preview's PDF is a
+						// preview form; both reach the request through the
+						// per-attempt presenter, the production path.
+						rt := rr.rq.ri.rf.rt
+						rt.al.SetCapabilityCatalog(cat)
+						messages = officeUnifiedSend(t, rt, "office-provider", "office-model", h.store.GetHistory(h.key))
 					}
 					recorder, provider := cwR1Adapter(t, family)
 					_, err = provider.Chat(context.Background(), messages, nil, "office-model", nil)
@@ -134,25 +138,21 @@ func TestOfficePDFTransport_AllAdaptersAndEntryPoints(t *testing.T) {
 	}
 }
 
+// Rewritten 2026-11-28 (one PDF mechanism): the 20 MiB / five-document
+// limit is config.json pdf_limits (no catalogue limit exists), and the
+// per-attempt presenter applies it to the assembled request.
 func TestOfficeUpload_CatalogDocumentCountKeepsNewestFive(t *testing.T) {
-	var doc map[string]any
-	require.NoError(t, json.Unmarshal(catalogDocJSON(t, "office-provider", "office-model", "text", "pdf"), &doc))
-	rows, ok := doc["providers"].([]any)
-	require.True(t, ok)
-	row, ok := rows[0].(map[string]any)
-	require.True(t, ok)
-	row["pdf_limits"] = map[string]any{"max_document_bytes": 20 << 20, "max_documents_per_request": 5}
-	raw, err := json.Marshal(doc)
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "office-provider", "office-model", "text", "pdf"))
 	require.NoError(t, err)
-	cat, err := catalog.NewCatalog(raw)
-	require.NoError(t, err)
+	rt := officeUnifiedTurn(t, cat, "office-provider", map[string]any{"max_file_bytes": 20 << 20, "max_documents_per_request": 5})
 	store := mediatest.NewFileMediaStore(t)
 	var messages []providers.Message
 	for i := 1; i <= 6; i++ {
 		ref := officeUpload(t, officepreview.PDF(i), fmt.Sprintf("upload-%d.pdf", i), store)
 		messages = append(messages, providers.Message{Role: "user", Content: fmt.Sprintf("upload-%d", i), Media: []string{ref}})
 	}
-	got := resolveMediaRefsWithOffload(messages, store, 20<<20, "office-provider", "office-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "")
+	resolved := resolveMediaRefsForTurn(messages, store, 20<<20, "office-provider", "office-model", &offloadSink{workDir: t.TempDir()}, cat, nil, "", rt.chatPDFs)
+	got := officeUnifiedSend(t, rt, "office-provider", "office-model", resolved)
 	native := 0
 	for _, m := range got {
 		for _, part := range m.Media {
@@ -161,7 +161,7 @@ func TestOfficeUpload_CatalogDocumentCountKeepsNewestFive(t *testing.T) {
 			}
 		}
 	}
-	require.Equal(t, 5, native, "catalog max_documents_per_request must apply across the assembled upload request")
+	require.Equal(t, 5, native, "config max_documents_per_request must apply across the assembled upload request")
 	require.Empty(t, got[0].Media, "AD-6: newest uploads take priority")
 	for i := 1; i < 6; i++ {
 		require.Equal(t, []string{"data:application/pdf;base64," + base64.StdEncoding.EncodeToString(officepreview.PDF(i+1))}, got[i].Media)
@@ -190,7 +190,14 @@ func TestOfficeUpload_ImageOnlyPDFOffersPagesAndActionablePath(t *testing.T) {
 	store := mediatest.NewFileMediaStore(t)
 	ref := officeUpload(t, officepreview.PDF(30), "thirty.pdf", store)
 	sink := &offloadSink{workDir: t.TempDir()}
-	got := resolveMediaRefsWithOffload([]providers.Message{{Role: "user", Content: "inspect PDF", Media: []string{ref}}}, store, 20<<20, "office-provider", "office-model", sink, cat, nil, "")
+	// Rewritten 2026-11-28 (one PDF mechanism): resolution keeps the upload
+	// as a PDF candidate; the attempt path renders its page images for a
+	// model that sees images but does not read PDFs, and the per-attempt
+	// presenter sends the PDF itself as text. The assertions are on the
+	// request the provider receives.
+	rt := officeUnifiedTurn(t, cat, "office-provider", nil)
+	resolved := resolveMediaRefsForTurn([]providers.Message{{Role: "user", Content: "inspect PDF", Media: []string{ref}}}, store, 20<<20, "office-provider", "office-model", sink, cat, nil, "", rt.chatPDFs)
+	got := officeUnifiedSend(t, rt, "office-provider", "office-model", resolved)
 	require.Len(t, got, 1)
 	if len(got[0].Media) == 0 {
 		t.Fatal("BLOCKED: uploaded-PDF page-image routing not implemented — required by office-preview spec §4.1, AD-11 / T-44, T-71")

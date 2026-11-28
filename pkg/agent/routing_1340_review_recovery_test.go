@@ -67,6 +67,9 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 			a := &AgentInstance{ID: "routing1340", Model: "m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "m"}}}
 			a.StoreProviderPool(map[string]providers.LLMProvider{"openrouter": client})
 			f := newRouting1340ReviewFixture(t, nil, a)
+			if tc.pdf {
+				routing1340InstallPDFCatalogue(t, f)
+			}
 			f.selectProvider(t)
 			media := "data:image/png;base64,iVBORw0KGgo="
 			if tc.pdf {
@@ -76,6 +79,9 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 			f.ri.messages = f.rf.callMessages
 			if flow := f.rr.callLLMWithRetries(); flow != agentLoopRunTurnResponseNext {
 				t.Fatalf("provider-call flow=%v", flow)
+			}
+			if tc.pdf {
+				routing1340AssertNativePDFPremise(t, client, media)
 			}
 			if len(client.seen) != tc.wantCalls {
 				t.Errorf("provider requests=%d, want%d; error=%v", len(client.seen), tc.wantCalls, f.rf.err)

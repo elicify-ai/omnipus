@@ -72,6 +72,10 @@ func runRouting1340SubjectTurn(t *testing.T, firstErr error, media string) (*rou
 	a := &AgentInstance{ID: "routing1340-subject", Model: "m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "m"}}}
 	a.StoreProviderPool(map[string]providers.LLMProvider{"openrouter": client})
 	f := newRouting1340ReviewFixture(t, nil, a)
+	pdf := strings.HasPrefix(media, "data:application/pdf;")
+	if pdf {
+		routing1340InstallPDFCatalogue(t, f)
+	}
 	f.selectProvider(t)
 	message := providers.Message{Role: "user", Content: "inspect this"}
 	if media != "" {
@@ -82,7 +86,30 @@ func runRouting1340SubjectTurn(t *testing.T, firstErr error, media string) (*rou
 	if flow := f.rr.callLLMWithRetries(); flow != agentLoopRunTurnResponseNext {
 		t.Fatalf("provider-call flow=%v", flow)
 	}
+	if pdf {
+		routing1340AssertNativePDFPremise(t, client, media)
+	}
 	return client, f
+}
+
+// FR-3 rejects a PDF before any provider call without a catalogue document.
+// These #1340 cases exercise provider-error routing, so install the FR-1/FR-16
+// native-attempt prerequisite rather than weakening their recovery oracles.
+func routing1340InstallPDFCatalogue(t *testing.T, f *routing1340ReviewFixture) {
+	t.Helper()
+	f.al.SetCapabilityCatalog(pdf1968Catalog(t, []pdf1968ProviderRow{
+		pdf1968CapableRow("openrouter", "m", nil),
+	}))
+}
+
+func routing1340AssertNativePDFPremise(t *testing.T, client *routing1340RecoveryClient, media string) {
+	t.Helper()
+	if len(client.seen) == 0 || len(client.seen[0]) != 1 {
+		t.Fatalf("FR-16 premise: expected one native-PDF user message on the first real provider call; got %+v", client.seen)
+	}
+	if got := client.seen[0][0].Media; len(got) != 1 || got[0] != media {
+		t.Fatalf("FR-16 premise: first attempt media=%q, want exactly the original native PDF %q", got, media)
+	}
 }
 
 func routing1340SubjectMedia(pdf bool) string {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -198,16 +199,22 @@ func (p *turnDocumentPreviews) marker(id string) (string, bool) {
 	return m, ok
 }
 
-// previewModelForms is what the active model reads (catalog only, AD-11).
+// previewModelForms is what the active model reads. pdf is the #1968
+// capability decision (catalogue pdf modality plus the configured inline
+// route, pdfNativeSupported) while the turn's one PDF recovery is unspent;
+// maxPDF and maxPDFs come from config.Config.ResolvePDFLimits and the
+// agent's media size limit, never from the catalogue. The presenter
+// (pdf_present.go) still decides every PDF this attaches.
 type previewModelForms struct {
 	pdf    bool
 	images bool
 	maxPDF int
-	// maxPDFs is the most native PDFs per request (0 = no recorded limit).
+	// maxPDFs is the most native PDFs per request (0 = no configured limit).
 	maxPDFs int
 	resize  catalog.ResizeLimits
-	// pdfRejected: a provider rejected a native PDF this turn; pdf is then
-	// false and a preview without text sends the PDF's extracted text.
+	// pdfRejected: the turn's one PDF recovery is spent (a provider rejected
+	// a native PDF); pdf is then false and a preview without text sends the
+	// PDF's extracted text.
 	pdfRejected bool
 	// turnUploadBytes is the decoded document media of this turn's own
 	// uploads as recorded when the request was resolved (native PDFs and
@@ -223,6 +230,20 @@ type previewModelForms struct {
 	// is used up by other PDFs in the request, so pdf was turned off for this
 	// call (AD-6). Set per call by the assembler; the note names it (G12).
 	pdfCountUsedUp bool
+	// demotedNote is set only when the presenter demoted this preview's
+	// native PDF on one attempt (a configured limit or the request body
+	// limit): the reason the forms that replace it carry.
+	demotedNote string
+}
+
+// previewOrigin is one preview_document result as it was before its forms
+// were attached, kept for the presenter: when the presenter does not send
+// the attached PDF natively on an attempt, it rebuilds the message's page
+// images or text from here.
+type previewOrigin struct {
+	msg   providers.Message
+	doc   *tools.DocumentPreview
+	forms previewModelForms
 }
 
 // noBudgetNote is the note on the newest preview when the request's 32 MiB
@@ -241,14 +262,25 @@ func (f previewModelForms) noBudgetNote() string {
 // extracted text. The source is re-authorized before every send; newest
 // calls get the request media budget first.
 func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Message, p *turnDocumentPreviews, forms previewModelForms) ([]providers.Message, error) {
+	live, _, _, err := attachTurnDocumentPreviewsFor(ctx, messages, p, forms)
+	return live, err
+}
+
+// attachTurnDocumentPreviewsFor is attachTurnDocumentPreviews that also
+// returns, by message index, each preview whose native PDF it attached (the
+// presenter's fallback source), and what is left of the request's 32 MiB
+// document media budget.
+func attachTurnDocumentPreviewsFor(ctx context.Context, messages []providers.Message, p *turnDocumentPreviews, forms previewModelForms) ([]providers.Message, map[int]previewOrigin, int, error) {
+	turnBudgetLeft := max(previewRequestBudget-max(forms.turnUploadBytes, turnMessagePDFBytes(messages)), 0)
 	if p == nil {
-		return messages, nil
+		return messages, nil, turnBudgetLeft, nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.byID) == 0 {
-		return messages, nil
+		return messages, nil, turnBudgetLeft, nil
 	}
+	origins := map[int]previewOrigin{}
 	live := append([]providers.Message(nil), messages...)
 	// The request's 32 MiB covers this turn's document media only (AD-6,
 	// architect rule G5): this turn's own uploads first, then the previews,
@@ -279,16 +311,33 @@ func attachTurnDocumentPreviews(ctx context.Context, messages []providers.Messag
 			callForms.pdf, callForms.pdfCountUsedUp = false, forms.pdf
 		}
 		before := len(live[i].Media)
+		original := live[i]
 		used, err := attachDocumentPreview(ctx, &live[i], d, callForms, budget)
 		if err != nil {
-			return nil, err
+			return nil, nil, 0, err
 		}
 		budget -= used
 		if callForms.pdf && len(live[i].Media) > before && strings.HasPrefix(live[i].Media[len(live[i].Media)-1], "data:application/pdf;") {
 			pdfsLeft--
+			origins[i] = previewOrigin{msg: original, doc: d, forms: callForms}
 		}
 	}
-	return live, nil
+	return live, origins, budget, nil
+}
+
+// previewFallback rebuilds a preview message whose native PDF the presenter
+// did not send on this attempt: its page images within budget, else its
+// text, with the presenter's reason. It returns the message and the page
+// image bytes it used.
+func previewFallback(ctx context.Context, origin previewOrigin, budget int, note string) (providers.Message, int, error) {
+	msg := origin.msg
+	forms := origin.forms
+	forms.pdf, forms.pdfCountUsedUp, forms.demotedNote = false, false, note
+	// The newest-preview rule (G5 section 5): a demoted PDF is never left
+	// with only the not-re-sent marker.
+	forms.newest = true
+	used, err := attachDocumentPreview(ctx, &msg, origin.doc, forms, budget)
+	return msg, used, err
 }
 
 // turnMessagePDFBytes is the decoded size of the native PDFs in the turn's
@@ -391,26 +440,30 @@ func attachDocumentPreview(ctx context.Context, msg *providers.Message, d *tools
 		}
 		noBudget = forms.noBudgetNote()
 	}
-	reason := sizeNote + countNote + noBudget
+	demoted := ""
+	if forms.demotedNote != "" {
+		demoted = "; " + forms.demotedNote
+	}
+	reason := sizeNote + countNote + noBudget + demoted
 	switch {
 	case noBudget != "":
 	case d.ImagesUnavailable != "":
 		reason = "; page images unavailable: " + d.ImagesUnavailable + reason
-	case countNote != "":
-		// The model reads PDFs; the count limit, not the model, is why
-		// this one went as text (G12).
+	case countNote != "" || demoted != "":
+		// The model reads PDFs; a limit, not the model, is why this one
+		// went as text (G12).
 	case !forms.images:
 		reason = "; this model reads text only" + reason
 	}
 	if d.ModelOnly {
 		// The retained result text already is the text form (today's
 		// read_file path); only say why images did not go.
-		if forms.images && (d.ImagesUnavailable != "" || noBudget != "") {
+		if (forms.images && (d.ImagesUnavailable != "" || noBudget != "")) || demoted != "" {
 			msg.Content += "\n[model received: extracted text" + reason + d.PagesNote + "]"
 		}
 		return 0, nil
 	}
-	if d.Text == "" && len(d.PDF) > 0 && (forms.pdfRejected || noBudget != "" || countNote != "") {
+	if d.Text == "" && len(d.PDF) > 0 && (forms.pdfRejected || noBudget != "" || countNote != "" || demoted != "") {
 		// No stored text: recover with the text extracted from the same
 		// bytes, as an uploaded PDF does (provider rejection, no budget for
 		// the newest preview's media, or the per-request PDF count used up).
@@ -464,27 +517,44 @@ func attachPreviewPages(msg *providers.Message, d *tools.DocumentPreview, limits
 	return used, sent, nil
 }
 
-// previewForms resolves the active model's preview forms from the catalog.
-// The native PDF limit is the agent's media size limit (AD-11).
+// previewForms resolves the active model's preview forms with the #1968
+// mechanism: the PDF form is offered only when pdfNativeSupported (the
+// catalogue's pdf modality and the configured inline route) holds and the
+// turn's one PDF recovery is unspent; the native PDF size is the agent's
+// media size limit tightened by the configured max_file_bytes, and the
+// document count is the configured max_documents_per_request. The
+// catalogue supplies no limit.
 func (rt *agentLoopRunTurn) previewForms(cat *catalog.Catalog, provider, model string, limits catalog.ResizeLimits) previewModelForms {
-	maxSize := 20 << 20
-	if cfg := rt.al.GetConfig(); cfg != nil {
+	maxSize := config.DefaultMaxMediaSize
+	rt.al.mu.RLock()
+	cfg := rt.al.cfg
+	pdfLimits := cfg.ResolvePDFLimits(provider, model)
+	if cfg != nil {
 		maxSize = cfg.Agents.Defaults.GetMaxMediaSize()
 	}
-	maxPDF, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
-	rejected := rt.ts != nil && rt.ts.pdfRejected.Load()
+	rt.al.mu.RUnlock()
+	maxPDF := maxSize
+	if v, set := pdfLimits.MaxFileBytes(); set && v > 0 && v < int64(maxPDF) {
+		maxPDF = int(v)
+	}
+	maxDocs := 0
+	if v, set := pdfLimits.MaxDocumentsPerRequest(); set && v > 0 {
+		maxDocs = int(v)
+	}
+	spent := rt.ts != nil && rt.ts.mediaRetryDone.Load()
+	capable := cat != nil && cat.Document() != nil && pdfNativeSupported(cat.Resolve(provider, model), pdfLimits)
 	uploads := rt.turnUploadMedia.pageImageBytes
-	if !rejected {
-		// After a rejection this turn's uploaded PDFs go as text.
+	if capable && !spent {
+		// Otherwise this turn's uploaded PDFs go as text or page images.
 		uploads += rt.turnUploadMedia.nativePDFBytes
 	}
 	return previewModelForms{
-		pdf:             modelSupportsPDF(cat, provider, model) && !rejected,
+		pdf:             capable && !spent,
 		images:          modelSupportsImage(cat, provider, model),
 		maxPDF:          maxPDF,
 		maxPDFs:         maxDocs,
 		resize:          limits,
-		pdfRejected:     rejected,
+		pdfRejected:     spent,
 		turnUploadBytes: uploads,
 	}
 }
@@ -496,19 +566,4 @@ func previewAccessDenied(ctx context.Context, d *tools.DocumentPreview) string {
 		return "\n[preview_document content withheld: access to the source was denied: " + err.Error() + "]"
 	}
 	return ""
-}
-
-// nativePDFLimits is the native-PDF size limit and per-request document
-// count for the active provider: the agent's media size limit, tightened by
-// the provider's documented catalog pdf_limits (office-preview D2 A).
-func nativePDFLimits(cat *catalog.Catalog, provider, model string, maxSize int) (maxBytes, maxDocs int) {
-	maxBytes = maxSize
-	if cat == nil {
-		return maxBytes, 0
-	}
-	if l := cat.Resolve(provider, model).PDFLimits(); l != nil {
-		maxBytes = min(maxBytes, l.MaxDocumentBytes)
-		maxDocs = l.MaxDocumentsPerRequest
-	}
-	return maxBytes, maxDocs
 }

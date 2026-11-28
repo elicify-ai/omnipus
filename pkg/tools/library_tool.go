@@ -149,7 +149,8 @@ func (t *LibraryReadTool) Description() string {
 		"Give the exact path announced when the file was uploaded (e.g. \"report.pptx\"), " +
 		"or call library_list first if you are not sure of the name — never guess a filename. " +
 		"PNG and JPEG files are inspected as visual input the same way as read_file. " +
-		readerImageInspectionParagraph
+		readerImageInspectionParagraph +
+		readerPDFParagraph
 }
 
 func (t *LibraryReadTool) Scope() ToolScope       { return ScopeGeneral }

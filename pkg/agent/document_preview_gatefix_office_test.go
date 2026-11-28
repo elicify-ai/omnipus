@@ -81,10 +81,12 @@ func TestOfficePreview_UploadRenderHonorsTwentySecondBudget(t *testing.T) {
 	pdfPath := filepath.Join(t.TempDir(), "upload.pdf")
 	require.NoError(t, os.WriteFile(pdfPath, makeMiniPDF("GATEFIX_UPLOAD"), 0o600))
 
+	data, err := os.ReadFile(pdfPath)
+	require.NoError(t, err)
 	done := make(chan uploadPages, 1)
 	started := time.Now()
 	go func() {
-		done <- uploadPDFPageImages(pdfPath, "upload.pdf", catalog.ResizeLimits{})
+		done <- uploadPDFPageImagesFrom(context.Background(), data, "upload.pdf", catalog.ResizeLimits{})
 	}()
 	select {
 	case got := <-done:
@@ -223,18 +225,38 @@ func gatefixAssertLivePDFRecovery(t *testing.T, toolName string, first error, wa
 	agent := &AgentInstance{ID: "gatefix", Model: "m", Candidates: []providers.FallbackCandidate{{Provider: "openrouter", Model: "m"}}}
 	agent.StoreProviderPool(map[string]providers.LLMProvider{"openrouter": client})
 	f := newRouting1340ReviewFixture(t, &config.Config{}, agent)
+	// Rewritten 2026-11-28 (one PDF mechanism): the base fixture had no
+	// catalogue and relied on modelSupportsPDF's optimistic nil answer.
+	// The one PDF decision (#1968 FR-3) sends a native PDF only when the
+	// catalogue says the exact model reads PDFs, so the fixture says so.
+	cat, err := catalog.NewCatalog(catalogDocJSON(t, "openrouter", "m", "text", "pdf"))
+	require.NoError(t, err)
+	f.al.SetCapabilityCatalog(cat)
 	f.selectProvider(t)
-	previews := &turnDocumentPreviews{}
-	previews.add(callID, &tools.DocumentPreview{
-		PDF:         makeMiniPDF(sentinel),
-		Reauthorize: func(context.Context) error { return nil },
-	})
-	t.Cleanup(previews.release)
-	f.rt.documentPreviews = previews
+	toolContent := "tool result recorded"
+	if toolName == "read_file" {
+		// read_file's PDF is a turn-private InspectionPDF from the real tool.
+		ws := t.TempDir()
+		path := filepath.Join(ws, "live.pdf")
+		require.NoError(t, os.WriteFile(path, makeMiniPDF(sentinel), 0o600))
+		result := tools.NewReadFileTool(ws, true, 0).Execute(context.Background(), map[string]any{"path": path})
+		require.False(t, result.IsError, "%s", result.ForLLM)
+		require.Len(t, result.InspectionPDFs, 1, "premise: read_file returned its PDF for the presenter")
+		f.rt.inspectionPDFs = map[string][]tools.InspectionPDF{callID: result.InspectionPDFs}
+		toolContent = result.ForLLM
+	} else {
+		previews := &turnDocumentPreviews{}
+		previews.add(callID, &tools.DocumentPreview{
+			PDF:         makeMiniPDF(sentinel),
+			Reauthorize: func(context.Context) error { return nil },
+		})
+		t.Cleanup(previews.release)
+		f.rt.documentPreviews = previews
+	}
 	messages := []providers.Message{
 		{Role: "user", Content: "read the attached document"},
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: callID, Name: toolName, Function: &providers.FunctionCall{Name: toolName}}}},
-		{Role: "tool", ToolCallID: callID, Content: "tool result recorded"},
+		{Role: "tool", ToolCallID: callID, Content: toolContent},
 	}
 	f.rf.callMessages = messages
 	f.ri.messages = messages
