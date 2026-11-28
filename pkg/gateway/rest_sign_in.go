@@ -546,6 +546,14 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 		a.reRegisterOAuthSensitiveValues(store)
 		if configErr := a.ensureSignedInProviderRow(providerID); configErr != nil {
 			slog.Error("rest: configure signed-in provider", "provider", providerID, "error", configErr)
+			// §3.4 D9b row 33: 400, because the screen shows server text only
+			// for non-5xx answers. The credential is already stored, as on any
+			// failure here.
+			var refusal *requestRefusalError
+			if errors.As(configErr, &refusal) {
+				jsonErr(w, http.StatusBadRequest, "failed to configure signed-in provider: "+refusal.Error())
+				return
+			}
 			jsonErr(w, http.StatusInternalServerError, "failed to configure signed-in provider")
 			return
 		}

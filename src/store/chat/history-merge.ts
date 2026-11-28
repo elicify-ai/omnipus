@@ -321,7 +321,9 @@ function bindToRow(row: ChatMessage, entry: SessionHistoryEntry, original: ChatM
     ...(liveWins ? {} : { text: 'saved' as const, originalSizeBytes: entry.contentOriginalSizeBytes }),
   }), shown)
   // Undefined baseline: the current row wins; the row itself as baseline: the saved record wins.
-  const merged = inPartOrder(mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row), row, entry)
+  // Thumbnail groups still compare with the captured row (SFH-R2-01): a
+  // streaming row must not make an unchanged group newer than its save.
+  const merged = inPartOrder(mergeHistoryEntry({ ...entry, id: row.id }, row, liveWins ? undefined : row, liveWins ? captured : row), row, entry)
   return stampPartAnchors({ ...merged, content: joined.content, historyParts: joined.historyParts, mergedReplayIds: row.mergedReplayIds,
     historyPosition: entry.historyPosition, contentOriginalSizeBytes: undefined,
     ...(row.historyRenderKey ? { historyRenderKey: row.historyRenderKey } : {}) }, joined.historyParts, shown)

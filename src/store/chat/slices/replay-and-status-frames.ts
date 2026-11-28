@@ -1126,7 +1126,9 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
         }
 
         case 'media': {
-          // Body lives in media-frames.ts (chat-links U8) so this pinned function does not grow.
+          // Screenshots, inline media and office-preview thumbnail groups
+          // (office-preview spec §5.2). Body lives in media-frames.ts (chat-links
+          // U8) so this pinned function does not grow.
           applyMediaFrame(frame, targetSid, withBucket)
           break
         }

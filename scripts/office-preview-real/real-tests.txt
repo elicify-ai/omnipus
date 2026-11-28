@@ -1,0 +1,29 @@
+# The tests that need real LibreOffice or the real PDF renderer.
+# One line per top-level test: <package directory> <test name>.
+#
+# This list is the one source for all of these:
+#   - run-real-tests.sh runs exactly these, and fails unless each one passed
+#   - notice.sh names them in the normal Go jobs
+#   - the test helper refuses to hand a test over to the dedicated job unless
+#     it is listed here, so a test can never end up running nowhere
+pkg/preview TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo
+pkg/preview TestPreviewRenderer_RealPagesGeometryAndDistinctPixelControl
+pkg/preview TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch
+pkg/preview TestPreviewOffice_T114_T115_T116_LinuxFormatsRestartCleanupAndRepeat
+pkg/preview TestPreviewOffice_Q1B_ForcedConfinedBootMatchesOpen
+pkg/preview TestT125B_RealAgentPolicyNeverReachesTheGrants
+pkg/preview TestT126_RealPackagedComponentsPreviewUnderStartupGrants
+pkg/preview TestT128A_InstalledAfterStartIsDeniedForBoth
+pkg/preview TestT128B_RegisteredAfterStartIsDenied
+pkg/preview TestT128C_ReplaceInPlaceIsDenied
+pkg/preview TestT128D_RestartFromRestrictedThreadKeepsGrants
+pkg/preview TestT128F_ComponentAddedAfterStartThenInAppRestartNamesTheRestriction
+pkg/preview TestT131_ServiceRefusesCachedRootThatBecameLink
+pkg/preview/launcher TestRunLimitedLinuxThirteenHundredStartsHaveNoRuntimeFatals
+pkg/agent TestOfficeUpload_ImageOnlyPDFOffersPagesAndActionablePath
+pkg/agent TestOfficePreview_UploadPageImagesShareTwentyPagesNewestFirst
+pkg/gateway TestOfficePreview_RetryLibraryRendersOnlyForPerson
+pkg/gateway TestOfficePreview_RetryMissingIs403AndChangedIs409
+pkg/gateway TestOfficePreview_RetryPersistsInBrowserHistoryWithoutModelMedia
+pkg/gateway TestOfficePreview_PersistenceFailureIsNotShownAsSuccess
+pkg/gateway TestOfficePreview_RetryOffpageSnapshotKeepsSavedGroup

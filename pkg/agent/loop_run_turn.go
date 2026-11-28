@@ -657,11 +657,13 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+	turnSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
-		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+		turnSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 	)
+	rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = turnSink.turnMedia
 
 	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
 	// PRIMARY provider id is unknown cannot reach any upstream at all, so it
@@ -814,11 +816,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 				activeSkillNames(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts),
 			)
 			trimProvider, trimModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+			trimSink := rp.rc.rx.rr.rq.ri.rf.rt.turnOffloadSink(rp.rc.rx.rr.rq.ri.wsDir)
 			rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
-				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
+				trimSink, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
 			)
+			rp.rc.rx.rr.rq.ri.rf.rt.turnUploadMedia = trimSink.turnMedia
 		}
 	}
 
@@ -1379,7 +1383,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		resolvedPending := resolveMediaRefsWithOffload(
 			ri.pendingMessages, ri.turnMediaStore, ri.maxMediaSize,
 			candidateProvider(ri.rf.rt.activeCandidates), ri.activeModel,
-			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
+			&offloadSink{workDir: ri.wsDir, ctx: ri.rf.rt.turnCtx}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
 		)
 		totalContentLen := 0
@@ -1453,9 +1457,13 @@ func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() bool {
 	if permanentModelFailure(rf.err) {
 		return false
 	}
-	if !downgradePDFMediaToText(rf.callMessages) {
+	// A tool preview's PDF rides only on the request (B-10): the rejected
+	// request's record covers it; downgrading callMessages covers uploads.
+	toolPDF := rf.rt.ts.lastRequestCarriedPDF.Load()
+	if !downgradePDFMediaToText(rf.callMessages) && !toolPDF {
 		return false
 	}
+	rf.rt.ts.pdfRejected.Store(true)
 	logger.WarnCF(
 		"agent",
 		"provider rejected request carrying a native PDF block — retrying with extracted text",

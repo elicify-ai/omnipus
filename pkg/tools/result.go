@@ -58,6 +58,12 @@ type ToolResult struct {
 	// durable history retains only ForLLM's re-read marker.
 	InspectionImages []InspectionImage `json:"-"`
 
+	// DocumentPreview is preview_document's output (office-preview spec
+	// §4.1, §5.1): the live-turn model forms, chosen per active model at
+	// request assembly and never persisted, and the display-only thumbnail
+	// group for the person, which never enters model-media admission.
+	DocumentPreview *DocumentPreview `json:"-"`
+
 	// ArtifactTags exposes local artifact paths back to the LLM in a structured
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
 	// reusable local artifact but did not deliver it to the user yet.

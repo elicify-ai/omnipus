@@ -436,6 +436,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/previews/{tool_call_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the page thumbnails of a document preview
+         * @description Re-renders the page thumbnails of one earlier preview_document call (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome was unavailable or partial. Same limits and admission as the tool; authorization is the requesting person's access to the session and to the preview's source as a file of the session workspace's Library (work folder and mounts, under the Library's own protected-file rules); a source outside that Library cannot be retried. The source must be unchanged: its current SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version. Returns 202 once the retry is admitted and started; the result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") with the same tool_call_id, never in this response. No request body.
+         */
+        post: operations["retrySessionPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents": {
         parameters: {
             query?: never;
@@ -5152,6 +5172,17 @@ export interface components {
             /** @description Present iff has_later, equal to the last selected history_position. */
             next_after?: string;
             page_info: components["schemas"]["SessionHistoryPageInfo"];
+        };
+        /**
+         * PreviewRetryResponse
+         * @description 202 body of POST /sessions/{session_id}/previews/{tool_call_id}/retry (office-preview spec §5.2). The retry was admitted and started; its result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") carrying the same tool_call_id, never in this response.
+         */
+        PreviewRetryResponse: {
+            /**
+             * @description Always "started" for an admitted retry.
+             * @enum {string}
+             */
+            status: "started";
         };
         /**
          * SessionPage
@@ -13421,11 +13452,11 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
              * @example invalid_targets
              * @enum {string}
              */
-            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch" | "program_access_refused";
             /** @description Per-target errors: the first 10 invalid entries in request order. */
             target_errors?: {
                 /**
@@ -20281,8 +20312,10 @@ export interface components {
             filename: string;
             /** @description MIME type of the file (e.g., "image/png"). */
             content_type: string;
-            /** @description Optional human-readable caption for display below the media. */
+            /** @description Optional human-readable caption for display below the media. Display text only — clients never parse it (for page thumbnails it reads like "report.docx · page 3 of 12"; the page number travels in page_number). */
             caption?: string;
+            /** @description 1-based page number of the source document this part shows. Present on parts of a MediaFrame whose presentation is "page_thumbnails"; absent otherwise. */
+            page_number?: number;
             /** @description Library address of the sent file (chat-links spec, R5 and FR-021). Present for a file in a workspace Library or one of its mounted folders, for every media type; the web chat shows "Open in Library" on non-image file cards only. Omitted for a file outside every Library and when the session's workspace is unknown. */
             library_ref?: components["schemas"]["LibraryRef"];
         };
@@ -20603,6 +20636,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             500: components["responses"]["500InternalServerError"];
         };
@@ -21273,6 +21307,69 @@ export interface operations {
                 };
             };
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    retrySessionPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session that contains the preview_document call. */
+                session_id: string;
+                /** @description Id of the preview_document tool call (MediaFrame.tool_call_id). */
+                tool_call_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Retry admitted and started; the result arrives as a MediaFrame. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewRetryResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description The preview's source is not a file of the session workspace's Library, or the Library refuses it. ErrorResponse.code is exactly `preview_source_not_in_library`; the source path is never echoed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unknown session, no access to the session (indistinguishable, as on every session route), or no preview_document call with this id in the session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The source file changed since the preview: ErrorResponse.code is exactly "preview_source_changed" (current digest differs from source_version). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description The PDF renderer is not installed, damaged or disabled: ErrorResponse.code is exactly "preview_renderer_unavailable". */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listAgents: {
@@ -23220,6 +23317,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Channel ID not found. */
             404: {
@@ -23981,6 +24079,7 @@ export interface operations {
                     "application/json": components["schemas"]["MailboxRemovalResult"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
@@ -24089,6 +24188,7 @@ export interface operations {
                     "application/json": components["schemas"]["RotateTokenResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
@@ -26599,6 +26699,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -30635,6 +30736,7 @@ export type AgentActivityRun = components["schemas"]["AgentActivityRun"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
 export type SessionHistoryResponse = components["schemas"]["SessionHistoryResponse"];
+export type PreviewRetryResponse = components["schemas"]["PreviewRetryResponse"];
 export type SessionPage = components["schemas"]["SessionPage"];
 export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
 export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"];

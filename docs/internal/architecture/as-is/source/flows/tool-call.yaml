@@ -1,0 +1,305 @@
+id: tool-call
+title: What happens when the model asks to use a tool
+source: release/v0.1.1 @ 6fbf4b43c
+summary: 'When the model''s reply contains tool calls, the agent turn handles them one by one, in order, inside the same running turn (not in parallel). Each call passes a row of gates: a repeat-denial
+  short-cut, hooks, a fresh allow/ask/deny check, and, if the answer is "ask", Auto-approve, shell rules or a saved "Always allow" before a person is asked. If nothing settles the ask and a person is present,
+  the turn simply waits (default 10 minutes, configurable) while a card is broadcast to every connected web app; an unattended run (task, plan, schedule) is not waited on: an ask that is still unresolved
+  is denied at once; the answer comes back over a normal web request. The server hardens itself with the kernel sandbox at boot (see the Start-up flow), and tools that start a program (bash, background
+  shells, stdio MCP servers, environment setup) additionally re-apply the Landlock policy on the thread that starts the child. All other tools are direct Go calls inside the server process, behind path
+  and protected-file checks. Exact kernel-sandbox coverage is under separate security review. Every result is filtered, size-capped and saved before it is added to the next request to the model.
+
+  '
+participants:
+- id: model
+  label: AI model (provider)
+  kind: external
+  ref: pkg/providers
+- id: turn
+  label: Agent turn (tool step)
+  kind: server
+  ref: pkg/agent/loop_run_turn_tools.go
+- id: policy
+  label: Policy check
+  kind: server
+  ref: pkg/tools/compositor.go, pkg/agent/loop_policy.go
+- id: approvals
+  label: Approval registry (memory)
+  kind: server
+  ref: pkg/gateway/approvals.go, policy_approver.go
+- id: browser
+  label: Web app (person)
+  kind: person
+  ref: src/store/toolApproval.ts
+- id: tools
+  label: Tool registry + tool
+  kind: server
+  ref: pkg/tools/registry.go
+- id: sandbox
+  label: Kernel sandbox + child process
+  kind: worker
+  ref: pkg/sandbox/hardened_exec.go
+- id: audit
+  label: Audit log
+  kind: store
+  ref: pkg/audit
+- id: transcript
+  label: Chat transcript
+  kind: store
+  ref: pkg/session
+steps:
+- phase: 0 · Before the model is called
+- over: turn
+  note: 'Builds the tool list for this request: deny tools are left out entirely; the allow/ask verdict of every offered tool is remembered for this round'
+  ref: pkg/agent/loop_run_turn.go::prepareToolSurface (tools.FilterToolsByPolicy)
+  verified: true
+- from: turn
+  to: model
+  label: request with messages + offered tools
+  kind: call
+  ref: pkg/agent/loop_run_turn.go::callProviderOnce
+  verified: true
+- from: model
+  to: turn
+  label: reply with one or more tool calls
+  kind: return
+  ref: pkg/agent/loop_run_turn_tools.go::executeToolCalls
+  verified: true
+- loop: for each tool call, one after another (sequential, same goroutine)
+- phase: 1 · Gates before running
+- over: turn
+  note: Structural checks (known tool, offered this round, valid arguments)
+  ref: pkg/agent/loop_run_turn_tools.go::validateCall
+  verified: true
+- over: turn
+  note: 'Quarantine: a tool already permanently denied this turn is answered from the cached denial; no hook, no prompt'
+  ref: pkg/agent/loop_run_turn_tools.go::applyQuarantineAndHooks (quarantinedDenialFor)
+  verified: true
+- over: turn
+  note: Optional hooks may rewrite or block the call (BeforeTool, ApproveTool)
+  ref: pkg/agent/loop_run_turn_tools.go::applyQuarantineAndHooks, applyApprovalHook
+  verified: true
+- from: turn
+  to: policy
+  label: re-check policy now (it may have changed mid-turn)
+  kind: call
+  ref: pkg/agent/loop_policy.go::resolveToolPolicyAtExec -> resolveSingleToolPolicy -> tools.FilterToolsByPolicy
+  verified: true
+- over: policy
+  note: Global and agent policy combine strictest-wins (deny > ask > allow); God Mode floors the global layer at allow, except for always-ask tools (currently set_channel_outbound), whose allow becomes
+    ask even in God Mode; per-agent restrictions still apply; a tool not offered this round is always deny
+  ref: pkg/tools/compositor.go::resolveEffectivePolicyWith; pkg/tools/always_ask.go::IsAlwaysAsk; pkg/agent/instance.go::GodModeActive
+  verified: true
+- from: policy
+  to: turn
+  label: allow | ask | deny
+  kind: return
+  ref: pkg/agent/loop_run_turn_tools.go::enforceExecutionPolicy
+  verified: true
+- alt: deny
+- from: turn
+  to: audit
+  label: tool.policy.deny.attempted
+  kind: store
+  ref: pkg/agent/loop_policy.go::emitPolicyDenyAudit
+  verified: true
+- over: turn
+  note: Denial text becomes the tool result; the turn continues. Too many denials in one turn abort it
+  ref: pkg/agent/loop_run_turn_tools.go::enforceExecutionPolicy (recordToolDenial, abortTurnForToolDenialBudget)
+  verified: true
+- else: ask
+- over: turn
+  note: 'Ask can be settled without a person: bash shell mode Auto, Auto-approve verdict for other tools, a shell command rule, or a saved Always-allow grant. These are checked first, in resolveAskPolicy'
+  ref: pkg/agent/loop_run_turn_tools.go::resolveAskPolicy; pkg/agent/auto_approve_gate.go::autoApproveFor; pkg/agent/loop_policy.go::checkStandingGrant
+  verified: true
+- over: turn
+  note: 'Only an ask that is still unresolved after those checks, in an unattended turn (tasks, plans, schedules, loops), is auto-denied: the call gets a denial and no approval request is created'
+  ref: pkg/agent/loop_run_turn_tools.go::resolveAskPolicy (AutoDenyAsk branch -> autoDenyHeadlessAsk)
+  verified: true
+- from: turn
+  to: transcript
+  label: placeholder tool call, status pending
+  kind: store
+  ref: pkg/agent/approval_transcript.go::recordAskPendingToolCall
+  verified: true
+- from: turn
+  to: approvals
+  label: RequestApproval (turn blocks here)
+  kind: wait
+  ref: pkg/agent/loop_policy.go::CheckGrantOrRequestApproval -> pkg/gateway/policy_approver.go::RequestApproval
+  verified: true
+- over: approvals
+  note: Creates an in-memory entry with a timer (default 600 s; a positive configured gateway tool-approval timeout replaces it) and a cap on pending cards
+  ref: pkg/gateway/approvals.go::requestApproval; pkg/gateway/gateway.go::defaultToolApprovalTimeout; pkg/gateway/gateway_boot.go::wireInteractiveServices
+  verified: true
+- from: approvals
+  to: browser
+  label: WS tool_approval_required (to every connected web-app connection, not only the tabs bound to this session)
+  kind: async
+  ref: pkg/gateway/ws_tool_approval.go::broadcastToolApprovalRequired
+  verified: true
+- from: browser
+  to: approvals
+  label: POST /api/v1/tool-approvals/{id}  allow | allow_once | deny | cancel
+  kind: call
+  ref: pkg/gateway/rest_tool_registry.go (approvalReg.resolveBy, line 562)
+  verified: true
+- from: approvals
+  to: turn
+  label: outcome on the entry channel (or timeout / Stop)
+  kind: return
+  ref: pkg/gateway/policy_approver.go::RequestApproval (select on entry.resultCh / ctx.Done)
+  verified: true
+- from: approvals
+  to: audit
+  label: ask requested + ask decision
+  kind: store
+  ref: pkg/gateway/policy_approver.go (auditAskRequested, auditAskDecision)
+  verified: true
+- end: true
+- phase: 2 · Run
+- from: turn
+  to: tools
+  label: ExecuteWithContext(tool, args)
+  kind: call
+  ref: pkg/agent/loop_pre_approval.go::executeOrPreRefused -> pkg/tools/registry.go::ExecuteWithContext
+  verified: true
+- over: tools
+  note: Argument checks and schema validation; panics are caught and turned into an error result
+  ref: pkg/tools/registry.go::ExecuteWithContext
+  verified: true
+- alt: bash (foreground)
+- over: tools
+  note: Shell permission mode (may itself ask through the same approval path), then command-text guards (paths, substitution, protected files)
+  ref: pkg/tools/shell.go::executeRun (enforceShellPermissionMode, guardCommandClassified); pkg/agent/loop_policy.go::RequestShellApproval
+  verified: true
+- from: tools
+  to: sandbox
+  label: start child on a locked OS thread restricted by this turn's Landlock policy
+  kind: call
+  ref: pkg/tools/shell.go::runForeground -> pkg/sandbox/hardened_exec.go::Run (restrictCurrentThreadIfNeeded)
+  verified: true
+- over: sandbox
+  note: Seccomp was installed process-wide at boot; Landlock is applied per spawning thread, only in enforce mode; permissive, off or an old kernel runs the child without Landlock
+  ref: pkg/gateway/sandbox_apply.go (seccompProg.Install); pkg/sandbox/sandbox_linux.go::RestrictCurrentThreadWithPolicy
+  verified: true
+- from: sandbox
+  to: tools
+  label: exit code + capped output
+  kind: return
+  ref: pkg/tools/shell.go::foregroundResultFromSandbox
+  verified: true
+- else: MCP tool
+- from: tools
+  to: sandbox
+  label: JSON-RPC over stdin/stdout to a long-lived server process (or HTTP/SSE for a remote server)
+  kind: call
+  ref: pkg/mcp/manager.go::CallTool; sandboxedCommandTransport.Connect (sandbox.StartLocked)
+  verified: true
+- else: any other built-in tool (files, memory, library, web, ...)
+- over: tools
+  note: Runs inside the server process itself, behind path and protected-file checks
+  ref: pkg/tools/registry.go::ExecuteWithContext (tool.Execute called directly)
+  verified: true
+- end: true
+- from: tools
+  to: audit
+  label: tool.call entry (allow or error)
+  kind: store
+  ref: pkg/tools/registry.go::ExecuteWithContext (auditLog.Log EventToolCall)
+  verified: true
+- from: tools
+  to: turn
+  label: ToolResult
+  kind: return
+  ref: pkg/agent/loop_run_turn_tools.go::guardAndDispatch
+  verified: true
+- phase: 3 · Result back to the model
+- over: turn
+  note: Untrusted tool output (web, browser, ...) goes through the prompt guard
+  ref: pkg/agent/loop_run_turn_tools.go::sanitizeUntrustedToolResult
+  verified: true
+- from: turn
+  to: transcript
+  label: filter secrets, scan for injection, cap size, save result line
+  kind: store
+  ref: pkg/agent/tool_result_admit.go::admitToolResult
+  verified: true
+- end: true
+- over: turn
+  note: 'Circuit breakers: identical failing or cycling calls stop the turn'
+  ref: pkg/agent/loop_run_turn_tools.go::finishToolIteration
+  verified: true
+- from: turn
+  to: model
+  label: next request with the tool results appended
+  kind: call
+  ref: pkg/agent/loop_run_turn_iterations.go::runIterations
+  verified: true
+stores:
+- what: Pending placeholder, then the settled tool call
+  where: the session transcript (day-partitioned JSONL)
+  when: before the approval wait; replaced on settle
+  ref: pkg/agent/approval_transcript.go::recordAskPendingToolCall, settleAskToolCallTranscript
+- what: Tool result line (filtered, capped)
+  where: session transcript
+  when: after each call
+  ref: pkg/agent/tool_result_admit.go::admitToolResult
+- what: Pending approvals
+  where: memory only (approvalRegistryV2)
+  when: while waiting
+  ref: pkg/gateway/approvals.go header
+- what: Always-allow grants
+  where: memory only, per chat
+  when: on an allow answer
+  ref: pkg/agent/loop_policy.go::checkStandingGrant (ApprovalGrants)
+- what: tool.call, policy deny, ask requested/decided, auto-approved, shell decisions
+  where: $OMNIPUS_HOME/system/audit.jsonl
+  when: at each decision and after execution
+  ref: pkg/tools/registry.go; pkg/agent/loop_policy.go; pkg/gateway/policy_approver.go; pkg/agent/auto_approve_gate.go::emitToolAutoApprovedAudit; pkg/tools/shell.go::emitAudit
+failures:
+- case: Policy is deny
+  effect: Model gets a denial as the tool result; turn continues; repeats of the same denied tool are answered from the quarantine cache; an exhausted denial budget aborts the turn
+  ref: pkg/agent/loop_run_turn_tools.go::enforceExecutionPolicy, applyQuarantineAndHooks
+- case: Nobody answers the card
+  effect: Timer fires (default 600 s, configurable); the call is denied with reason timeout
+  ref: pkg/gateway/approvals.go::fireTimeout
+- case: No web app connected (e.g. the turn came from Telegram)
+  effect: Card is broadcast to nobody; it waits for a reconnect (session_state snapshot) or times out. Chat-app connectors have no approval UI
+  ref: 'pkg/gateway/ws_tool_approval.go::broadcastToolApprovalRequired (warning: no connected audience); no approval code under pkg/channels (grep ApprovalID|tool_approval: no hits)'
+- case: Person presses Stop while waiting
+  effect: Pending approvals of the session are cancelled with reason 'session canceled'; the waiting turn is hard-aborted
+  ref: pkg/agent/cancel.go::interruptGracefully (CancelPendingApprovals); pkg/agent/loop_policy.go::CheckGrantOrRequestApproval (requestHardAbort)
+- case: Gateway restarts while waiting
+  effect: 'The registry is memory-only, so the card is lost; cancelAllPendingForRestart (''restart denies every pending approval'') has no production caller. Three separate things follow. (1) The transcript
+    placeholder stays ''pending'' and replay treats pending as active. (2) The next time the session is loaded, RecoverOrphanedToolCalls looks for an assistant tool call with no result at the tail of the
+    model-visible history; if it finds one it writes a restart-cancellation record, removes the orphaned call from the history sent to the model and audits an ask-denied row with reason restart. (3) Whether
+    the on-screen placeholder is finally settled by (2): not verified end to end (it depends on whether the pending placeholder counts as a matching result).'
+  ref: pkg/gateway/approvals.go::cancelAllPendingForRestart (definition only); pkg/gateway/replay.go (pending treated as active); pkg/agent/session_recovery.go::RecoverOrphanedToolCalls
+  verified: false
+  label: Inferred / not verified end to end for the final on-screen state
+- case: Kernel sandbox not enforcing (permissive, off, Windows, old kernel)
+  effect: Child runs without Landlock; only the text guards and pre-flights apply. Auto-approve still applies (founder decision 2026-09-24) and its audit row records whether a kernel sandbox was enforcing
+  ref: pkg/sandbox/sandbox_linux.go::RestrictCurrentThreadWithPolicy (savedMode != enforce returns nil); pkg/agent/auto_approve_gate.go::autoApproveActive
+- case: Tool panics
+  effect: Recovered into an error result; the turn continues
+  ref: pkg/tools/registry.go::ExecuteWithContext (recover)
+facts:
+- fact: Programs a tool starts (shell, background shells, stdio MCP servers) are started on a thread that re-applies the Landlock policy just before the start, so the child is confined in enforce mode.
+    Built-in tools are direct calls inside the server process. The server also hardens itself at boot (see the Start-up flow). Exact coverage is under separate security review.
+  ref: pkg/sandbox/sandbox_linux.go (comment above currentLinuxBackend); pkg/sandbox/hardened_exec.go::Run
+- fact: Stdio MCP servers are long-lived processes started at reconcile (start-up or config change) under the start-up base policy, not the per-turn policy the shell gets. A tool call is a JSON-RPC message
+    to the already running process.
+  ref: pkg/mcp/manager.go::Connect; pkg/sandbox/sandbox_linux.go::RestrictCurrentThreadWithPolicy; pkg/agent/loop_mcp.go::ReconcileMCP
+- fact: No production code calls cancelAllPendingForRestart, so pending approvals vanish with the process. The transcript keeps a 'pending' placeholder that replay treats as active, while the next load
+    of the session runs RecoverOrphanedToolCalls (restart-cancellation record, orphaned call removed from the model-visible history, audit row). The final on-screen state is not verified.
+  ref: grep cancelAllPendingForRestart (definition and tests only); pkg/gateway/replay.go; pkg/agent/session_recovery.go::RecoverOrphanedToolCalls
+- fact: 'The agent turn makes the policy decision before the tool is called. A tool approval is not a question card: ask_user_question parks the turn, while a tool approval blocks the turn''s goroutine
+    on a channel for the approval timeout (default 600 s, configurable).'
+  ref: pkg/agent/loop_run_turn_tools.go::executeToolCalls; pkg/gateway/policy_approver.go::RequestApproval
+- fact: Request preparation is in loop_run_turn.go (prepareToolSurface) and loop_run_turn_attempt.go.
+  ref: ls pkg/agent/loop_run_turn*.go
+- fact: 'Audit rows for a tool call are written from several places: pkg/agent (policy deny, auto-approved), pkg/gateway (ask requested and decided), pkg/tools (tool.call) and the shell tool (shell decisions).
+    No fixed maximum per call is established.'
+  ref: files cited under 'What is saved'
+- fact: Tool calls of one model reply run one after another in the same turn; a tool that starts asynchronous work (background shell, helper) has its own separate lifetime.
+  ref: pkg/agent/loop_run_turn_tools.go::executeToolCalls

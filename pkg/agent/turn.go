@@ -667,6 +667,18 @@ type turnState struct {
 	// the single per-turn strip was spent.
 	imageRetryDone atomic.Bool
 
+	// pdfRejected records that a provider rejected a request carrying a
+	// native PDF in this turn (office-preview B-10): from then on no request
+	// of the turn carries a native PDF — uploads go as their extracted text
+	// and preview_document / read_file results as page images or text.
+	pdfRejected atomic.Bool
+
+	// lastRequestCarriedPDF reports whether the most recent provider request
+	// carried a native PDF. Tool previews add their PDF per request (not to
+	// the loop's callMessages), so the downgrade paths read this to know a
+	// rejected request had a PDF they cannot see.
+	lastRequestCarriedPDF atomic.Bool
+
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
 	// call succeeds, this field is stamped with CodeMediaUnsupported so

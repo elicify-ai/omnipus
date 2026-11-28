@@ -26,6 +26,37 @@ const (
 	CleanupPolicyForgetOnly CleanupPolicy = "forget_only"
 )
 
+// StoreBytes writes data to a new file in dir (created 0700 if needed), named
+// after the os.CreateTemp pattern, and registers the file with store under
+// scope. The file is removed again when writing or registering fails, so a
+// failed store leaves nothing behind. dir is computed by the caller from the
+// media tree (TempDir, SessionUploadsDir) and never comes from a tool argument.
+func StoreBytes(store MediaStore, dir, pattern string, data []byte, meta MediaMeta, scope string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	tmp := f.Name()
+	if _, err = f.Write(data); err == nil {
+		err = f.Close()
+	} else {
+		_ = f.Close()
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	ref, err := store.Store(tmp, meta, scope)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return ref, nil
+}
+
 // SessionInlineScopePrefix is the media-store scope prefix for tool-generated
 // inline media (browser screenshots, charts, etc.) that belongs to a persisted
 // chat session. Entries under this scope are SESSION-PINNED: the TTL cleaner

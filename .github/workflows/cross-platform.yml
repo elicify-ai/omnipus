@@ -60,6 +60,10 @@ jobs:
 
     env:
       CGO_ENABLED: "0"
+      # Tests that need real LibreOffice or the real PDF renderer hand over
+      # to the job named here instead of failing BLOCKED. Only normal Go jobs
+      # set this; the dedicated job must not, and refuses to run if it is set.
+      OMNIPUS_OFFICE_REAL_TESTS_JOB: "Office preview real programs"
 
     steps:
       - uses: actions/checkout@v7
@@ -71,6 +75,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+
+      - name: Setup Python for the Office inspector tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install the Office inspector test packages
+        run: bash scripts/office-preview-real/python-test-deps.sh
+
+      - name: State which Office preview tests belong to the dedicated job
+        run: bash scripts/office-preview-real/notice.sh
 
       - name: Build SPA
         shell: bash

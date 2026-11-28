@@ -6,6 +6,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -118,11 +119,7 @@ func (t *RequestMountTool) Category() ToolCategory { return CategoryFilesystem }
 // arguments, because the check is cheap and the alternative is a path that was
 // valid when shown and is not when used.
 func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	hostPath, _ := args["host_path"].(string)
-	if strings.TrimSpace(hostPath) == "" {
-		hostPath, _ = args["path"].(string)
-	}
-	hostPath = strings.TrimSpace(hostPath)
+	hostPath := requestMountHostPath(args)
 	if hostPath == "" {
 		return ErrorResult("request_mount: host_path is required")
 	}
@@ -162,6 +159,10 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 	// second chance for the three to disagree.
 	resolved, warning, err := workspace.CheckMountTarget(hostPath, t.homePath)
 	if err != nil {
+		var program *workspace.ProgramFolderError
+		if errors.As(err, &program) {
+			return ErrorResult(program.Reason())
+		}
 		return ErrorResult(fmt.Sprintf("request_mount: %v", err))
 	}
 
@@ -183,6 +184,34 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 		msg += "\n\nNote: " + warning
 	}
 	return NewToolResult(msg)
+}
+
+// CheckBeforeApproval refuses a request for an Omnipus program folder before
+// any approval card is shown (office-preview spec §3.2, FR-049): such a mount
+// can never be created, so asking the person to approve it — or offering
+// Always Allow for it — would only mislead them. Every other request goes to
+// approval as usual; Execute re-checks the full rule after approval.
+func (t *RequestMountTool) CheckBeforeApproval(_ context.Context, args map[string]any) *ToolResult {
+	hostPath := requestMountHostPath(args)
+	if hostPath == "" || !filepath.IsAbs(hostPath) {
+		return nil
+	}
+	_, _, err := workspace.CheckMountTarget(hostPath, t.homePath)
+	var program *workspace.ProgramFolderError
+	if errors.As(err, &program) {
+		return ErrorResult(program.Reason())
+	}
+	return nil
+}
+
+// requestMountHostPath is the requested folder: host_path, or its path alias
+// when host_path is empty, trimmed.
+func requestMountHostPath(args map[string]any) string {
+	hostPath, _ := args["host_path"].(string)
+	if strings.TrimSpace(hostPath) == "" {
+		hostPath, _ = args["path"].(string)
+	}
+	return strings.TrimSpace(hostPath)
 }
 
 // mountNameFromHostPath derives the mount's single path segment inside work/

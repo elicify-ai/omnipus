@@ -52,6 +52,13 @@ type agentLoopRunTurn struct {
 	streamerLookupDeclined bool
 	onToolCallProgress     protocoltypes.OnToolCallProgress
 	inspectionImages       map[string][]tools.InspectionImage
+	// documentPreviews holds this turn's live preview_document model forms
+	// (office-preview spec §4.1, AD-6); released at turn end.
+	documentPreviews *turnDocumentPreviews
+	// turnUploadMedia is the decoded document media of this turn's own
+	// uploads in the last resolved request (resolveMediaRefsWithOffload);
+	// it is taken first from the request's 32 MiB preview budget.
+	turnUploadMedia turnUploadMedia
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This
