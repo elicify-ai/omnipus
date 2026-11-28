@@ -66,8 +66,13 @@ export interface FormSavePart { // not-wire-format: one endpoint's share of a se
    * A failed read throws (the result stays unknown).
    */
   check?: () => Promise<PartCheck>
-  /** Runs after this part's write reached an outcome. */
-  onOutcome?: (outcome: WriteOutcome) => void
+  /**
+   * Runs after this part's write reached an outcome. On a refusal it may
+   * report how many of the part's changes it took back out of the drafts
+   * (FR-015a: a refused new sandbox path returns to its add input); those
+   * are no longer unsaved changes and are not counted as failed.
+   */
+  onOutcome?: (outcome: WriteOutcome) => { recovered: number } | void
   /** Moves focus to the part's first invalid value. */
   focusInvalid?: () => void
   /** Puts every value of the part back to its saved value. */
@@ -158,8 +163,8 @@ export function useFormSaveBar(parts: FormSavePart[]) {
       let restart = false
       let notInUse = false
       for (const { part, outcome, n } of outcomes) {
-        if (outcome.kind !== 'changed-elsewhere') part.onOutcome?.(outcome)
-        next[part.id] = resultOf(outcome, n)
+        const effect = outcome.kind !== 'changed-elsewhere' ? part.onOutcome?.(outcome) : undefined
+        next[part.id] = resultOf(outcome, Math.max(0, n - (effect?.recovered ?? 0)))
         if (outcome.kind === 'saved' || outcome.kind === 'saved-not-in-use') {
           if (part.restartLabels?.length) restart = true
           if (outcome.kind === 'saved-not-in-use') {

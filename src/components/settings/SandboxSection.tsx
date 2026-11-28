@@ -596,66 +596,81 @@ export function SandboxSection(): React.ReactElement {
         return
       }
       if (outcome.kind !== 'not-saved') return
-      // FR-015a (release B09): a refusal naming one row belongs to what this
-      // Save sent. A refused path that was a new draft in this Save leaves
-      // the list and goes back into its add input with the server's message
-      // under it, so a later Save does not send it again; every other draft
-      // stays. A refused path that was already saved keeps its row and the
-      // message. When the add input holds newer text or the row no longer
-      // holds what was sent (4a7d2f269, SFH-03), nothing moves: the message
-      // shows under the whole sandbox configuration.
+      // FR-015a (release B09): a refusal naming one entry belongs to what
+      // this Save sent. A refused entry that was a new draft in this Save
+      // leaves the list and goes back into its own add input with the
+      // server's message under it, so a later Save does not send it again;
+      // every other draft stays. A refused entry that was already saved keeps
+      // its row and the message. When the add input holds newer text or the
+      // row no longer holds what was sent (4a7d2f269, SFH-03), nothing moves:
+      // the message shows under the whole sandbox configuration. The entry is
+      // named either by an indexed error (allowed_paths[i]: reason) or, as
+      // the program-folder refusal does, by quoting its exact path; a quoted
+      // path is matched only when it is exactly one new draft of this Save.
+      // A recovered entry whose list is then back to its saved value is no
+      // longer an unsaved change, so it is not counted as failed.
       const sent = sentRef.current
       const savedBefore = sentBeforeRef.current
       const drafts = draftsRef.current
-      const refusedRow = (sentList: string[] | undefined, current: string[] | undefined, idx: number) =>
-        sentList !== undefined && idx < sentList.length && current?.[idx] === sentList[idx] ? sentList[idx] : null
+      const lists = {
+        paths: { sent: sent?.allowed_paths, saved: savedBefore?.allowed_paths ?? [], current: drafts.paths?.value },
+        ssrf: { sent: sent?.ssrf?.allow_internal, saved: savedBefore?.ssrf?.allow_internal ?? [], current: drafts.ssrf?.value },
+      }
+      type ListKey = keyof typeof lists
+      let target: { key: ListKey; idx: number; reason: string } | null = null
       const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(outcome.message)
+      const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(outcome.message)
       if (pathRowMatch) {
-        const idx = parseInt(pathRowMatch[1], 10)
-        const refused = refusedRow(sent?.allowed_paths, drafts.paths?.value, idx)
-        if (refused === null) {
-          setSaveError(outcome.message)
-          return
+        target = { key: 'paths', idx: parseInt(pathRowMatch[1], 10), reason: pathRowMatch[2] }
+      } else if (ssrfRowMatch) {
+        target = { key: 'ssrf', idx: parseInt(ssrfRowMatch[1], 10), reason: ssrfRowMatch[2] }
+      } else {
+        const named: { key: ListKey; idx: number }[] = []
+        for (const key of ['paths', 'ssrf'] as const) {
+          const { sent: sentList, saved } = lists[key]
+          sentList?.forEach((entry, idx) => {
+            if (!saved.includes(entry) && outcome.message.includes(`"${entry}"`)) named.push({ key, idx })
+          })
         }
-        if ((savedBefore?.allowed_paths ?? []).includes(refused)) {
-          setPathRowErrors({ [idx]: pathRowMatch[2] })
-          return
-        }
-        if ((drafts.pathInput ?? '') !== '') {
-          setSaveError(outcome.message)
-          return
-        }
-        setPathList((list) => (list[idx] === refused ? list.filter((_, i) => i !== idx) : list))
-        setNewPath(refused)
-        setPathAddError(pathRowMatch[2])
+        if (named.length === 1) target = { ...named[0], reason: outcome.message }
+      }
+      if (target === null) {
+        setSaveError(outcome.message)
         return
       }
-      const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(outcome.message)
-      if (ssrfRowMatch) {
-        const idx = parseInt(ssrfRowMatch[1], 10)
-        const refused = refusedRow(sent?.ssrf?.allow_internal, drafts.ssrf?.value, idx)
-        if (refused === null) {
-          setSaveError(outcome.message)
-          return
-        }
-        if ((savedBefore?.ssrf?.allow_internal ?? []).includes(refused)) {
+      const { key, idx, reason } = target
+      const { sent: sentList, saved, current } = lists[key]
+      const refused = sentList !== undefined && idx < sentList.length && current?.[idx] === sentList[idx] ? sentList[idx] : null
+      if (refused === null) {
+        setSaveError(outcome.message)
+        return
+      }
+      if (saved.includes(refused)) {
+        if (key === 'paths') {
+          setPathRowErrors({ [idx]: reason })
+        } else {
           setSsrfAdvancedOpen(true)
-          setSsrfAdvancedErrors({ [idx]: ssrfRowMatch[2] })
-          return
+          setSsrfAdvancedErrors({ [idx]: reason })
         }
-        if ((drafts.ssrfInput ?? '') !== '') {
-          setSaveError(outcome.message)
-          return
-        }
-        const current = drafts.ssrf?.value ?? []
-        applySsrf(current.filter((_, i) => i !== idx))
+        return
+      }
+      if (((key === 'paths' ? drafts.pathInput : drafts.ssrfInput) ?? '') !== '') {
+        setSaveError(outcome.message)
+        return
+      }
+      const remaining = (current ?? []).filter((_, i) => i !== idx)
+      if (key === 'paths') {
+        setPathList((list) => (list[idx] === refused ? list.filter((_, i) => i !== idx) : list))
+        setNewPath(refused)
+        setPathAddError(reason)
+      } else {
+        applySsrf(remaining)
         // The add input lives in the advanced editor.
         setSsrfAdvancedOpen(true)
         setNewSsrfEntry(refused)
-        setSsrfAddError(ssrfRowMatch[2])
-        return
+        setSsrfAddError(reason)
       }
-      setSaveError(outcome.message)
+      return { recovered: sameList(remaining, saved) ? 1 : 0 }
     },
     discard: () => {
       if (configData) syncFromServer(configData)
