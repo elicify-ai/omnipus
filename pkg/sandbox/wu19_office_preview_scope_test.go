@@ -27,7 +27,12 @@ func TestWU19_OfficePreviewPinScope(t *testing.T) {
 			require.Empty(t, p.officePreviewClosedEnvironment(), "an unrelated declaration must not invalidate the Office boundary")
 			if name == "pkg/app/app.go" {
 				count, findings := p.scan()
-				require.Equal(t, 29, count, "the unrelated-function control retains the inventoried spawn sites")
+				// 29 Office-reviewed sites + 1 for S1 (#1960): the account check in
+				// pkg/programs/check.go. TestWU19_SpawnSiteInventory reviews that site
+				// against the closed-environment rules; this control only has to show
+				// an unrelated declaration leaves the inventory unchanged, so the
+				// literal moves together with each reviewed spawn site.
+				require.Equal(t, 30, count, "the unrelated-function control retains the inventoried spawn sites")
 				require.Empty(t, findings, "M10b control: the shared spawn inventory must stay green")
 			}
 		})
