@@ -592,16 +592,33 @@ export function SandboxSection(): React.ReactElement {
       }
       if (outcome.kind !== 'not-saved') return
       // A refusal naming one row is shown under that row; any other refusal
-      // under the whole configuration.
+      // under the whole configuration. The refusal belongs to what this Save
+      // sent (4a7d2f269, SFH-03): when the row was edited after Save was
+      // pressed, the newer draft is left alone and the refusal is shown
+      // under the whole configuration instead of under a row it did not name.
+      const sent = sentRef.current
+      const drafts = draftsRef.current
+      const sameRow = (sentList: string[] | undefined, current: string[] | undefined, idx: number) =>
+        sentList !== undefined && idx < sentList.length && current?.[idx] === sentList[idx]
       const pathRowMatch = /allowed_paths\[(\d+)\]:\s*(.+)/.exec(outcome.message)
       if (pathRowMatch) {
-        setPathRowErrors({ [parseInt(pathRowMatch[1], 10)]: pathRowMatch[2] })
+        const idx = parseInt(pathRowMatch[1], 10)
+        if (sameRow(sent?.allowed_paths, drafts.paths?.value, idx)) {
+          setPathRowErrors({ [idx]: pathRowMatch[2] })
+          return
+        }
+        setSaveError(outcome.message)
         return
       }
       const ssrfRowMatch = /ssrf\.allow_internal\[(\d+)\]:\s*(.+)/.exec(outcome.message)
       if (ssrfRowMatch) {
-        setSsrfAdvancedOpen(true)
-        setSsrfAdvancedErrors({ [parseInt(ssrfRowMatch[1], 10)]: ssrfRowMatch[2] })
+        const idx = parseInt(ssrfRowMatch[1], 10)
+        if (sameRow(sent?.ssrf?.allow_internal, drafts.ssrf?.value, idx)) {
+          setSsrfAdvancedOpen(true)
+          setSsrfAdvancedErrors({ [idx]: ssrfRowMatch[2] })
+          return
+        }
+        setSaveError(outcome.message)
         return
       }
       setSaveError(outcome.message)

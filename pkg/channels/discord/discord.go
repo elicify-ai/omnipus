@@ -60,18 +60,33 @@ type DiscordChannel struct {
 	stopped atomic.Bool
 }
 
+// discordgoLoggerOnce guards discordgo's package-level Logger variable.
+var discordgoLoggerOnce sync.Once
+
+// installDiscordgoLogger routes discordgo's own log lines through the Omnipus
+// logger. It writes the package variable once per process: a later adapter
+// (a channel restart or config reload) would otherwise overwrite it while an
+// earlier session's heartbeat goroutine, which Session.Close does not wait
+// for, may still be reading it to log its last error — a data race. Every
+// install is identical, so once is enough.
+func installDiscordgoLogger() {
+	discordgoLoggerOnce.Do(func() {
+		discordgo.Logger = logger.NewLogger("discord").
+			WithLevels(map[int]logger.LogLevel{
+				discordgo.LogError:         logger.ERROR,
+				discordgo.LogWarning:       logger.WARN,
+				discordgo.LogInformational: logger.INFO,
+				discordgo.LogDebug:         logger.DEBUG,
+			}).Logf
+	})
+}
+
 func NewDiscordChannel(
 	cfg config.DiscordConfig,
 	secrets credentials.SecretBundle,
 	bus *bus.MessageBus,
 ) (*DiscordChannel, error) {
-	discordgo.Logger = logger.NewLogger("discord").
-		WithLevels(map[int]logger.LogLevel{
-			discordgo.LogError:         logger.ERROR,
-			discordgo.LogWarning:       logger.WARN,
-			discordgo.LogInformational: logger.INFO,
-			discordgo.LogDebug:         logger.DEBUG,
-		}).Logf
+	installDiscordgoLogger()
 
 	token := secrets.GetString(cfg.TokenRef)
 	if token == "" {

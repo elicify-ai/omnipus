@@ -135,6 +135,9 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	var refreshErr *configRefreshError
 	if writeErr != nil && !errors.As(writeErr, &refreshErr) {
 		slog.Error("rest: update rate limits", "error", writeErr)
+		if writeRequestRefusal(w, writeErr) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}

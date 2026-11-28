@@ -20,7 +20,7 @@
 //     prepends only existing directories).
 //  2. The optional managed document runtime (read-only shared prefix,
 //     per-turn writable cache): injected only when the runtime passes
-//     readiness (converter registry validation via documentruntime.ConverterServiceOverride).
+//     readiness (the registry-free manifest check documentruntime.Ready).
 //     A BROKEN runtime is never injected — commands keep running on the host
 //     environment and the result carries a truthful notice, so the fallback
 //     is loud rather than silent, and an optional Office installation never
@@ -105,7 +105,7 @@ func (t *ExecTool) turnDocumentLayout(baseDir string) documentruntime.Layout {
 }
 
 // documentEnvTurn resolves the document-runtime layer for one run call:
-// readiness via the engine-owned converter-registry validation (no second
+// readiness via the engine-owned, registry-free manifest check (no second
 // parser here), the per-turn cache materialized, and — on any failure — a
 // truthful notice instead of an injected broken environment.
 func (t *ExecTool) documentEnvTurn(baseDir string) documentEnvLayer {
@@ -113,7 +113,7 @@ func (t *ExecTool) documentEnvTurn(baseDir string) documentEnvLayer {
 		return documentEnvLayer{}
 	}
 	layout := t.turnDocumentLayout(baseDir)
-	if _, err := documentruntime.ConverterServiceOverride(layout); err != nil {
+	if err := documentruntime.Ready(layout); err != nil {
 		return documentEnvLayer{notice: documentRuntimeBrokenNotice(err.Error())}
 	}
 	if err := ensureTurnCache(baseDir); err != nil {

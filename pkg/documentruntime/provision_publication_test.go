@@ -105,6 +105,11 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 			if len(got.Assets) == 0 {
 				t.Fatal("matching revision with empty asset inventory must be rebuilt")
 			}
+			// AD-14: require every merged-package asset, not just SKILL.md.
+			assertOfficePackageInventory(t, got)
+			if err = VerifyAssets(layout.Prefix, got.Assets); err != nil {
+				t.Fatalf("rebuilt inventory integrity: %v", err)
+			}
 			// r15 §11 removes the four copied skill packages. The retained
 			// probe must still be inventoried, and no retired copy may return.
 			const probeMain = "lib/python/omnipus_document_probe/__main__.py"

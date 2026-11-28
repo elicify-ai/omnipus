@@ -1,10 +1,37 @@
-FROM alpine:3.21
+# Debian slim, not Alpine (founder decision 2026-11-19): the image carries the
+# official LibreOffice build for Office previews, and that is a glibc build.
+FROM debian:trixie-slim
 
 ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 
-RUN apk add --no-cache ca-certificates tzdata
+# ca-certificates and tzdata as before; LibreOffice's host libraries from the
+# one shared list (scripts/office-pack/libreoffice-host-libs.env, also used
+# by install.sh and the deb/rpm packages); fontconfig and the Liberation
+# fonts, so documents have fonts to render with. For an "a|b" entry the
+# first package apt knows is installed.
+COPY scripts/office-pack/libreoffice-host-libs.env /tmp/libreoffice-host-libs.env
+RUN . /tmp/libreoffice-host-libs.env \
+    && apt-get update \
+    && set -- \
+    && for entry in $OFFICE_DEB_LIBS $OFFICE_DEB_RECOMMENDS; do \
+         pick=""; \
+         for alt in $(echo "$entry" | tr '|' ' '); do \
+           if apt-cache show "$alt" >/dev/null 2>&1; then pick="$alt"; break; fi; \
+         done; \
+         [ -n "$pick" ] || { echo "none of $entry is available" >&2; exit 1; }; \
+         set -- "$@" "$pick"; \
+       done \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata fontconfig "$@" \
+    && rm -rf /var/lib/apt/lists/* /tmp/libreoffice-host-libs.env
 
 COPY $TARGETPLATFORM/omnipus /usr/local/bin/omnipus
+# Office preview components (office-preview spec §10), packaged with their
+# manifests: /usr/local/share/omnipus/<slot> is the resolver's
+# <exe>/../share/omnipus/<slot> for /usr/local/bin/omnipus.
+COPY build/components/${TARGETOS}_${TARGETARCH}/office /usr/local/share/omnipus/office
+COPY build/components/${TARGETOS}_${TARGETARCH}/pdfium /usr/local/share/omnipus/pdfium
 COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh

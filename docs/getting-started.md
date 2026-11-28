@@ -28,8 +28,8 @@ Three ways to install, and what each is good for:
 
 | Method | Good for | Command |
 |---|---|---|
-| One-line installer | Linux (x86-64 or ARM64) and Apple-Silicon Macs | below |
-| Docker, published image | Windows, Intel Macs, and any machine with Docker | below |
+| One-line installer | Linux (x86-64 or ARM64) and Macs (Apple Silicon or Intel) | below |
+| Docker, published image | Windows, and any machine with Docker | below |
 | Build from source | Developers contributing to Omnipus | [project README](../README.md) |
 
 Native install:
@@ -37,6 +37,17 @@ Native install:
 ```bash
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
 ```
+
+The installer also installs the two document-preview components, so agents can show you pages of Word, Excel, PowerPoint and PDF files: LibreOffice 26.8 and the PDF renderer. Each is a separate download, checked against the release's `checksums.txt` before anything is installed. They go next to the binary: on Linux under `share/omnipus/` beside the install folder's parent (for the default `/usr/local/bin`, that is `/usr/local/share/omnipus/office` and `…/pdfium`), on macOS beside the install folder (`/usr/local/office` and `/usr/local/pdfium`). On Linux the installer also installs the system libraries LibreOffice needs, with `apt-get` or `dnf`.
+
+To leave a component out, pass an option after `sh -s --`:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh -s -- --without-office
+curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh -s -- --without-pdf-renderer
+```
+
+Without LibreOffice, Office previews are refused with a message that says so; PDF previews still work. Without the PDF renderer, agents still get a PDF's text but no page images. Running the installer again follows your latest choice: a component you leave out is removed if an earlier run installed it. On Linux, a LibreOffice you install yourself can be registered only from a folder inside Omnipus's own folder (for the default install folder, `/usr/local/share/omnipus`). Details are in [documents.md](documents.md).
 
 Docker:
 
@@ -68,7 +79,8 @@ The check on screen 4 runs when you pick a model, or when you press its Check co
 - **One port, not two.** The web interface, the API, and agent-built previews all arrive through port `5000`. There is no second port `5001`; an older guide that opens one is out of date.
 - **Port 5000 is a popular port.** The macOS AirPlay receiver and many dev tools use it. If it is taken, pick another port with `gateway.port` in the config, or the `OMNIPUS_GATEWAY_PORT` variable, and open that instead. [troubleshooting](troubleshooting.md) walks through it.
 - **Keep the address private until setup is done.** Whoever completes the wizard owns the install. The default binding, and the Docker command above, keep it reachable only from your own machine.
-- **The installer covers three platforms.** Linux x86-64, Linux ARM64, and Apple-Silicon Macs. Windows and Intel Macs use the Docker image instead.
+- **The installer covers four platforms.** Linux x86-64, Linux ARM64, Apple-Silicon Macs and Intel Macs. Windows uses the Docker image instead.
+- **The default install is large.** LibreOffice is several hundred megabytes. Use `--without-office` if you do not need Office previews.
 - **Back up the master key.** Omnipus encrypts every secret it stores. The encryption key is `master.key`, inside the data directory: `~/.omnipus/` natively, the mounted `./data` folder with Docker. Lose it and every stored credential is unrecoverable.
 - **The published Docker image has no browser.** Agents that browse the web need the larger image you build yourself — see [docker.md](docker.md).
 

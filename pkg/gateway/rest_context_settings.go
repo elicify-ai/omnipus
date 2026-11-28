@@ -262,6 +262,9 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		slog.Error("rest: PUT /settings/context: failed", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to update context settings")
 		return
 	}

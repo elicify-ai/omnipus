@@ -135,6 +135,9 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 	var refreshErr *configRefreshError
 	if err != nil && !errors.As(err, &refreshErr) {
 		logsafeError("rest: PUT /settings/third-party-agents: failed", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to update third-party agent settings")
 		return
 	}

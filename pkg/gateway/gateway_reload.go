@@ -482,6 +482,14 @@ func executeReload(
 var reloadCredentialCaptureHook func(stage string)
 
 func prepareReloadConfig(newCfg *config.Config, runningServices *services) error {
+	// Office preview spec §3.2: a reload that adds or changes write access to
+	// a preview program folder is rejected before anything else happens, and
+	// the previous configuration stays in force.
+	if err := refuseReloadProgramAccess(newCfg, runningServices); err != nil {
+		slog.Error("gateway: reload rejected", "reason", err.Error())
+		return err
+	}
+
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
 	// config reload (file-watcher poll via configReloadChan, or manual
 	// /reload via manualReloadChan — both funnel through this function) must

@@ -45,11 +45,14 @@ type sessionSubRoute struct {
 // "messages" (exact) is GET /sessions/{id}/messages. "messages" (nested) is
 // GET /sessions/{id}/messages/{position}; serveSessionHistoryEntry owns the
 // position rules. "tool-results" covers the resource and tool-results/{ref};
-// HandleToolResults owns the ref rules.
+// HandleToolResults owns the ref rules. "previews" is POST
+// /sessions/{id}/previews/{tool_call_id}/retry (office-preview spec §5.2);
+// any other previews/ sub-path is 404.
 var sessionSubRoutes = []sessionSubRoute{
 	{name: "messages", exact: true, methods: []string{http.MethodGet}},
 	{name: "messages", exact: false, methods: []string{http.MethodGet}},
 	{name: "tool-results", exact: false, methods: []string{http.MethodGet}},
+	{name: "previews", exact: false, methods: []string{http.MethodPost}},
 }
 
 // matchSessionSubRoute returns the allow-list entry for subPath.
@@ -113,6 +116,13 @@ func (a *restAPI) dispatchSessionSubPath(w http.ResponseWriter, r *http.Request,
 		}
 		// HandleToolResults reads the ref from r.URL.Path itself.
 		a.HandleToolResults(w, r)
+	case route.name == "previews":
+		toolCallID, ok := previewRetryToolCallID(subPath)
+		if !ok {
+			jsonErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		a.handlePreviewRetry(w, r, sessionID, toolCallID)
 	default:
 		// A listed route with no handler must not fall through onto the session.
 		jsonErr(w, http.StatusNotFound, "not found")

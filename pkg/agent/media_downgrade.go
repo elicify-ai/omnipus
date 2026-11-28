@@ -130,7 +130,7 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 	if !outcomeFallbackEligible(pe, code) {
 		return MediaDowngradeResult{}
 	}
-	if !callMessagesCarryMedia(callMessages) {
+	if !callMessagesCarryMedia(callMessages) && !ts.lastRequestCarriedPDF.Load() {
 		return MediaDowngradeResult{}
 	}
 	result, mc := ts.applyMediaDowngrade(callMessages)
@@ -153,7 +153,11 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 // block was found.
 func (ts *turnState) applyMediaDowngrade(callMessages []providers.Message) (MediaDowngradeResult, MediaClass) {
 	if !ts.mediaRetryDone.Load() {
-		if downgradePDFMediaToText(callMessages) {
+		// A tool preview's PDF is added per request, not to callMessages:
+		// the rejected request's record says it was there (B-10).
+		toolPDF := ts.lastRequestCarriedPDF.Load()
+		if downgradePDFMediaToText(callMessages) || toolPDF {
+			ts.pdfRejected.Store(true)
 			ts.mediaRetryDone.Store(true)
 			slog.Debug("media_downgrade: downgraded PDF block to extracted text (per-turn retry)",
 				"agent_id", ts.agentID, "turn_id", ts.turnID)
@@ -238,6 +242,18 @@ func callMessagesCarryMedia(callMessages []providers.Message) bool {
 	for i := range callMessages {
 		for _, ref := range callMessages[i].Media {
 			if strings.HasPrefix(ref, imgPrefix) || strings.HasPrefix(ref, pdfPrefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// requestCarriesPDF reports whether messages carry a native PDF block.
+func requestCarriesPDF(messages []providers.Message) bool {
+	for i := range messages {
+		for _, ref := range messages[i].Media {
+			if strings.HasPrefix(ref, "data:application/pdf;") {
 				return true
 			}
 		}

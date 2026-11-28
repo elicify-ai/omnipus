@@ -9,8 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  components:
+    name: Office preview components
+    uses: ./.github/workflows/office-components.yml
+    with:
+      ref: ${{ github.sha }}
+
   nightly:
     name: Nightly Build
+    needs: components
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -76,6 +83,16 @@ jobs:
       - name: Create local tag for GoReleaser
         run: git tag "${{ steps.version.outputs.version }}"
 
+      - name: Download the Office preview components
+        uses: actions/download-artifact@v7
+        with:
+          pattern: office-components-*
+          path: build/components/release
+          merge-multiple: true
+
+      - name: Lay out the Linux components for packages and images
+        run: bash scripts/office-pack/unpack-linux.sh build/components
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -121,7 +138,9 @@ jobs:
 
           # Collect release artifacts from goreleaser dist/
           ASSETS=()
-          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/checksums.txt; do
+          # build/components/release/ holds the Office preview component
+          # downloads (office-components.yml); checksums.txt lists them too.
+          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/checksums.txt build/components/release/*; do
             [ -f "$f" ] && ASSETS+=("$f")
           done
 

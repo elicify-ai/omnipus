@@ -42,7 +42,9 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
@@ -568,6 +570,16 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		}
 		if verdict.Contained {
 			continue
+		}
+		// Office preview spec §3.2: write access to a preview program folder is
+		// never offered, so neither "Allow" nor "Allow once" can reach it.
+		if op.Access&fspolicy.PathGrantAccessWrite != 0 {
+			folders := component.ProtectedFolders(config.OmnipusHomeDir())
+			if hit := component.FirstProtectedOverlap(folders, resolved); hit != nil {
+				return nil, ErrorResult(fmt.Sprintf(
+					"Command blocked by safety guard (preview program folder): %s — agents can never get write access to the %s program folder %s.",
+					resolved, hit.Name, hit.Path))
+			}
 		}
 		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
 			verdict.PolicyRule, fmt.Sprintf("%s access to %s", accessLabel(op.Access), resolved))

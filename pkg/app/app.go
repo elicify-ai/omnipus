@@ -46,6 +46,7 @@ import (
 	auditcmd "github.com/elicify-ai/omnipus/pkg/app/internal/audit"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/browser"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/clitoken"
+	componentscmd "github.com/elicify-ai/omnipus/pkg/app/internal/components"
 	credcmd "github.com/elicify-ai/omnipus/pkg/app/internal/credentials"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/doctor"
 	"github.com/elicify-ai/omnipus/pkg/app/internal/gateway"
@@ -57,6 +58,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/app/internal/version"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
+	"github.com/elicify-ai/omnipus/pkg/preview/extracttext"
+	"github.com/elicify-ai/omnipus/pkg/preview/launcher"
 )
 
 // loadConfigWithAgents loads config.json AND repopulates cfg.Agents.List from
@@ -482,6 +485,8 @@ Commands:
   credentials  Manage secrets: set, list, delete, rotate.
   audit        View the audit log.
   doctor       Diagnose configuration issues.
+  office       Register or unregister LibreOffice for Office document previews.
+  pdf-renderer Register or unregister the PDF renderer for document previews.
   export       Export one custom agent to a .omnpkg package file.
   import       Import a .omnpkg package as a new agent.
   package      Inspect or verify a .omnpkg package file (no gateway needed).
@@ -495,7 +500,7 @@ Examples:
   omnipus start
   omnipus stop
 
-Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, export, import, package, version.
+Reserved names (shadowed by subcommands): onboard, start, stop, credentials, audit, doctor, office, pdf-renderer, export, import, package, version.
 If an agent shares a name with a subcommand, use the agent's ID directly via the API or rename it.
 `, internal.Logo, config.GetVersion(), onboardHelpLine()),
 		Example: `  omnipus jim "summarize the last 10 commits"
@@ -548,6 +553,8 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		recordscmd.NewRecordsCommand(),
 		doctor.NewDoctorCommand(),
 		gateway.NewGatewayCommand(),
+		componentscmd.NewOfficeCommand(),
+		componentscmd.NewPDFRendererCommand(),
 		stopcmd.NewStopCommand(),
 		version.NewVersionCommand(),
 		// #1094 S1a owner commands (FR-050 to FR-052): gateway clients for
@@ -744,5 +751,27 @@ func runMain(ctx context.Context, cmd *cobra.Command) int {
 }
 
 func Main() {
+	if code, handled := runHiddenMode(os.Args); handled {
+		os.Exit(code)
+	}
 	os.Exit(runMain(context.Background(), NewRootCommand()))
+}
+
+// runHiddenMode dispatches the office-preview helper modes (office-preview
+// spec AD-2) before any command, configuration or logging setup runs: the
+// gateway starts this same binary as run-limited (the resource-limited
+// launcher) and as extract-text (the out-of-process PDF text extractor).
+// Neither is a user command; both are selected only by an exact argv[1]
+// marker and never appear in help.
+func runHiddenMode(args []string) (int, bool) {
+	if len(args) < 2 {
+		return 0, false
+	}
+	switch args[1] {
+	case launcher.ModeArg:
+		return launcher.Main(args[2:]), true
+	case extracttext.ModeArg:
+		return extracttext.Main(), true
+	}
+	return 0, false
 }

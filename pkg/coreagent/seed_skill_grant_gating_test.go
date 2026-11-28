@@ -43,7 +43,7 @@ func TestSeedConfig_FreshInstallSeedsCoreGrants(t *testing.T) {
 	// pkg/coreagent/skill_allowlist_seed_test.go's FR-9.4 comment, which
 	// predates D5.1 but seeds the identical mapping).
 	want := map[string][]string{
-		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia": {"interview", "define-goal", "inbox-triage", "elicify-office"}, // Office-preview AD-14: one canonical package.
 		"jim": {"interview", "orchestrate", "plan", "define-goal"},
 	}
 

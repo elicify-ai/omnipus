@@ -171,6 +171,11 @@ func TestHandleWorkspaceMountCreate_D117_SystemDirectoryRefused(t *testing.T) {
 	if _, err := os.Stat("/etc"); err != nil {
 		t.Skip("POSIX layout required")
 	}
+	// A synthetic operator home is broad by definition, but unlike /tmp
+	// cannot contain the test executable's protected packaged slots (§3.2).
+	broadHome := filepath.Join(t.TempDir(), "operator-home")
+	require.NoError(t, os.MkdirAll(broadHome, 0700))
+	t.Setenv("HOME", broadHome)
 	api := newTestRestAPIWithHome(t)
 	id := createTestWorkspace(t, api, "D-117 mounts")
 
@@ -187,18 +192,16 @@ func TestHandleWorkspaceMountCreate_D117_SystemDirectoryRefused(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, refused.Code, refused.Body.String())
 	assert.Contains(t, refused.Body.String(), "operating-system directory")
 
-	if _, err := os.Stat("/tmp"); err == nil {
-		broad := post("scratch", "/tmp")
-		require.Equal(t, http.StatusCreated, broad.Code, broad.Body.String())
-		var resp gen.WorkspaceMountCreateResponse
-		require.NoError(t, json.Unmarshal(broad.Body.Bytes(), &resp))
-		require.NotNil(t, resp.Warning, "a broad location must carry a warning the dialog can show")
-		// The warning's wording changed with ADR-090's mount hardening: it now
-		// names the CONCRETE consequence (everything else under the mount root
-		// becomes agent-writable) instead of the old generic "broad location"
-		// phrase. Pin the consequence clause, not the phrasing history.
-		assert.Contains(t, *resp.Warning, "writable by any agent on this workspace")
-	}
+	broad := post("operator-home", broadHome)
+	require.Equal(t, http.StatusCreated, broad.Code, broad.Body.String())
+	var resp gen.WorkspaceMountCreateResponse
+	require.NoError(t, json.Unmarshal(broad.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Warning, "a broad location must carry a warning the dialog can show")
+	// The warning's wording changed with ADR-090's mount hardening: it now
+	// names the CONCRETE consequence (everything else under the mount root
+	// becomes agent-writable) instead of the old generic "broad location"
+	// phrase. Pin the consequence clause, not the phrasing history.
+	assert.Contains(t, *resp.Warning, "writable by any agent on this workspace")
 }
 
 func strconvQuote(s string) string {
