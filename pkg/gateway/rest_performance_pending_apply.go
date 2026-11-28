@@ -27,7 +27,6 @@ import (
 // PerformancePendingApply.changed_fields.
 var performancePendingApplyFieldOrder = []gen.PerformancePendingApplyChangedFields{
 	gen.PerformancePendingApplyChangedFieldsMaxParallelAgents,
-	gen.PerformancePendingApplyChangedFieldsToolsOnDemand,
 	gen.PerformancePendingApplyChangedFieldsGoalMaxRounds,
 	gen.PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds,
 	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled,

@@ -19,13 +19,6 @@ properties:
       to 0" instruction and would have rejected 0 under schema validation —
       corrected alongside the ceiling removal since both are the same field.)
     example: 6
-  tools_on_demand:
-    type: boolean
-    description: >
-      New tool-loading mode. true = load tools on demand (fewer tokens per
-      message); false = all allowed tools sent every message (no loading step).
-      Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
-    example: true
   goal_max_rounds:
     type: integer
     minimum: 1

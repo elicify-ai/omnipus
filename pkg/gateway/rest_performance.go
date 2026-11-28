@@ -98,9 +98,6 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 func performanceSettingsResponse(cfg *config.Config) gen.PerformanceSettings {
 	effective, capped := cfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(cfg.Performance.MaxParallelAgents, effective)
-	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
-	// true (default) = load tools on demand; false = all tools every message.
-	toolsOnDemand := cfg.Tools.Manifest.Compressed
 	// goal_max_rounds (GOAL-FR-024/FR-045, D-D/D-E): the SINGLE, GLOBAL
 	// adjudication-round ceiling for every goal — task-owned and
 	// session-owned alike. There is no per-goal override (D-E/NQ-2), so this
@@ -114,7 +111,6 @@ func performanceSettingsResponse(cfg *config.Config) gen.PerformanceSettings {
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
-		ToolsOnDemand:               &toolsOnDemand,
 		GoalMaxRounds:               &goalMaxRounds,
 		GoalReminderQuietSeconds:    &goalQuietSeconds,
 		GoalStalledCheckinEnabled:   &goalCheckinEnabled,
@@ -156,7 +152,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 	// At least one field must be present — a PUT with no recognized fields is
 	// a no-op that almost certainly indicates a client bug.
-	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil &&
+	if req.MaxParallelAgents == nil && req.GoalMaxRounds == nil &&
 		req.MaxToolIterations == nil && req.GoalReminderQuietSeconds == nil &&
 		req.GoalStalledCheckinEnabled == nil && req.GoalStalledCheckinMinutes == nil {
 		jsonErr(w, http.StatusBadRequest,
@@ -211,12 +207,6 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 			// Accept 0 as "reset to auto-detect"; values < 0 rejected above.
 			perf := ensureMap(m, "performance")
 			perf["max_parallel_agents"] = *req.MaxParallelAgents
-		}
-		if req.ToolsOnDemand != nil {
-			// tools_on_demand == true ⇔ cfg.Tools.Manifest.Compressed == true
-			tools := ensureMap(m, "tools")
-			manifest := ensureMap(tools, "manifest")
-			manifest["compressed"] = *req.ToolsOnDemand
 		}
 		if req.GoalMaxRounds != nil {
 			planning := ensureMap(m, "planning")
@@ -340,9 +330,6 @@ func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.Performa
 	if req.MaxParallelAgents != nil {
 		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents)
 	}
-	if req.ToolsOnDemand != nil {
-		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand)
-	}
 	if req.GoalMaxRounds != nil {
 		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds)
 	}
@@ -364,7 +351,6 @@ func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.Performa
 // performanceSettingLabels names each Performance field in user-facing text.
 var performanceSettingLabels = map[gen.PerformanceReloadFailedDetailsChangedFields]string{
 	gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:         "the parallel-agent limit",
-	gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:             "tools on demand",
 	gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:             "the goal round budget",
 	gen.PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds:  "the goal reminder quiet window",
 	gen.PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled: "stalled-work check-ins",

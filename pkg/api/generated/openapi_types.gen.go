@@ -8047,7 +8047,6 @@ const (
 	PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes PerformancePendingApplyChangedFields = "goal_stalled_checkin_minutes"
 	PerformancePendingApplyChangedFieldsMaxParallelAgents         PerformancePendingApplyChangedFields = "max_parallel_agents"
 	PerformancePendingApplyChangedFieldsMaxToolIterations         PerformancePendingApplyChangedFields = "max_tool_iterations"
-	PerformancePendingApplyChangedFieldsToolsOnDemand             PerformancePendingApplyChangedFields = "tools_on_demand"
 )
 
 // Valid indicates whether the value is a known member of the PerformancePendingApplyChangedFields enum.
@@ -8064,8 +8063,6 @@ func (e PerformancePendingApplyChangedFields) Valid() bool {
 	case PerformancePendingApplyChangedFieldsMaxParallelAgents:
 		return true
 	case PerformancePendingApplyChangedFieldsMaxToolIterations:
-		return true
-	case PerformancePendingApplyChangedFieldsToolsOnDemand:
 		return true
 	default:
 		return false
@@ -8098,7 +8095,6 @@ const (
 	PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes PerformanceReloadFailedDetailsChangedFields = "goal_stalled_checkin_minutes"
 	PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents         PerformanceReloadFailedDetailsChangedFields = "max_parallel_agents"
 	PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations         PerformanceReloadFailedDetailsChangedFields = "max_tool_iterations"
-	PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand             PerformanceReloadFailedDetailsChangedFields = "tools_on_demand"
 )
 
 // Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsChangedFields enum.
@@ -8115,8 +8111,6 @@ func (e PerformanceReloadFailedDetailsChangedFields) Valid() bool {
 	case PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:
 		return true
 	case PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations:
-		return true
-	case PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:
 		return true
 	default:
 		return false
@@ -23851,9 +23845,6 @@ type PerformanceSettings struct {
 
 	// PendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
 	PendingApply *PerformancePendingApply `json:"pending_apply,omitempty"`
-
-	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
-	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
 }
 
 // PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
@@ -23878,9 +23869,6 @@ type PerformanceSettingsUpdate struct {
 
 	// MaxToolIterations New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
-
-	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
-	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
 }
 
 // PermissionSettings Response of GET and PATCH /api/v1/security/permissions (Skills & Tools spec C-2): the complete stored global permissions and levels for every tool and skill, and the skill trust choice. These are the operator-only global ceilings; per-agent values can only be stricter. Every PATCH response returns the whole stored state so the page can replace its view with it.

@@ -2081,7 +2081,6 @@ type PerformanceSettings = Partial<{
   max_parallel_agents: number;
   effective_max_parallel_agents: number;
   max_parallel_agents_configured: boolean;
-  tools_on_demand: boolean;
   goal_max_rounds: number;
   goal_reminder_quiet_seconds: number;
   goal_stalled_checkin_enabled: boolean;
@@ -2103,7 +2102,6 @@ type PerformancePendingApply = {
   stage: "refresh" | "reload";
   changed_fields: Array<
     | "max_parallel_agents"
-    | "tools_on_demand"
     | "goal_max_rounds"
     | "goal_reminder_quiet_seconds"
     | "goal_stalled_checkin_enabled"
@@ -2113,7 +2111,6 @@ type PerformancePendingApply = {
 };
 type PerformanceSettingsUpdate = Partial<{
   max_parallel_agents: number;
-  tools_on_demand: boolean;
   goal_max_rounds: number;
   goal_reminder_quiet_seconds: number;
   goal_stalled_checkin_enabled: boolean;
@@ -2138,7 +2135,6 @@ type PerformanceReloadFailedDetails = {
   stage: "refresh" | "reload";
   changed_fields: Array<
     | "max_parallel_agents"
-    | "tools_on_demand"
     | "goal_max_rounds"
     | "goal_reminder_quiet_seconds"
     | "goal_stalled_checkin_enabled"
@@ -5625,7 +5621,6 @@ export const PerformancePendingApply: z.ZodType<PerformancePendingApply> =
     changed_fields: z.array(
       z.enum([
         "max_parallel_agents",
-        "tools_on_demand",
         "goal_max_rounds",
         "goal_reminder_quiet_seconds",
         "goal_stalled_checkin_enabled",
@@ -5639,7 +5634,6 @@ export const PerformanceSettings: z.ZodType<PerformanceSettings> = z
     max_parallel_agents: z.number().int().gte(1),
     effective_max_parallel_agents: z.number().int().gte(1),
     max_parallel_agents_configured: z.boolean(),
-    tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
     goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
     goal_stalled_checkin_enabled: z.boolean(),
@@ -5656,7 +5650,6 @@ export const MaxToolIterationsConfirmedAgent: z.ZodType<MaxToolIterationsConfirm
 export const PerformanceSettingsUpdate: z.ZodType<PerformanceSettingsUpdate> = z
   .object({
     max_parallel_agents: z.number().int().gte(0),
-    tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
     goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
     goal_stalled_checkin_enabled: z.boolean(),
@@ -8849,7 +8842,6 @@ export const PerformanceReloadFailedDetails: z.ZodType<PerformanceReloadFailedDe
     changed_fields: z.array(
       z.enum([
         "max_parallel_agents",
-        "tools_on_demand",
         "goal_max_rounds",
         "goal_reminder_quiet_seconds",
         "goal_stalled_checkin_enabled",

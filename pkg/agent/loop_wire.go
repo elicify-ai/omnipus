@@ -463,7 +463,7 @@ func registerSharedTools(
 		// ALWAYS registered unconditionally — regardless of cfg.Tools.Manifest.Compressed
 		// or MCP discovery settings. Registration is cheap and harmless when unused.
 		//
-		// Why unconditional: the tools_on_demand PUT endpoint flips Compressed live via
+		// Why unconditional: a config reload can change Compressed live via
 		// SwapConfig without re-running agent registration. If ToolSearch was only registered
 		// when Compressed=true at boot, a false→true live toggle would leave ToolSearch absent
 		// from the registry, causing Get("ToolSearch") to return !ok in buildCompressedToolDefs

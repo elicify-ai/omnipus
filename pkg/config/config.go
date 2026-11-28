@@ -1948,7 +1948,8 @@ type ToolsConfig struct {
 type ManifestConfig struct {
 	// Compressed controls whether the manifest optimization is active.
 	// Default: true (enabled). When false, every tool is sent full (legacy behavior).
-	// Controlled at runtime via PUT /api/v1/performance (tools_on_demand field).
+	// No write path sets it (Skills & Tools C-22): PUT /api/v1/config and
+	// set_config refuse a change, and PUT /api/v1/performance no longer takes it.
 	Compressed bool `json:"compressed" yaml:"compressed,omitempty"`
 
 	// PreviewAllLazy reverts ADR-071 D3's three-tier visibility split: when

@@ -389,7 +389,6 @@ func deepCopyJSONMap(m map[string]any) (map[string]any, error) {
 // performance writer's own rules.
 var performancePendingApplyConfigKeys = map[gen.PerformancePendingApplyChangedFields]string{
 	gen.PerformancePendingApplyChangedFieldsMaxParallelAgents:         "performance.max_parallel_agents",
-	gen.PerformancePendingApplyChangedFieldsToolsOnDemand:             "tools.manifest.compressed",
 	gen.PerformancePendingApplyChangedFieldsGoalMaxRounds:             "planning.goal_max_rounds",
 	gen.PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds:  "planning.goal_reminder_quiet_seconds",
 	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled: "planning.goal_stalled_checkin_enabled",

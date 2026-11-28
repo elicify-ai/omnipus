@@ -475,6 +475,9 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "version applies only to slug installs")
 		return
 	}
+	if slug != "" && refuseBuiltinInstall(w, slug) {
+		return
+	}
 
 	if slug != "" && !a.marketplaceEnabled() {
 		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
@@ -546,6 +549,11 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		jsonServerFailure(w, http.StatusBadGateway, "could not stage skill", err)
 		return
 	}
+	// An uploaded skill's name is known only once it is staged.
+	if uploadID != "" && refuseBuiltinInstall(w, slug) {
+		_ = os.RemoveAll(stageDir)
+		return
+	}
 	if refusal := a.stagedInstallRefusal(result, slug, review); refusal != nil {
 		_ = os.RemoveAll(stageDir)
 		jsonErr(w, refusal.status, refusal.text)
@@ -558,6 +566,23 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(stageDir)
 	a.publishSkillInstall(w, req, slug, skillsRoot, stageDir, result)
+}
+
+// refuseBuiltinInstall answers BUILTIN_NAME_RESERVED (409, §5.6) for an
+// install onto a built-in name and reports whether it did. It runs before the
+// download and before any trust decision (the pipeline's step 0, §7.1): a
+// reserved name never installs, so no review or trust answer applies to it.
+func refuseBuiltinInstall(w http.ResponseWriter, slug string) bool {
+	err := skills.RefuseBuiltinTarget(skills.ChangeRequest{
+		Kind: skills.KindInstall, Slug: slug, Actor: personActor("rest-install"),
+	})
+	if err == nil {
+		return false
+	}
+	writeSkillChangeFailure(w, slug, skills.PublishOutcome{
+		PersistenceStatus: skills.PersistenceNone, ActivationStatus: skills.ActivationNotAttempted,
+	}, err)
+	return true
 }
 
 // publishSkillInstall publishes a staged skill for a direct install and
