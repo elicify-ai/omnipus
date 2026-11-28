@@ -34,7 +34,7 @@ type InstallSkillTool struct {
 	// regardless of which agent or turn is calling.
 	globalSkillsDir string
 	// skillTrust reads the live trust setting for unverified skills
-	// (SetSkillTrust); nil refuses every install (fail closed).
+	// (SetSkillTrust); nil refuses every unverified skill (fail closed).
 	skillTrust func() config.SkillTrustLevel
 	mu         sync.Mutex
 }
@@ -72,19 +72,19 @@ func NewInstallSkillTool(registryMgr *skills.RegistryManager, globalSkillsDir st
 // SetSkillTrust gives the tool the live trust setting for unverified skills
 // (Skills & Tools C-3). Under Deny an unverified skill is refused before
 // publication and before any approval card, with the same text as the
-// screen and REST install. Without a trust source the tool fails closed:
-// every install is refused before anything is downloaded (team-lead ruling
-// R2, 2026-11-28).
+// screen and REST install. Without a trust source the tool fails closed: an
+// unverified skill is refused once staged, before publication and before any
+// card; a verified skill still installs (team-lead ruling R2, 2026-11-28).
 func (t *InstallSkillTool) SetSkillTrust(trust func() config.SkillTrustLevel) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.skillTrust = trust
 }
 
-// installTrustUnavailableText is the refusal when the tool has no trust
-// setting to apply: it cannot tell whether an unverified skill is allowed, so
-// it installs nothing (fail closed).
-const installTrustUnavailableText = "install_skill cannot check the trust setting for unverified skills here, so it installs nothing. Nothing was installed."
+// installTrustUnavailableText is the refusal of an unverified skill when the
+// tool has no trust setting to apply (fail closed, R2): it cannot tell whether
+// the skill is allowed. The C-3 Deny sentence would be untrue here.
+const installTrustUnavailableText = "Skill trust is not available, so this unverified skill was not installed."
 
 // stagingDirName is the dedicated, non-scanned subdirectory of the global
 // skills directory that install_skill stages downloads into. It lives one
@@ -313,9 +313,6 @@ func (t *InstallSkillTool) validateInstall(ctx context.Context, args map[string]
 // stays atomic and a concurrent listing never sees a half-written skill).
 // The existing install is never touched. On failure nothing is left behind.
 func (t *InstallSkillTool) stage(ctx context.Context, req *installRequest) (*stagedInstall, *ToolResult) {
-	if t.skillTrust == nil {
-		return nil, ErrorResult(installTrustUnavailableText)
-	}
 	skillsDir := t.globalSkillsDir
 	if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
 		return nil, ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkErr))
@@ -353,8 +350,13 @@ func (t *InstallSkillTool) stage(ctx context.Context, req *installRequest) (*sta
 	if result.IsMalwareBlocked {
 		return fail(ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", req.slug)))
 	}
-	if !result.Verified && t.skillTrust != nil && t.skillTrust() == config.SkillTrustDeny {
-		return fail(ErrorResult(skills.InstallTrustDenyText))
+	if !result.Verified {
+		if t.skillTrust == nil {
+			return fail(ErrorResult(installTrustUnavailableText))
+		}
+		if t.skillTrust() == config.SkillTrustDeny {
+			return fail(ErrorResult(skills.InstallTrustDenyText))
+		}
 	}
 	revision, err := skills.ContentRevision(stageDir)
 	if err != nil {
